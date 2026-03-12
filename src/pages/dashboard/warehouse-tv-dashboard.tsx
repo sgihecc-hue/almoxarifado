@@ -2,9 +2,6 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Package2,
-  Clock,
-  CheckCircle2,
-  ArrowUpDown,
   AlertCircle,
   RefreshCw,
   Filter,

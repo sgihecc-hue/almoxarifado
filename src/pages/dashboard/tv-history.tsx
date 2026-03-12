@@ -5,7 +5,6 @@ import {
   Pill,
   Package2,
   Search,
-  Filter,
   Calendar,
   RefreshCw,
   X
@@ -65,7 +64,7 @@ export function TVHistory({ type }: TVHistoryProps) {
   const Icon = theme.icon
 
   const [requests, setRequests] = useState<TVRequest[]>([])
-  const [departments, setDepartments] = useState<Department[]>([])
+  const [, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
 
   // Filters
