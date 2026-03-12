@@ -1,0 +1,197 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@media print {
+  body {
+    background-color: white;
+    color: black;
+    font-size: 9pt;
+  }
+  
+  .print\:hidden {
+    display: none !important;
+  }
+  
+  .print\:block {
+    display: block !important;
+  }
+  
+  .print\:grid {
+    display: grid !important;
+  }
+  
+  .print\:grid-cols-1 {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+  
+  .print\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+  
+  .print\:grid-cols-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+  
+  .print\:grid-cols-12 {
+    grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+  }
+  
+  .print\:col-span-1 {
+    grid-column: span 1 / span 1 !important;
+  }
+  
+  .print\:col-span-2 {
+    grid-column: span 2 / span 2 !important;
+  }
+  
+  .print\:col-span-5 {
+    grid-column: span 5 / span 5 !important;
+  }
+  
+  .print\:border {
+    border-width: 1px !important;
+  }
+  
+  .print\:border-0 {
+    border-width: 0px !important;
+  }
+  
+  .print\:border-b {
+    border-bottom-width: 1px !important;
+  }
+  
+  .print\:border-gray-200 {
+    border-color: #e5e7eb !important;
+  }
+  
+  .print\:border-gray-300 {
+    border-color: #d1d5db !important;
+  }
+  
+  .print\:shadow-none {
+    box-shadow: none !important;
+  }
+  
+  .print\:p-2 {
+    padding: 0.5rem !important;
+  }
+  
+  .print\:p-1 {
+    padding: 0.25rem !important;
+  }
+  
+  .print\:pb-1 {
+    padding-bottom: 0.25rem !important;
+  }
+  
+  .print\:pt-1 {
+    padding-top: 0.25rem !important;
+  }
+  
+  .print\:mb-1 {
+    margin-bottom: 0.25rem !important;
+  }
+  
+  .print\:mb-2 {
+    margin-bottom: 0.5rem !important;
+  }
+  
+  .print\:mt-4 {
+    margin-top: 1rem !important;
+  }
+  
+  .print\:mt-8 {
+    margin-top: 2rem !important;
+  }
+  
+  .print\:gap-0 {
+    gap: 0 !important;
+  }
+  
+  .print\:gap-1 {
+    gap: 0.25rem !important;
+  }
+  
+  .print\:gap-2 {
+    gap: 0.5rem !important;
+  }
+  
+  .print\:gap-4 {
+    gap: 1rem !important;
+  }
+  
+  .print\:space-y-0 > * + * {
+    margin-top: 0 !important;
+  }
+  
+  .print\:space-y-1 > * + * {
+    margin-top: 0.25rem !important;
+  }
+  
+  .print\:space-y-2 > * + * {
+    margin-top: 0.5rem !important;
+  }
+  
+  .print\:text-center {
+    text-align: center !important;
+  }
+  
+  .print\:text-right {
+    text-align: right !important;
+  }
+  
+  .print\:text-xs {
+    font-size: 0.65rem !important;
+    line-height: 1rem !important;
+  }
+  
+  .print\:text-sm {
+    font-size: 0.75rem !important;
+    line-height: 1.25rem !important;
+  }
+  
+  .print\:text-base {
+    font-size: 0.85rem !important;
+    line-height: 1.5rem !important;
+  }
+  
+  .print\:text-xl {
+    font-size: 1.25rem !important;
+    line-height: 1.75rem !important;
+  }
+  
+  .print\:font-medium {
+    font-weight: 500 !important;
+  }
+  
+  .print\:max-w-full {
+    max-width: 100% !important;
+  }
+  
+  .print\:w-full {
+    width: 100% !important;
+  }
+  
+  .print\:justify-center {
+    justify-content: center !important;
+  }
+  
+  .print\:bg-white {
+    background-color: white !important;
+  }
+  
+  .print\:rounded-none {
+    border-radius: 0 !important;
+  }
+  
+  .print\:truncate {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+  
+  header {
+    display: none !important;
+  }
+}

@@ -1,0 +1,19 @@
+/*
+  # Add foreign key relationship between expiry_tracking and users
+
+  1. Changes
+    - Add foreign key constraint from expiry_tracking.created_by to users.id
+    - Add index on expiry_tracking.created_by for better query performance
+
+  2. Security
+    - No changes to RLS policies
+*/
+
+-- Add foreign key constraint
+ALTER TABLE expiry_tracking
+ADD CONSTRAINT expiry_tracking_created_by_fkey
+FOREIGN KEY (created_by) REFERENCES users(id);
+
+-- Add index for better performance
+CREATE INDEX IF NOT EXISTS expiry_tracking_created_by_idx
+ON expiry_tracking(created_by);
