@@ -30,6 +30,8 @@ import { WarehouseConsumptionReport } from '@/pages/reports/warehouse-consumptio
 import { AdminWarehouseConsumptionManagement } from '@/pages/reports/admin-warehouse-consumption'
 import { WarehouseTVDashboard } from '@/pages/dashboard/warehouse-tv-dashboard'
 import { PharmacyTVDashboard } from '@/pages/dashboard/pharmacy-tv-dashboard'
+import { TVRequestDetail } from '@/pages/dashboard/tv-request-detail'
+import { TVHistory } from '@/pages/dashboard/tv-history'
 import { Dashboard } from '@/pages/dashboard'
 
 const queryClient = new QueryClient()
@@ -57,7 +59,11 @@ export default function App() {
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/tv/warehouse" element={<WarehouseTVDashboard />} />
+                <Route path="/tv/warehouse/history" element={<TVHistory type="warehouse" />} />
+                <Route path="/tv/warehouse/:id" element={<TVRequestDetail type="warehouse" />} />
                 <Route path="/tv/pharmacy" element={<PharmacyTVDashboard />} />
+                <Route path="/tv/pharmacy/history" element={<TVHistory type="pharmacy" />} />
+                <Route path="/tv/pharmacy/:id" element={<TVRequestDetail type="pharmacy" />} />
                 <Route path="/" element={
                   <ProtectedRoute>
                     <MainLayout>
