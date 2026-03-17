@@ -479,6 +479,15 @@ class RequestService {
 
       if (requestError) throw requestError
 
+      // Fetch item names for the request items
+      const table = data.type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
+      const itemIds = data.items.map(item => item.item_id)
+      const { data: itemsData } = await supabase
+        .from(table)
+        .select('id, name')
+        .in('id', itemIds)
+      const itemNamesMap = new Map((itemsData || []).map(i => [i.id, i.name]))
+
       // Then, create the request items
       const { error: itemsError } = await supabase
         .from('request_items')
@@ -487,6 +496,7 @@ class RequestService {
             request_id: request.id,
             item_type: data.type,
             [data.type === 'pharmacy' ? 'pharmacy_item_id' : 'warehouse_item_id']: item.item_id,
+            item_name: itemNamesMap.get(item.item_id) || 'Item',
             quantity: item.quantity
           }))
         )
