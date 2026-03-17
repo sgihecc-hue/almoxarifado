@@ -43,7 +43,7 @@ export function RequestDetails({ onSubmit, defaultValues }: RequestDetailsProps)
   const [userDepartment, setUserDepartment] = useState<Department | null>(null)
   const [loadingUserDepartment, setLoadingUserDepartment] = useState(true)
 
-  const { register, handleSubmit, setValue, formState: { errors } } = useForm<RequestDetails>({
+  const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm<RequestDetails>({
     resolver: zodResolver(detailsSchema),
     defaultValues: {
       priority: 'medium',
@@ -210,29 +210,32 @@ export function RequestDetails({ onSubmit, defaultValues }: RequestDetailsProps)
         <div className="space-y-2">
           <Label htmlFor="justification_option">Justificativa</Label>
           <div className="grid grid-cols-1 gap-3">
-            {justificationOptions.map((option) => (
-              <div key={option.id} className="relative">
-                <input
-                  type="radio"
-                  id={`justification-${option.id}`}
-                  value={option.id}
-                  {...register('justification_option')}
-                  className="peer sr-only"
-                />
-                <label
-                  htmlFor={`justification-${option.id}`}
-                  className="flex items-start gap-3 p-3 border-2 rounded-lg cursor-pointer transition-all peer-checked:border-primary-500 peer-checked:bg-primary-50 hover:bg-gray-50"
-                >
-                  <div className="flex-shrink-0 h-5 w-5 mt-0.5 border rounded-md peer-checked:bg-primary-500 peer-checked:border-primary-500 flex items-center justify-center">
-                    <CheckSquare className="h-4 w-4 text-white peer-checked:opacity-100 opacity-0" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-gray-900">{option.label}</p>
-                    <p className="text-sm text-gray-500">{option.description}</p>
-                  </div>
-                </label>
-              </div>
-            ))}
+            {justificationOptions.map((option) => {
+              const isSelected = watch('justification_option') === option.id
+              return (
+                <div key={option.id} className="relative">
+                  <input
+                    type="radio"
+                    id={`justification-${option.id}`}
+                    value={option.id}
+                    {...register('justification_option')}
+                    className="sr-only"
+                  />
+                  <label
+                    htmlFor={`justification-${option.id}`}
+                    className={`flex items-start gap-3 p-3 border-2 rounded-lg cursor-pointer transition-all hover:bg-gray-50 ${isSelected ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}
+                  >
+                    <div className={`flex-shrink-0 h-5 w-5 mt-0.5 border rounded-md flex items-center justify-center ${isSelected ? 'bg-primary-500 border-primary-500' : 'border-gray-300'}`}>
+                      {isSelected && <CheckSquare className="h-4 w-4 text-white" />}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">{option.label}</p>
+                      <p className="text-sm text-gray-500">{option.description}</p>
+                    </div>
+                  </label>
+                </div>
+              )
+            })}
           </div>
           {errors.justification_option && (
             <p className="text-sm text-red-500 mt-1">{errors.justification_option.message}</p>
