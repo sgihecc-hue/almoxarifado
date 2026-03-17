@@ -341,18 +341,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function handleSignOut() {
     try {
       setState(prev => ({ ...prev, error: null }))
-      try {
-        const { error } = await supabase.auth.signOut()
-        if (error) throw error
-      } catch (fetchError) {
-        console.error('Network error during sign out:', fetchError)
-        // Still set user to null even if signOut fails
-      }
-      setState({ user: null, loading: false, error: null, connectionError: false })
+      await supabase.auth.signOut()
     } catch (error) {
       console.error('Sign out error:', error)
-      // Set user to null even if there's an error
+    } finally {
+      // Always clear state and force redirect
       setState({ user: null, loading: false, error: null, connectionError: false })
+      setIsInitialized(false)
+      setInitializationAttempts(0)
     }
   }
 
