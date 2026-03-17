@@ -196,11 +196,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function handleSignIn(email: string, password: string) {
     try {
       setState(prev => ({ ...prev, error: null }))
-      
+
       if (!email || !password) {
         throw new Error('Email e senha são obrigatórios')
       }
-      
+
       const sanitizedEmail = sanitizeEmailForAuth(email.trim().toLowerCase())
       if (!validateEmail(sanitizedEmail)) {
         throw new Error('Formato de email inválido')
@@ -210,26 +210,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Senha muito longa')
       }
 
-      try {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: sanitizedEmail,
-          password: password, // Don't trim passwords as spaces might be intentional
-        })
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: sanitizedEmail,
+        password: password,
+      })
 
-        if (error) {
-          console.error('Sign in error:', error)
-          if (error.message?.includes('Invalid login credentials')) {
-            throw new Error('Credenciais inválidas')
-          } else if (error.message?.includes('Email not confirmed')) {
-            throw new Error('Email não confirmado')
-          } else if (error.message?.includes('Too many requests')) {
-            throw new Error('Muitas tentativas. Tente novamente em alguns minutos')
-          }
-          throw error
+      if (error) {
+        console.error('Sign in error:', error)
+        if (error.message?.includes('Invalid login credentials')) {
+          throw new Error('Email ou senha inválidos')
+        } else if (error.message?.includes('Email not confirmed')) {
+          throw new Error('Email não confirmado')
+        } else if (error.message?.includes('Too many requests')) {
+          throw new Error('Muitas tentativas. Tente novamente em alguns minutos')
         }
-      } catch (fetchError) {
-        console.error('Network error during sign in:', fetchError)
-        throw new Error('Erro de conexão com o servidor')
+        throw error
+      }
+
+      // Wait for user profile to be loaded after successful auth
+      if (data.session) {
+        await loadUser(data.session)
       }
 
     } catch (error) {
