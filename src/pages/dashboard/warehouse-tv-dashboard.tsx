@@ -198,8 +198,9 @@ export default function WarehouseTVDashboard() {
         <div className="bg-gray-800 rounded-t-xl border-t border-l border-r border-gray-700 p-4">
           <div className="grid grid-cols-12 gap-4 text-gray-400 text-sm font-medium">
             <div className="col-span-2">Código</div>
-            <div className="col-span-3">Origem (Setor)</div>
-            <div className="col-span-3">Destino (Setor)</div>
+            <div className="col-span-2">Data/Hora</div>
+            <div className="col-span-2">Origem (Setor)</div>
+            <div className="col-span-2">Destino (Setor)</div>
             <div className="col-span-2 text-center">Prioridade</div>
             <div className="col-span-2 text-center">Status</div>
           </div>
@@ -243,10 +244,13 @@ export default function WarehouseTVDashboard() {
                     <div className="col-span-2 font-bold text-white text-lg">
                       #{request.request_number || '—'}
                     </div>
-                    <div className="col-span-3 text-gray-200 text-lg">
+                    <div className="col-span-2 text-gray-300 text-sm">
+                      {format(new Date(request.created_at), "dd/MM/yyyy HH:mm")}
+                    </div>
+                    <div className="col-span-2 text-gray-200">
                       {request.department}
                     </div>
-                    <div className="col-span-3 text-gray-200 text-lg">
+                    <div className="col-span-2 text-gray-200">
                       {request.destination_department || '—'}
                     </div>
                     <div className="col-span-2 text-center">
