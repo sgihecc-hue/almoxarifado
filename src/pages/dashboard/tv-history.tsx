@@ -262,13 +262,13 @@ export function TVHistory({ type }: TVHistoryProps) {
       <div className="flex-1 overflow-hidden flex flex-col">
         <div className="bg-gray-800 border-b border-gray-700 p-3">
           <div className="grid grid-cols-12 gap-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            <div className="col-span-2">Código</div>
-            <div className="col-span-2">Origem</div>
+            <div className="col-span-1">Código</div>
+            <div className="col-span-2">Data/Hora</div>
             <div className="col-span-2">Solicitante</div>
+            <div className="col-span-2">Setor Origem</div>
+            <div className="col-span-2">Setor Destino</div>
             <div className="col-span-1 text-center">Prioridade</div>
             <div className="col-span-2 text-center">Status</div>
-            <div className="col-span-1 text-center">Itens</div>
-            <div className="col-span-2">Data</div>
           </div>
         </div>
 
@@ -294,14 +294,20 @@ export function TVHistory({ type }: TVHistoryProps) {
                   }`}
                 >
                   <div className="grid grid-cols-12 gap-3 items-center">
-                    <div className="col-span-2 font-bold text-white">
+                    <div className="col-span-1 font-bold text-white">
                       #{request.request_number || formatRequestNumber(request.id)}
+                    </div>
+                    <div className="col-span-2 text-gray-300 text-sm">
+                      {format(new Date(request.created_at), "dd/MM/yyyy HH:mm", { locale: ptBR })}
+                    </div>
+                    <div className="col-span-2 text-gray-200 truncate">
+                      {request.requester_name}
                     </div>
                     <div className="col-span-2 text-gray-200 truncate">
                       {request.department}
                     </div>
-                    <div className="col-span-2 text-gray-300 truncate">
-                      {request.requester_name}
+                    <div className="col-span-2 text-gray-200 truncate">
+                      {request.destination_department || '—'}
                     </div>
                     <div className="col-span-1 text-center">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -317,14 +323,6 @@ export function TVHistory({ type }: TVHistoryProps) {
                     </div>
                     <div className="col-span-2 text-center">
                       <RequestStatusBadge status={request.status} />
-                    </div>
-                    <div className="col-span-1 text-center">
-                      <span className={`${type === 'pharmacy' ? 'bg-blue-900 text-blue-200' : 'bg-purple-900 text-purple-200'} px-2 py-0.5 rounded-full text-xs`}>
-                        {request.items.length}
-                      </span>
-                    </div>
-                    <div className="col-span-2 text-gray-400 text-sm">
-                      {format(new Date(request.created_at), "dd/MM/yyyy HH:mm", { locale: ptBR })}
                     </div>
                   </div>
                 </div>

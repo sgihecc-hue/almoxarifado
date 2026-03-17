@@ -196,12 +196,13 @@ export default function WarehouseTVDashboard() {
       {/* Requests Table */}
       <div className="flex-1 overflow-hidden flex flex-col">
         <div className="bg-gray-800 rounded-t-xl border-t border-l border-r border-gray-700 p-4">
-          <div className="grid grid-cols-12 gap-4 text-gray-400 text-sm font-medium">
-            <div className="col-span-2">Código</div>
+          <div className="grid grid-cols-12 gap-3 text-gray-400 text-sm font-medium">
+            <div className="col-span-1">Código</div>
             <div className="col-span-2">Data/Hora</div>
-            <div className="col-span-2">Origem (Setor)</div>
-            <div className="col-span-2">Destino (Setor)</div>
-            <div className="col-span-2 text-center">Prioridade</div>
+            <div className="col-span-2">Solicitante</div>
+            <div className="col-span-2">Setor Origem</div>
+            <div className="col-span-2">Setor Destino</div>
+            <div className="col-span-1 text-center">Prioridade</div>
             <div className="col-span-2 text-center">Status</div>
           </div>
         </div>
@@ -240,21 +241,24 @@ export default function WarehouseTVDashboard() {
                         : 'bg-gray-800/50'
                   }`}
                 >
-                  <div className="grid grid-cols-12 gap-4 items-center">
-                    <div className="col-span-2 font-bold text-white text-lg">
+                  <div className="grid grid-cols-12 gap-3 items-center">
+                    <div className="col-span-1 font-bold text-white">
                       #{request.request_number || '—'}
                     </div>
                     <div className="col-span-2 text-gray-300 text-sm">
                       {format(new Date(request.created_at), "dd/MM/yyyy HH:mm")}
                     </div>
-                    <div className="col-span-2 text-gray-200">
+                    <div className="col-span-2 text-gray-200 truncate">
+                      {request.requester_name}
+                    </div>
+                    <div className="col-span-2 text-gray-200 truncate">
                       {request.department}
                     </div>
-                    <div className="col-span-2 text-gray-200">
+                    <div className="col-span-2 text-gray-200 truncate">
                       {request.destination_department || '—'}
                     </div>
-                    <div className="col-span-2 text-center">
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    <div className="col-span-1 text-center">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                         request.priority === 'high'
                           ? 'bg-red-900 text-red-200 border border-red-700'
                           : request.priority === 'medium'
