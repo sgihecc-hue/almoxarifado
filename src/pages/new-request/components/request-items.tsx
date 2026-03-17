@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { itemsService } from '@/lib/services/items'
 import type { Item } from '@/lib/services/items'
+import { supabase } from '@/lib/supabase'
 import { z } from 'zod'
 
 const itemSchema = z.object({
@@ -34,8 +35,14 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   async function loadItems() {
     try {
       setLoading(true)
-      const data = await itemsService.getAll()
-      setItems(data)
+      const table = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
+      const { data, error } = await supabase
+        .from(table)
+        .select('*')
+        .eq('is_active', true)
+        .order('name')
+      if (error) throw error
+      setItems(data || [])
     } catch (error) {
       console.error('Error loading items:', error)
     } finally {
@@ -43,17 +50,11 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     }
   }
 
-  // Filter items based on type and search term
+  // Filter items based on search term
   const filteredItems = items.filter(item => {
-    const matchesSearch = searchTerm === '' || 
+    return searchTerm === '' ||
       item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.code.toLowerCase().includes(searchTerm.toLowerCase())
-    
-    const matchesType = type === 'pharmacy' 
-      ? item.category === 'Medicamentos'
-      : item.category !== 'Medicamentos'
-
-    return matchesSearch && matchesType
+      (item.code && item.code.toLowerCase().includes(searchTerm.toLowerCase()))
   })
 
   const handleAddItem = (item: Item) => {
