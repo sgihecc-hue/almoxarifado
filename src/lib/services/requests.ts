@@ -723,7 +723,7 @@ class RequestService {
     }
   }
 
-  async markAsDelivered(id: string, deliveryNotes?: string): Promise<Request> {
+  async markAsDelivered(id: string, deliveryNotes?: string, receivedByEmployeeId?: string): Promise<Request> {
     try {
       if (!validateUUID(id)) {
         throw new Error('Invalid request ID format')
@@ -736,14 +736,20 @@ class RequestService {
 
       requestCache.clear()
 
+      const updateData: Record<string, any> = {
+        status: 'delivered',
+        delivered_at: new Date().toISOString(),
+        delivered_by: user.id,
+        delivery_notes: deliveryNotes ? sanitizeInput(deliveryNotes) : null
+      }
+
+      if (receivedByEmployeeId) {
+        updateData.received_by_employee_id = receivedByEmployeeId
+      }
+
       const { data: updatedRequest, error } = await supabase
         .from('requests')
-        .update({
-          status: 'delivered',
-          delivered_at: new Date().toISOString(),
-          delivered_by: user.id,
-          delivery_notes: deliveryNotes ? sanitizeInput(deliveryNotes) : null
-        })
+        .update(updateData)
         .eq('id', id)
         .select()
         .single()

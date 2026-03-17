@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/auth'
 import {
   CheckCircle2, XCircle, PlayCircle,
-  CheckSquare, Ban, Loader2, Truck, PackageCheck
+  CheckSquare, Ban, Loader2, Truck, PackageCheck, Search, User
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -16,6 +17,8 @@ import { Label } from '@/components/ui/label'
 
 import { requestService } from '@/lib/services/requests'
 import type { Request } from '@/lib/services/requests'
+import { employeesService } from '@/lib/services/employees'
+import type { Employee } from '@/lib/types/employees'
 
 interface RequestActionsProps {
   request: Request
@@ -28,6 +31,10 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const [showDialog, setShowDialog] = useState(false)
   const [action, setAction] = useState<'approve' | 'reject' | 'cancel' | 'deliver' | 'confirm_receipt' | null>(null)
   const [reason, setReason] = useState('')
+  const [matricula, setMatricula] = useState('')
+  const [employee, setEmployee] = useState<Employee | null>(null)
+  const [searchingEmployee, setSearchingEmployee] = useState(false)
+  const [employeeError, setEmployeeError] = useState('')
   const [itemQuantities, setItemQuantities] = useState<Record<string, number>>(() => {
     // Initialize with current quantities or approved quantities if they exist
     if (!request?.request_items?.length) {
@@ -90,8 +97,37 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const canCancel = (user?.id === request?.requester_id || isManager) &&
     ['pending', 'approved'].includes(request.status)
 
+  const searchEmployee = async () => {
+    if (!matricula.trim()) {
+      setEmployeeError('Digite a matrícula')
+      return
+    }
+    setSearchingEmployee(true)
+    setEmployeeError('')
+    setEmployee(null)
+    try {
+      const found = await employeesService.getByMatricula(matricula.trim())
+      if (found) {
+        setEmployee(found)
+        setEmployeeError('')
+      } else {
+        setEmployeeError('Colaborador não encontrado')
+      }
+    } catch {
+      setEmployeeError('Erro ao buscar colaborador')
+    } finally {
+      setSearchingEmployee(false)
+    }
+  }
+
   const handleAction = async () => {
     if (!action) return
+
+    // Validate employee for delivery
+    if (action === 'deliver' && !employee) {
+      setEmployeeError('Informe a matrícula do recebedor')
+      return
+    }
 
     try {
       setLoading(true)
@@ -108,7 +144,11 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
           updatedRequest = await requestService.cancel(request.id, reason)
           break
         case 'deliver':
-          updatedRequest = await requestService.markAsDelivered(request.id, reason)
+          updatedRequest = await requestService.markAsDelivered(
+            request.id,
+            reason,
+            employee?.id
+          )
           break
         case 'confirm_receipt':
           updatedRequest = await requestService.confirmReceipt(request.id, reason)
@@ -120,6 +160,8 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
       onUpdate(updatedRequest)
       setShowDialog(false)
       setReason('')
+      setMatricula('')
+      setEmployee(null)
     } catch (error) {
       console.error('Error performing action:', error)
     } finally {
@@ -309,6 +351,56 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
           </DialogHeader>
 
           <div className="space-y-6 py-4">
+            {/* Employee Matricula (only for delivery) */}
+            {action === 'deliver' && (
+              <div className="space-y-3">
+                <Label className="text-base font-medium text-gray-900">
+                  Matrícula do Recebedor
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={matricula}
+                    onChange={(e) => {
+                      setMatricula(e.target.value)
+                      setEmployee(null)
+                      setEmployeeError('')
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && searchEmployee()}
+                    placeholder="Digite a matrícula..."
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={searchEmployee}
+                    disabled={searchingEmployee}
+                  >
+                    {searchingEmployee ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Search className="w-4 h-4" />
+                    )}
+                  </Button>
+                </div>
+                {employeeError && (
+                  <p className="text-sm text-red-600">{employeeError}</p>
+                )}
+                {employee && (
+                  <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <User className="w-5 h-5 text-green-600" />
+                    <div>
+                      <p className="font-medium text-gray-900">{employee.full_name}</p>
+                      <p className="text-sm text-gray-500">
+                        Matrícula: {employee.matricula}
+                        {employee.department_name && ` • ${employee.department_name}`}
+                        {employee.cargo && ` • ${employee.cargo}`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Comments/Reason */}
             <div className="space-y-2">
               <Label className="text-base font-medium text-gray-900">
@@ -349,7 +441,7 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
             </Button>
             <Button
               onClick={handleAction}
-              disabled={loading || (['reject', 'cancel'].includes(action || '') && !reason.trim())}
+              disabled={loading || (['reject', 'cancel'].includes(action || '') && !reason.trim()) || (action === 'deliver' && !employee)}
               className={`px-6 ${
                 action === 'approve'
                   ? 'bg-green-500 hover:bg-green-600 text-white'
