@@ -32,10 +32,7 @@ function ItemRow({ item, canEdit }: { item: Request['request_items'][0], canEdit
   const [suppliedQty, setSuppliedQty] = useState(item.supplied_quantity ?? item.quantity)
   const [observation, setObservation] = useState(item.observation || '')
   const [checked, setChecked] = useState(item.is_checked || false)
-  const [saving, setSaving] = useState(false)
-
   const saveField = async (field: string, value: any) => {
-    setSaving(true)
     try {
       await supabase
         .from('request_items')
@@ -43,8 +40,6 @@ function ItemRow({ item, canEdit }: { item: Request['request_items'][0], canEdit
         .eq('id', item.id)
     } catch (e) {
       console.error('Error saving field:', e)
-    } finally {
-      setSaving(false)
     }
   }
 

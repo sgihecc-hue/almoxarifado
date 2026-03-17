@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/auth'
 import {
   CheckCircle2, XCircle, PlayCircle,
-  CheckSquare, Ban, Loader2, Plus, Minus, Truck, PackageCheck
+  CheckSquare, Ban, Loader2, Truck, PackageCheck
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,7 +13,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
-import { Input } from '@/components/ui/input'
+
 import { requestService } from '@/lib/services/requests'
 import type { Request } from '@/lib/services/requests'
 
@@ -172,18 +172,6 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
     } finally {
       setLoading(false)
     }
-  }
-
-  const handleQuantityChange = (itemId: string, quantity: number) => {
-    // Validate inputs
-    if (!itemId || typeof itemId !== 'string' || typeof quantity !== 'number' || isNaN(quantity) || quantity < 0 || loading) {
-      return
-    }
-    
-    setItemQuantities(prev => ({
-      ...prev,
-      [itemId]: Math.max(0, Math.floor(quantity)) // Ensure positive integer
-    }))
   }
 
   return (
