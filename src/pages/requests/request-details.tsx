@@ -226,7 +226,7 @@ export function RequestDetails() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">
-              Solicitação #{request && formatRequestNumber(request.id)}
+              Solicitação #{request?.request_number || formatRequestNumber(request.id)}
             </h1>
             
             {/* Error Message */}
@@ -298,7 +298,7 @@ export function RequestDetails() {
               </div>
               <div>
                 <p className="text-sm text-gray-500 print:text-xs">Nº Solicitação</p>
-                <p className="font-medium print:text-sm">#{formatRequestNumber(request.id)}</p>
+                <p className="font-medium print:text-sm">#{request.request_number || formatRequestNumber(request.id)}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500 print:text-xs">Setor Solicitante</p>

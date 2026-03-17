@@ -115,7 +115,7 @@ export function RequestPending() {
             <div className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-lg border border-gray-200 shadow-sm">
               <span className="text-sm text-gray-500">Solicitação Nº</span>
               <span className="text-lg font-semibold text-gray-900">
-                {formatRequestNumber(request.id)}
+                {request.request_number || formatRequestNumber(request.id)}
               </span>
             </div>
             <RequestStatusBadge status={request.status} />
