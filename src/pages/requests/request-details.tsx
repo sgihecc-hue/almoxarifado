@@ -207,7 +207,7 @@ export function RequestDetails() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 print:space-y-1 print:max-w-full">
+    <div className="max-w-7xl mx-auto space-y-6 print:space-y-1 print:max-w-full">
       {/* Header - Only visible on screen */}
       <div className="flex items-center justify-between print:hidden">
         <div className="flex items-center gap-4">
@@ -310,45 +310,6 @@ export function RequestDetails() {
             </div>
 
           </div>
-
-          {/* Items - Spreadsheet Table */}
-          <div className="bg-white rounded-xl p-6 border border-gray-100 print:p-2 print:border print:border-gray-300 print:shadow-none">
-            <h2 className="text-lg font-semibold text-gray-900 mb-6 print:mb-2 print:text-base">
-              Itens Solicitados
-            </h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b-2 border-gray-200">
-                    <th className="text-left py-3 px-2 font-medium text-gray-600">Nome</th>
-                    <th className="text-center py-3 px-2 font-medium text-gray-600 w-16">UF</th>
-                    <th className="text-center py-3 px-2 font-medium text-gray-600 w-20">Qtd Solic.</th>
-                    <th className="text-center py-3 px-2 font-medium text-gray-600 w-20">Saldo</th>
-                    <th className="text-center py-3 px-2 font-medium text-gray-600 w-24">Qtd Fornec.</th>
-                    <th className="text-center py-3 px-2 font-medium text-gray-600 w-36">Observação</th>
-                    <th className="text-center py-3 px-2 font-medium text-gray-600 w-16">Confirmar</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {request.request_items.map((item) => (
-                    <ItemRow
-                      key={item.id}
-                      item={item}
-                      canEdit={request.status === 'pending' || request.status === 'approved' || request.status === 'processing'}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Request Actions - Below items, hide when printing */}
-          <div className="print:hidden">
-            <RequestActions
-              request={request}
-              onUpdate={(updatedRequest) => setRequest(updatedRequest)}
-            />
-          </div>
         </div>
 
         {/* Timeline - Hide when printing */}
@@ -417,30 +378,69 @@ export function RequestDetails() {
 
           <RequestTimeline request={request} />
         </div>
+      </div>
 
-        {/* Print Signature Section - Only visible when printing */}
-        <div className="hidden print:block print:mt-4">
-          <div className="grid grid-cols-3 gap-4">
-            <div className="text-center">
-              <div className="border-t border-gray-300 pt-1 mt-8">
-                <p className="text-xs">Solicitante</p>
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="border-t border-gray-300 pt-1 mt-8">
-                <p className="text-xs">Aprovador</p>
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="border-t border-gray-300 pt-1 mt-8">
-                <p className="text-xs">Recebedor</p>
-              </div>
+      {/* Items - Spreadsheet Table (Full Width) */}
+      <div className="bg-white rounded-xl p-6 border border-gray-100 print:p-2 print:border print:border-gray-300 print:shadow-none">
+        <h2 className="text-lg font-semibold text-gray-900 mb-6 print:mb-2 print:text-base">
+          Itens Solicitados
+        </h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b-2 border-gray-200">
+                <th className="text-left py-3 px-3 font-medium text-gray-600">Nome</th>
+                <th className="text-center py-3 px-3 font-medium text-gray-600 w-20">UF</th>
+                <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Qtd Solic.</th>
+                <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Saldo</th>
+                <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Qtd Fornec.</th>
+                <th className="text-center py-3 px-3 font-medium text-gray-600 w-44">Observação</th>
+                <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Confirmar</th>
+              </tr>
+            </thead>
+            <tbody>
+              {request.request_items.map((item) => (
+                <ItemRow
+                  key={item.id}
+                  item={item}
+                  canEdit={request.status === 'pending' || request.status === 'approved' || request.status === 'processing'}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Request Actions - Below items, hide when printing */}
+      <div className="print:hidden">
+        <RequestActions
+          request={request}
+          onUpdate={(updatedRequest) => setRequest(updatedRequest)}
+        />
+      </div>
+
+      {/* Print Signature Section - Only visible when printing */}
+      <div className="hidden print:block print:mt-4">
+        <div className="grid grid-cols-3 gap-4">
+          <div className="text-center">
+            <div className="border-t border-gray-300 pt-1 mt-8">
+              <p className="text-xs">Solicitante</p>
             </div>
           </div>
-          
-          <div className="mt-4 text-center text-xs text-gray-500">
-            <p>Data de impressão: {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</p>
+          <div className="text-center">
+            <div className="border-t border-gray-300 pt-1 mt-8">
+              <p className="text-xs">Aprovador</p>
+            </div>
           </div>
+          <div className="text-center">
+            <div className="border-t border-gray-300 pt-1 mt-8">
+              <p className="text-xs">Recebedor</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 text-center text-xs text-gray-500">
+          <p>Data de impressão: {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</p>
         </div>
       </div>
 
