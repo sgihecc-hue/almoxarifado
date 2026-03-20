@@ -68,11 +68,11 @@ export function Dashboard() {
           </div>
           <div className="w-full md:w-auto">
             <div className="relative">
-              <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-cyan-600 rounded-xl blur opacity-25"></div>
+              <div className="absolute -inset-1 bg-gradient-to-r from-emerald-600 to-teal-500 rounded-xl blur opacity-25"></div>
               <div className="relative bg-white p-6 rounded-xl border border-gray-200">
                 <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-blue-100 rounded-lg">
-                    <Lightbulb className="w-5 h-5 text-blue-600" />
+                  <div className="p-2 bg-emerald-100 rounded-lg">
+                    <Lightbulb className="w-5 h-5 text-emerald-600" />
                   </div>
                   <h3 className="font-semibold text-gray-900">Dica Rápida</h3>
                 </div>
@@ -82,7 +82,7 @@ export function Dashboard() {
                 <Button 
                   variant="ghost" 
                   size="sm" 
-                  className="text-blue-600"
+                  className="text-emerald-600"
                   onClick={() => navigate('/requests')}
                 >
                   Ver minhas solicitações
@@ -101,8 +101,8 @@ export function Dashboard() {
           {/* Requests */}
           <div className="p-5 border border-gray-200 rounded-xl hover:border-primary-200 hover:bg-primary-50/20 transition-colors">
             <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <ClipboardList className="w-5 h-5 text-blue-600" />
+              <div className="p-2 bg-emerald-100 rounded-lg">
+                <ClipboardList className="w-5 h-5 text-emerald-600" />
               </div>
               <h3 className="font-semibold text-gray-900">Solicitações</h3>
             </div>
@@ -112,7 +112,7 @@ export function Dashboard() {
             <Button 
               variant="ghost" 
               size="sm" 
-              className="text-blue-600"
+              className="text-emerald-600"
               onClick={() => navigate('/requests')}
             >
               Acessar Solicitações
@@ -263,8 +263,8 @@ export function Dashboard() {
       {/* Quick Guide */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
         <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 bg-blue-100 rounded-lg">
-            <BookOpen className="w-5 h-5 text-blue-600" />
+          <div className="p-2 bg-emerald-100 rounded-lg">
+            <BookOpen className="w-5 h-5 text-emerald-600" />
           </div>
           <h2 className="text-xl font-semibold text-gray-900">Guia Rápido</h2>
         </div>
@@ -272,7 +272,7 @@ export function Dashboard() {
         <div className="space-y-4">
           <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
             <h3 className="font-medium text-gray-900 mb-2 flex items-center gap-2">
-              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-600 text-sm font-semibold">1</span>
+              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 text-sm font-semibold">1</span>
               Como criar uma nova solicitação
             </h3>
             <p className="text-sm text-gray-600 ml-8">
@@ -282,7 +282,7 @@ export function Dashboard() {
           
           <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
             <h3 className="font-medium text-gray-900 mb-2 flex items-center gap-2">
-              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-600 text-sm font-semibold">2</span>
+              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 text-sm font-semibold">2</span>
               Como acompanhar suas solicitações
             </h3>
             <p className="text-sm text-gray-600 ml-8">
@@ -293,7 +293,7 @@ export function Dashboard() {
           {canManageRequests && (
             <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
               <h3 className="font-medium text-gray-900 mb-2 flex items-center gap-2">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-600 text-sm font-semibold">3</span>
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 text-sm font-semibold">3</span>
                 Como aprovar ou rejeitar solicitações
               </h3>
               <p className="text-sm text-gray-600 ml-8">
@@ -305,7 +305,7 @@ export function Dashboard() {
           {(isManager || isAdmin) && (
             <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
               <h3 className="font-medium text-gray-900 mb-2 flex items-center gap-2">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-600 text-sm font-semibold">4</span>
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 text-sm font-semibold">4</span>
                 Como gerenciar o estoque
               </h3>
               <p className="text-sm text-gray-600 ml-8">
@@ -371,15 +371,15 @@ export function Dashboard() {
             </Button>
           </div>
           
-          <div className="p-4 bg-blue-50 rounded-lg border border-blue-100">
-            <h3 className="font-medium text-blue-900 mb-2">Tutoriais em Vídeo</h3>
-            <p className="text-sm text-blue-700 mb-3">
+          <div className="p-4 bg-teal-50 rounded-lg border border-teal-100">
+            <h3 className="font-medium text-teal-900 mb-2">Tutoriais em Vídeo</h3>
+            <p className="text-sm text-teal-700 mb-3">
               Assista aos tutoriais em vídeo para aprender a utilizar o sistema de forma visual e prática.
             </p>
             <Button 
               variant="outline" 
               size="sm" 
-              className="border-blue-200 text-blue-700 hover:bg-blue-100"
+              className="border-teal-200 text-teal-700 hover:bg-emerald-100"
               onClick={() => window.open('https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank')}
             >
               <PlayCircle className="w-4 h-4 mr-2" />
