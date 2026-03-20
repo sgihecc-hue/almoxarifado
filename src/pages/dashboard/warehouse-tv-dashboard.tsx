@@ -24,6 +24,8 @@ const THEME_A = {
   textSecondary: 'rgba(255,255,255,0.75)',
   textMuted: 'rgba(255,255,255,0.5)',
   textHeader: 'rgba(255,255,255,0.9)',
+  headerText: '#0a3320',
+  headerMuted: 'rgba(10,51,32,0.6)',
   dest: '#ffd166',
   totalNum: '#fff',
   pendingNum: '#ffcc00',
@@ -32,11 +34,11 @@ const THEME_A = {
   pendingGlow: '0 0 12px rgba(255,204,0,0.4)',
   approvedGlow: '0 0 12px rgba(0,230,118,0.4)',
   processingGlow: '0 0 12px rgba(68,138,255,0.4)',
-  btnBg: 'rgba(0,0,0,0.25)',
-  btnBorder: 'rgba(255,255,255,0.15)',
-  btnText: '#fff',
-  footerText: 'rgba(255,255,255,0.35)',
-  footerBorder: 'rgba(255,255,255,0.05)',
+  btnBg: 'rgba(0,0,0,0.2)',
+  btnBorder: 'rgba(0,0,0,0.15)',
+  btnText: '#0a3320',
+  footerText: 'rgba(10,51,32,0.4)',
+  footerBorder: 'rgba(0,0,0,0.08)',
   priorityHigh: { bg: 'rgba(239,68,68,0.3)', color: '#fff', border: 'rgba(239,68,68,0.5)' },
   priorityMedium: { bg: 'rgba(251,191,36,0.3)', color: '#fff', border: 'rgba(251,191,36,0.5)' },
   priorityLow: { bg: 'rgba(34,197,94,0.3)', color: '#fff', border: 'rgba(34,197,94,0.5)' },
@@ -55,6 +57,8 @@ const THEME_B = {
   textSecondary: 'rgba(13,46,28,0.7)',
   textMuted: 'rgba(13,46,28,0.65)',
   textHeader: 'rgba(13,46,28,0.8)',
+  headerText: '#0d2e1c',
+  headerMuted: 'rgba(13,46,28,0.5)',
   dest: '#0d5a30',
   totalNum: '#0d2e1c',
   pendingNum: '#8a6800',
@@ -215,7 +219,7 @@ export default function WarehouseTVDashboard() {
             <div style={{
               display: 'flex', alignItems: 'center', gap: 14,
               paddingRight: 20,
-              borderRight: `1px solid ${themeMode === 'a' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+              borderRight: `1px solid ${themeMode === 'a' ? 'rgba(10,51,32,0.15)' : 'rgba(0,0,0,0.1)'}`,
             }}>
               <div style={{
                 width: 48, height: 48, borderRadius: 12,
@@ -225,7 +229,7 @@ export default function WarehouseTVDashboard() {
                 boxShadow: '0 4px 15px rgba(45, 180, 140, 0.3)',
               }}>H</div>
               <div style={{
-                fontSize: 11, fontWeight: 600, color: theme.text,
+                fontSize: 11, fontWeight: 600, color: theme.headerText,
                 textTransform: 'uppercase', letterSpacing: 1, lineHeight: 1.4,
                 transition: 'color 0.4s',
               }}>
@@ -234,10 +238,10 @@ export default function WarehouseTVDashboard() {
               </div>
             </div>
             <div>
-              <h1 style={{ fontSize: 24, fontWeight: 700, color: theme.text, letterSpacing: -0.5, transition: 'color 0.4s' }}>
+              <h1 style={{ fontSize: 24, fontWeight: 700, color: theme.headerText, letterSpacing: -0.5, transition: 'color 0.4s' }}>
                 Painel de Solicitações — Almoxarifado
               </h1>
-              <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 4, transition: 'color 0.4s' }}>
+              <div style={{ fontSize: 12, color: theme.headerMuted, marginTop: 4, transition: 'color 0.4s' }}>
                 Atualizado em {format(lastUpdated, "dd 'de' MMMM 'de' yyyy 'às' HH:mm", { locale: ptBR })}
               </div>
             </div>
