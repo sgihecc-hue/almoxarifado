@@ -4,7 +4,9 @@ import {
   AlertCircle,
   RefreshCw,
   Home,
-  History
+  History,
+  Sun,
+  Moon
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -207,31 +209,6 @@ export default function WarehouseTVDashboard() {
         transition: 'background 0.6s ease',
       }}>
 
-        {/* Theme Switcher */}
-        <div style={{
-          position: 'fixed', top: 20, right: 20, zIndex: 100,
-          display: 'flex', gap: 0,
-          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(20px)',
-          borderRadius: 14, padding: 4,
-          border: '1px solid rgba(255,255,255,0.15)',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-        }}>
-          <button onClick={() => setThemeMode('a')} style={{
-            padding: '10px 22px', border: 'none', borderRadius: 10,
-            fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            background: themeMode === 'a' ? 'rgba(255,255,255,0.15)' : 'transparent',
-            color: themeMode === 'a' ? '#fff' : 'rgba(255,255,255,0.5)',
-            boxShadow: themeMode === 'a' ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-          }}>Menta + Verde</button>
-          <button onClick={() => setThemeMode('b')} style={{
-            padding: '10px 22px', border: 'none', borderRadius: 10,
-            fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            background: themeMode === 'b' ? 'rgba(255,255,255,0.15)' : 'transparent',
-            color: themeMode === 'b' ? '#fff' : 'rgba(255,255,255,0.5)',
-            boxShadow: themeMode === 'b' ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-          }}>Só Menta</button>
-        </div>
-
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
@@ -267,6 +244,16 @@ export default function WarehouseTVDashboard() {
           </div>
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button onClick={() => setThemeMode(themeMode === 'a' ? 'b' : 'a')} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 42, height: 42, borderRadius: 12, cursor: 'pointer',
+              color: theme.btnText, background: theme.btnBg,
+              backdropFilter: 'blur(20px)',
+              border: `1px solid ${theme.btnBorder}`,
+              transition: 'all 0.4s',
+            }} title={themeMode === 'a' ? 'Tema claro' : 'Tema escuro'}>
+              {themeMode === 'a' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
             {[
               { label: 'Histórico', icon: <History size={16} />, action: () => navigate('/tv/warehouse/history') },
               { label: 'Menu', icon: <Home size={16} />, action: () => navigate('/') },
