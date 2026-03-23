@@ -13,8 +13,6 @@ import {
   CheckSquare,
   BookOpen,
   ChevronDown,
-  HelpCircle,
-  FileText,
   Settings
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -334,65 +332,6 @@ export function Dashboard() {
         )}
       </div>
 
-      {/* Help & Support */}
-      <div className="p-6" style={glass}>
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 bg-green-100 rounded-lg">
-            <HelpCircle className="w-5 h-5 text-green-600" />
-          </div>
-          <h2 className="text-xl font-semibold" style={{ color: txt }}>Ajuda e Suporte</h2>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 bg-green-50 rounded-lg border border-green-100">
-            <h3 className="font-medium text-green-900 mb-2">Manual do Usuário</h3>
-            <p className="text-sm text-green-700 mb-3">
-              Acesse o manual completo com instruções detalhadas sobre todas as funcionalidades do sistema.
-            </p>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="border-green-200 text-green-700 hover:bg-green-100"
-              onClick={() => window.open('#', '_blank')}
-            >
-              <FileText className="w-4 h-4 mr-2" />
-              Baixar Manual
-            </Button>
-          </div>
-          
-          <div className="p-4 bg-teal-50 rounded-lg border border-teal-100">
-            <h3 className="font-medium text-teal-900 mb-2">Tutoriais em Vídeo</h3>
-            <p className="text-sm text-teal-700 mb-3">
-              Assista aos tutoriais em vídeo para aprender a utilizar o sistema de forma visual e prática.
-            </p>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="border-teal-200 text-teal-700 hover:bg-emerald-100"
-              onClick={() => window.open('https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank')}
-            >
-              <PlayCircle className="w-4 h-4 mr-2" />
-              Ver Tutoriais
-            </Button>
-          </div>
-          
-          <div className="p-4 bg-purple-50 rounded-lg border border-purple-100">
-            <h3 className="font-medium text-purple-900 mb-2">Suporte Técnico</h3>
-            <p className="text-sm text-purple-700 mb-3">
-              Entre em contato com nossa equipe de suporte para resolver dúvidas ou problemas técnicos.
-            </p>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="border-purple-200 text-purple-700 hover:bg-purple-100"
-              onClick={() => window.open('mailto:suporte@hgc.gov.br', '_blank')}
-            >
-              <HelpCircle className="w-4 h-4 mr-2" />
-              Contatar Suporte
-            </Button>
-          </div>
-        </div>
-      </div>
     </div>
     </ErrorBoundary>
   )
