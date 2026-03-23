@@ -14,7 +14,7 @@ interface AuthState {
 
 interface AuthContextType extends AuthState {
   signIn: (email: string, password: string) => Promise<void>
-  signUp: (email: string, password: string, fullName: string, role: string) => Promise<void>
+  signUp: (email: string, password: string, fullName: string, role: string, departmentId?: string) => Promise<void>
   signOut: () => Promise<void>
   clearError: () => void
   checkConnection: () => Promise<boolean>
@@ -240,7 +240,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function handleSignUp(email: string, password: string, fullName: string, role: string) {
+  async function handleSignUp(email: string, password: string, fullName: string, role: string, departmentId?: string) {
     try {
       setState(prev => ({ ...prev, error: null }))
       
@@ -313,7 +313,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             id: data.user.id,
             email: sanitizedEmail,
             full_name: sanitizedFullName,
-            role: role
+            role: role,
+            ...(departmentId ? { department_id: departmentId } : {})
           })
 
         if (profileError) {

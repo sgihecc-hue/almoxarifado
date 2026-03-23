@@ -1,16 +1,31 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Building2, Mail, Lock, User, ArrowRight, ArrowLeft, AlertCircle, ShieldAlert } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
+
+interface Department {
+  id: string
+  name: string
+}
 
 export function Register() {
   const navigate = useNavigate()
   const { signUp } = useAuth()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [departments, setDepartments] = useState<Department[]>([])
+
+  useEffect(() => {
+    async function loadDepartments() {
+      const { data } = await supabase.from('departments').select('id, name').order('name')
+      if (data) setDepartments(data)
+    }
+    loadDepartments()
+  }, [])
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -24,9 +39,10 @@ export function Register() {
       const confirmPassword = formData.get('confirmPassword') as string
       const fullName = formData.get('fullName') as string
       const role = 'solicitante'
+      const departmentId = formData.get('department') as string
 
       // Basic validation
-      if (!email || !password || !confirmPassword || !fullName) {
+      if (!email || !password || !confirmPassword || !fullName || !departmentId) {
         throw new Error('Por favor, preencha todos os campos')
       }
 
@@ -43,7 +59,7 @@ export function Register() {
         return
       }
 
-      await signUp(email, password, fullName, role)
+      await signUp(email, password, fullName, role, departmentId)
       
       // Navigate to login page with success message
       navigate('/login', { 
@@ -199,7 +215,25 @@ export function Register() {
                 </div>
               </div>
 
-              {/* Role é definido automaticamente como 'solicitante' — somente ADM pode alterar */}
+              <div>
+                <Label htmlFor="department" className="text-gray-700">
+                  Departamento / Setor
+                </Label>
+                <div className="relative mt-1">
+                  <select
+                    id="department"
+                    name="department"
+                    required
+                    className="block w-full pl-10 pr-4 py-2 text-base border border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md bg-white"
+                  >
+                    <option value="">Selecione seu departamento</option>
+                    {departments.map((dept) => (
+                      <option key={dept.id} value={dept.id}>{dept.name}</option>
+                    ))}
+                  </select>
+                  <Building2 className="w-5 h-5 text-gray-400 absolute left-3 top-2" />
+                </div>
+              </div>
             </div>
 
             <div className="flex flex-col gap-4">
