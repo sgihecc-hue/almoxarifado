@@ -11,7 +11,6 @@ import {
   ArrowRight,
   CheckSquare,
   BookOpen,
-  Lightbulb,
   HelpCircle,
   FileText,
   Settings
@@ -53,58 +52,23 @@ export function Dashboard() {
   return (
     <ErrorBoundary>
     <div className="space-y-8">
-      {/* Welcome Section */}
-      <div className="p-6" style={glass}>
-        <div className="flex flex-col md:flex-row gap-6 items-start">
-          <div className="flex-1">
-            <h1 className="text-3xl font-bold mb-2" style={{ color: txt }}>
-              Sistema de Gestão de Insumos
-            </h1>
-            <p className="text-lg mb-6" style={{ color: txtSec }}>
-              Olá, <span className="font-medium">{user?.full_name}</span>! Este sistema permite gerenciar o estoque e solicitações de insumos do Hospital Estadual Costa dos Coqueiros de forma eficiente.
-            </p>
-            <div className="flex flex-wrap gap-3">
-              <Button 
-                className="bg-primary-500 hover:bg-primary-600 text-white"
-                onClick={() => navigate('/requests/new')}
-              >
-                Nova Solicitação
-                <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
-              <Button 
-                variant="outline"
-                onClick={() => window.open('https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank')}
-              >
-                <PlayCircle className="w-4 h-4 mr-2" />
-                Assistir Tutorial
-              </Button>
-            </div>
-          </div>
-          <div className="w-full md:w-auto">
-            <div className="relative">
-              <div className="relative p-6 rounded-xl" style={{ background: mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.03)', border: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}` }}>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-emerald-100 rounded-lg">
-                    <Lightbulb className="w-5 h-5 text-emerald-600" />
-                  </div>
-                  <h3 className="font-semibold" style={{ color: txt }}>Dica Rápida</h3>
-                </div>
-                <p className="text-sm mb-4" style={{ color: txtSec }}>
-                  Você pode acompanhar o status de suas solicitações na seção "Minhas Solicitações" e visualizar detalhes completos clicando em qualquer solicitação.
-                </p>
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
-                  className="text-emerald-600"
-                  onClick={() => navigate('/requests')}
-                >
-                  Ver minhas solicitações
-                  <ArrowRight className="w-4 h-4 ml-1" />
-                </Button>
-              </div>
-            </div>
-          </div>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold" style={{ color: txt }}>
+            Ola, {user?.full_name?.split(' ')[0]}!
+          </h1>
+          <p className="text-sm mt-1" style={{ color: txtSec }}>
+            Sistema de Gestao de Insumos — HECC
+          </p>
         </div>
+        <Button
+          className="bg-primary-500 hover:bg-primary-600 text-white"
+          onClick={() => navigate('/requests/new')}
+        >
+          Nova Solicitacao
+          <ArrowRight className="w-4 h-4 ml-2" />
+        </Button>
       </div>
 
       {/* Main Features */}
