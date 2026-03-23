@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
@@ -11,6 +12,7 @@ import {
   ArrowRight,
   CheckSquare,
   BookOpen,
+  ChevronDown,
   HelpCircle,
   FileText,
   Settings
@@ -36,6 +38,7 @@ export function Dashboard() {
   const isAdmin = user?.role === 'administrador'
   const isManager = user?.role === 'gestor'
   const canManageRequests = isAdmin || isManager
+  const [showGuide, setShowGuide] = useState(false)
 
   const glass: React.CSSProperties = {
     background: mode === 'dark' ? 'rgba(10,15,20,0.55)' : 'rgba(255,255,255,0.65)',
@@ -237,60 +240,65 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Quick Guide */}
-      <div className="p-6" style={glass}>
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 bg-emerald-100 rounded-lg">
-            <BookOpen className="w-5 h-5 text-emerald-600" />
+      {/* Quick Guide - Collapsible */}
+      <div style={glass}>
+        <button
+          onClick={() => setShowGuide(!showGuide)}
+          className="w-full p-4 flex items-center justify-between cursor-pointer"
+          style={{ background: 'transparent', border: 'none' }}
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-100 rounded-lg">
+              <BookOpen className="w-5 h-5 text-emerald-600" />
+            </div>
+            <span className="text-base font-semibold" style={{ color: txt }}>Guia Rapido</span>
           </div>
-          <h2 className="text-xl font-semibold" style={{ color: txt }}>Guia Rápido</h2>
-        </div>
-        
-        <div className="space-y-4">
-          <div className="p-4 rounded-lg">
-            <h3 className="font-medium mb-2 flex items-center gap-2" style={{ color: txt }}>
-              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 text-sm font-semibold">1</span>
-              Como criar uma nova solicitação
-            </h3>
-            <p className="text-sm ml-8" style={{ color: txtSec }}>
-              Acesse o menu "Nova Solicitação", selecione o tipo (Farmácia ou Almoxarifado), preencha os detalhes, adicione os itens desejados e confirme o pedido.
-            </p>
-          </div>
-          
-          <div className="p-4 rounded-lg">
-            <h3 className="font-medium mb-2 flex items-center gap-2" style={{ color: txt }}>
-              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 text-sm font-semibold">2</span>
-              Como acompanhar suas solicitações
-            </h3>
-            <p className="text-sm ml-8" style={{ color: txtSec }}>
-              Acesse "Minhas Solicitações" para ver todas as suas solicitações. Você pode filtrar por status (pendente, aprovada, rejeitada, etc.) e visualizar detalhes completos.
-            </p>
-          </div>
-          
-          {canManageRequests && (
-            <div className="p-4 rounded-lg">
-              <h3 className="font-medium mb-2 flex items-center gap-2" style={{ color: txt }}>
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 text-sm font-semibold">3</span>
-                Como aprovar ou rejeitar solicitações
+          <ChevronDown size={20} style={{ color: txtMut, transform: showGuide ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.3s' }} />
+        </button>
+        {showGuide && (
+          <div className="px-6 pb-6 space-y-4">
+            <div className="p-4 rounded-lg" style={{ background: mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)' }}>
+              <h3 className="font-medium mb-1 flex items-center gap-2 text-sm" style={{ color: txt }}>
+                <span className="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-semibold">1</span>
+                Como criar uma nova solicitacao
               </h3>
-              <p className="text-sm ml-8" style={{ color: txtSec }}>
-                Acesse "Caixa de Entrada", selecione a solicitação desejada e utilize os botões de ação para aprovar ou rejeitar. Você pode ajustar as quantidades aprovadas e adicionar comentários.
+              <p className="text-sm ml-7" style={{ color: txtSec }}>
+                Acesse "Nova Solicitacao", selecione Farmacia ou Almoxarifado, preencha os detalhes e adicione os itens.
               </p>
             </div>
-          )}
-          
-          {(isManager || isAdmin) && (
-            <div className="p-4 rounded-lg">
-              <h3 className="font-medium mb-2 flex items-center gap-2" style={{ color: txt }}>
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 text-sm font-semibold">4</span>
-                Como gerenciar o estoque
+            <div className="p-4 rounded-lg" style={{ background: mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)' }}>
+              <h3 className="font-medium mb-1 flex items-center gap-2 text-sm" style={{ color: txt }}>
+                <span className="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-semibold">2</span>
+                Como acompanhar suas solicitacoes
               </h3>
-              <p className="text-sm ml-8" style={{ color: txtSec }}>
-                Acesse "Farmácia" ou "Almoxarifado" no menu de Estoque. Você pode adicionar novos itens, atualizar quantidades, configurar níveis mínimos e registrar movimentações.
+              <p className="text-sm ml-7" style={{ color: txtSec }}>
+                Acesse "Minhas Solicitacoes" para ver status, filtrar e visualizar detalhes.
               </p>
             </div>
-          )}
-        </div>
+            {canManageRequests && (
+              <div className="p-4 rounded-lg" style={{ background: mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)' }}>
+                <h3 className="font-medium mb-1 flex items-center gap-2 text-sm" style={{ color: txt }}>
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-semibold">3</span>
+                  Como aprovar ou rejeitar solicitacoes
+                </h3>
+                <p className="text-sm ml-7" style={{ color: txtSec }}>
+                  Acesse "Caixa de Entrada", selecione a solicitacao e use os botoes de acao.
+                </p>
+              </div>
+            )}
+            {(isManager || isAdmin) && (
+              <div className="p-4 rounded-lg" style={{ background: mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)' }}>
+                <h3 className="font-medium mb-1 flex items-center gap-2 text-sm" style={{ color: txt }}>
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-semibold">4</span>
+                  Como gerenciar o estoque
+                </h3>
+                <p className="text-sm ml-7" style={{ color: txtSec }}>
+                  Acesse "Farmacia" ou "Almoxarifado" no menu de Estoque.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Video Tutorial Section */}
