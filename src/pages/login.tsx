@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Building2, Mail, Lock, ArrowRight, CheckCircle2 } from 'lucide-react'
+import hospitalImg from '@/assets/hospital-hecc.jpg.jpeg'
 
 export function Login() {
   const navigate = useNavigate()
@@ -85,27 +86,27 @@ export function Login() {
 
   return (
     <div className="min-h-screen flex">
-      {/* Left Section */}
-      <div className="hidden md:flex md:w-1/2 relative bg-gradient-to-br from-emerald-600 to-teal-500 text-white p-8 lg:p-12 flex-col justify-center overflow-hidden">
-        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxkZWZzPjxwYXR0ZXJuIGlkPSJncmlkIiB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHBhdHRlcm5Vbml0cz0idXNlclNwYWNlT25Vc2UiPjxwYXRoIGQ9Ik0gNDAgMCBMIDAgMCAwIDQwIiBmaWxsPSJub25lIiBzdHJva2U9InJnYmEoMjU1LDI1NSwyNTUsMC4xKSIgc3Ryb2tlLXdpZHRoPSIxIi8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+')] opacity-10"></div>
-        <div className="relative">
-          <div className="flex items-center space-x-3 mb-12">
-            <div className="relative">
-              <div className="absolute -inset-1 bg-white/20 rounded-lg blur-sm"></div>
-              <div className="relative bg-white/10 p-3 rounded-lg backdrop-blur-sm">
-                <Building2 className="w-12 h-12" />
-              </div>
+      {/* Left Section - Hospital Image with Green Overlay */}
+      <div className="hidden md:flex md:w-1/2 relative text-white p-8 lg:p-12 flex-col justify-end overflow-hidden">
+        <img
+          src={hospitalImg}
+          alt="Hospital Estadual Costa dos Coqueiros"
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-emerald-900/90 via-emerald-800/60 to-emerald-700/30"></div>
+        <div className="relative z-10">
+          <div className="flex items-center space-x-3 mb-6">
+            <div className="relative bg-white/15 p-3 rounded-lg backdrop-blur-sm">
+              <Building2 className="w-10 h-10" />
             </div>
-            <h1 className="text-4xl font-bold tracking-tight">HECC</h1>
+            <h1 className="text-3xl font-bold tracking-tight">HECC</h1>
           </div>
-          <h2 className="text-5xl font-bold mb-6 leading-tight">
-            Sistema de<br />Gestão de Insumos
+          <h2 className="text-4xl font-bold mb-3 leading-tight">
+            Sistema de Gestao<br />de Insumos
           </h2>
-          <p className="text-xl text-emerald-50 mb-8 leading-relaxed max-w-lg">
-            Controle eficiente e seguro do estoque hospitalar. Gerencie insumos, 
-            medicamentos e equipamentos do Hospital Estadual Costa dos Coqueiros em um só lugar.
+          <p className="text-lg text-white/80 max-w-lg">
+            Hospital Estadual Costa dos Coqueiros
           </p>
-          <div className="absolute bottom-0 right-0 transform translate-x-1/4 translate-y-1/4 w-96 h-96 bg-white/10 rounded-full blur-3xl"></div>
         </div>
       </div>
 
