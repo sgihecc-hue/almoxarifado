@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Building2, Mail, Lock, User, ArrowRight, ArrowLeft, AlertCircle, ShieldAlert } from 'lucide-react'
-import hospitalImg from '@/assets/hospital-hecc.jpg.jpeg'
 
 export function Register() {
   const navigate = useNavigate()
@@ -67,26 +66,20 @@ export function Register() {
 
   return (
     <div className="min-h-screen flex">
-      {/* Left Section - Hospital Image with Green Overlay */}
-      <div className="hidden md:flex md:w-1/2 relative text-white p-8 lg:p-12 flex-col justify-end overflow-hidden">
-        <img
-          src={hospitalImg}
-          alt="Hospital Estadual Costa dos Coqueiros"
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-emerald-900/90 via-emerald-800/60 to-emerald-700/30"></div>
-        <div className="relative z-10">
-          <div className="flex items-center space-x-3 mb-6">
+      {/* Left Section */}
+      <div className="hidden md:flex md:w-1/2 relative bg-gradient-to-br from-emerald-600 to-teal-500 text-white p-8 lg:p-12 flex-col justify-center overflow-hidden">
+        <div className="relative">
+          <div className="flex items-center space-x-3 mb-12">
             <div className="relative bg-white/15 p-3 rounded-lg backdrop-blur-sm">
               <Building2 className="w-10 h-10" />
             </div>
             <h1 className="text-3xl font-bold tracking-tight">HECC</h1>
           </div>
           <h2 className="text-4xl font-bold mb-3 leading-tight">
-            Sistema de Gestao<br />de Insumos
+            Criar nova conta
           </h2>
           <p className="text-lg text-white/80 max-w-lg">
-            Hospital Estadual Costa dos Coqueiros
+            Hospital Estadual Costa dos Coqueiros — Sistema de Gestao de Insumos
           </p>
         </div>
       </div>
