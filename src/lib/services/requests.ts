@@ -298,6 +298,56 @@ class RequestService {
     }
   }
 
+  async getRecentByDepartment(departmentId: string, limit = 10): Promise<{ id: string; request_number: number; type: string; status: RequestStatus; priority: string; created_at: string; requester_name: string; items: { name: string; quantity: number }[] }[]> {
+    try {
+      if (!departmentId) return []
+
+      const { data, error } = await supabase
+        .from('requests')
+        .select(`
+          id,
+          request_number,
+          type,
+          status,
+          priority,
+          created_at,
+          requester:users!requests_requester_id_fkey(full_name),
+          request_items(
+            quantity,
+            item_type,
+            pharmacy_item:pharmacy_items(name),
+            warehouse_item:warehouse_items(name)
+          )
+        `)
+        .eq('department_id', departmentId)
+        .in('status', ['pending', 'approved', 'processing'])
+        .order('created_at', { ascending: false })
+        .limit(limit)
+
+      if (error) {
+        console.error('Error fetching department requests:', error)
+        return []
+      }
+
+      return (data || []).map((r: any) => ({
+        id: r.id,
+        request_number: r.request_number,
+        type: r.type,
+        status: r.status,
+        priority: r.priority,
+        created_at: r.created_at,
+        requester_name: r.requester?.full_name || 'Desconhecido',
+        items: (r.request_items || []).map((i: any) => {
+          const src = i.item_type === 'pharmacy' ? i.pharmacy_item : i.warehouse_item
+          return { name: src?.name || 'Item', quantity: i.quantity }
+        }),
+      }))
+    } catch (error) {
+      console.error('Error fetching department requests:', error)
+      return []
+    }
+  }
+
   async getById(id: string): Promise<Request> {
     try {
       // Validate UUID format

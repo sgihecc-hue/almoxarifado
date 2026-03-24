@@ -1,13 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
-import { ArrowLeft, ArrowRight, AlertCircle } from 'lucide-react'
+import { ArrowLeft, ArrowRight, AlertCircle, AlertTriangle, ChevronDown, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { RequestTypeStep } from './components/request-type'
 import { RequestDetails, type RequestDetails as RequestDetailsType } from './components/request-details'
 import { RequestItems, type RequestItem } from './components/request-items'
 import { RequestReview } from './components/request-review'
 import { requestService } from '@/lib/services/requests'
+import { useTheme } from '@/contexts/theme'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
 import type { RequestType } from './types'
 
 const steps = [
@@ -17,9 +20,21 @@ const steps = [
   { id: 'review', title: 'Revisão', description: 'Revise sua solicitação antes de enviar' },
 ]
 
+const statusLabels: Record<string, string> = {
+  pending: 'Pendente',
+  approved: 'Aprovada',
+  processing: 'Em Processamento',
+}
+const statusColors: Record<string, string> = {
+  pending: '#f59e0b',
+  approved: '#22c55e',
+  processing: '#3b82f6',
+}
+
 export function NewRequest() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { mode } = useTheme()
   const [currentStep, setCurrentStep] = useState(0)
   const [requestType, setRequestType] = useState<RequestType | null>(null)
   const [details, setDetails] = useState<RequestDetailsType | null>(null)
@@ -27,6 +42,14 @@ export function NewRequest() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [_createdRequest, _setCreatedRequest] = useState<any>(null)
+  const [recentRequests, setRecentRequests] = useState<any[]>([])
+  const [showRecent, setShowRecent] = useState(false)
+
+  useEffect(() => {
+    if (user?.department_id) {
+      requestService.getRecentByDepartment(user.department_id).then(setRecentRequests)
+    }
+  }, [user?.department_id])
 
   const canNavigateToStep = (stepIndex: number) => {
     if (stepIndex === 0) return true
@@ -128,6 +151,84 @@ export function NewRequest() {
           Siga os passos abaixo para criar uma nova solicitação de materiais ou medicamentos.
         </p>
       </div>
+
+      {/* Recent Requests from Department */}
+      {recentRequests.length > 0 && (
+        <div className="rounded-xl overflow-hidden" style={{
+          background: mode === 'dark' ? 'rgba(251,191,36,0.08)' : 'rgba(251,191,36,0.08)',
+          border: `1px solid ${mode === 'dark' ? 'rgba(251,191,36,0.2)' : 'rgba(251,191,36,0.25)'}`,
+        }}>
+          <button
+            onClick={() => setShowRecent(!showRecent)}
+            className="w-full px-4 py-3 flex items-center justify-between"
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={16} style={{ color: '#f59e0b' }} />
+              <span className="text-sm font-semibold" style={{ color: mode === 'dark' ? '#fbbf24' : '#92400e' }}>
+                Seu setor tem {recentRequests.length} solicitacao(oes) em andamento
+              </span>
+            </div>
+            <ChevronDown size={16} style={{
+              color: mode === 'dark' ? '#fbbf24' : '#92400e',
+              transform: showRecent ? 'rotate(180deg)' : 'rotate(0)',
+              transition: 'transform 0.3s',
+            }} />
+          </button>
+          {showRecent && (
+            <div className="px-4 pb-4 space-y-2">
+              {recentRequests.map((req) => (
+                <div
+                  key={req.id}
+                  onClick={() => navigate(`/requests/${req.id}`)}
+                  className="p-3 rounded-lg cursor-pointer transition-colors"
+                  style={{
+                    background: mode === 'dark' ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.6)',
+                    border: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
+                  }}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-bold" style={{ color: mode === 'dark' ? '#fff' : '#1a1a1a' }}>
+                        #{req.request_number}
+                      </span>
+                      <span className="text-xs" style={{ color: mode === 'dark' ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)' }}>
+                        <Clock size={10} className="inline mr-1" />
+                        {format(new Date(req.created_at), "dd/MM/yyyy", { locale: ptBR })}
+                      </span>
+                      <span className="text-xs" style={{ color: mode === 'dark' ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)' }}>
+                        {req.requester_name}
+                      </span>
+                    </div>
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{
+                      background: `${statusColors[req.status]}20`,
+                      color: statusColors[req.status],
+                      border: `1px solid ${statusColors[req.status]}40`,
+                    }}>
+                      {statusLabels[req.status] || req.status}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {req.items.slice(0, 4).map((item: any, i: number) => (
+                      <span key={i} className="text-xs px-2 py-0.5 rounded" style={{
+                        background: mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+                        color: mode === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
+                      }}>
+                        {item.name} x{item.quantity}
+                      </span>
+                    ))}
+                    {req.items.length > 4 && (
+                      <span className="text-xs" style={{ color: mode === 'dark' ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)' }}>
+                        +{req.items.length - 4} mais
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Progress Steps */}
       <div className="relative">
