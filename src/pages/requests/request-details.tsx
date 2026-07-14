@@ -11,7 +11,6 @@ import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { requestService } from '@/lib/services/requests'
 import { RequestActions } from '@/components/request-actions'
-import { WarehouseEstorno } from '@/components/warehouse-estorno'
 import { RequestStatusBadge } from '@/components/request-status-badge'
 import { RequestTimeline } from '@/components/request-timeline'
 import { templatesService } from '@/lib/services/templates'
@@ -711,24 +710,6 @@ export function RequestDetails() {
           onUpdate={() => { if (id) loadRequest(id, true) }}
         />
       </div>
-
-      {/* P8: Estorno de item devolvido — SÓ para solicitações de almoxarifado
-          já entregues/concluídas e para staff. Não renderiza nada na farmácia. */}
-      {request.type === 'warehouse' &&
-        (request.status === 'delivered' || request.status === 'completed') &&
-        (user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente') && (
-          <WarehouseEstorno
-            requestId={request.id}
-            items={request.request_items.map((it) => ({
-              request_item_id: it.id,
-              warehouse_item_id: it.item.id,
-              name: it.item.name,
-              unit: it.item.unit,
-              delivered: it.supplied_quantity ?? it.approved_quantity ?? it.quantity ?? 0,
-            }))}
-            onDone={() => { if (id) loadRequest(id, true) }}
-          />
-        )}
 
       {/* Print Signature Section - Only visible when printing */}
       <div className="hidden print:block print:mt-4">

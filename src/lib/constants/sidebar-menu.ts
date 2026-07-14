@@ -151,6 +151,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       items: [
         { name: 'Quebras e Avarias', icon: PackageMinus, href: '/estoque/saida-avulsa', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Devoluções', icon: Undo2, href: '/estoque/devolucao', show: () => true },
+        { name: 'Estorno', icon: Undo2, href: '/almox/estoque/estorno', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Empréstimos', icon: Handshake, href: '/estoque/emprestimos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         // Usa o path /almox/* para a tela de vencimentos saber que é o módulo
         // almoxarifado e filtrar só itens 'warehouse' (evita mostrar farmácia).

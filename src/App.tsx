@@ -53,6 +53,7 @@ import { HistoricoDispensacoes } from '@/pages/dispensacao/historico'
 import { WarehouseDispatchList } from '@/pages/saida-direta/index'
 import { NewWarehouseDispatch } from '@/pages/saida-direta/new'
 import { WarehouseDispatchDetailPage } from '@/pages/saida-direta/detail'
+import { EstornoAlmox } from '@/pages/estoque/estorno-almox'
 import { PharmacyCatalogo } from '@/pages/farmacia/catalogo'
 import { HistoricoGlobal } from '@/pages/historico-global'
 import { Fornecedores } from '@/pages/farmacia/fornecedores'
@@ -753,6 +754,7 @@ export default function App() {
                 <Route path="estoque/transferencia" element={<Transferencia />} />
                 <Route path="estoque/emprestimos" element={<EmprestimosAbertos />} />
                 <Route path="estoque/vencimentos" element={<VencimentosABaixar />} />
+                <Route path="estoque/estorno" element={<EstornoAlmox />} />
                 <Route path="reports/warehouse-stock" element={<WarehouseStockReport />} />
                 <Route path="reports/warehouse-consumption" element={<WarehouseConsumptionReport />} />
                 <Route path="reports/warehouse-admin-consumption" element={<AdminWarehouseConsumptionManagement />} />
