@@ -30,6 +30,7 @@ import { ProfileAdvanced } from '@/pages/profile-advanced'
 import { TablesOverview } from '@/pages/tables-overview'
 import { DepartmentsTable } from '@/pages/tables-overview/components/departments-table'
 import { UsersAdvanced } from '@/pages/users-advanced'
+import { GestaoColaboradores } from '@/pages/gestao-colaboradores'
 import { Settings } from '@/pages/settings'
 import { PharmacyConsumptionReport } from '@/pages/reports/pharmacy-consumption'
 import { AdminConsumptionManagement } from '@/pages/reports/admin-consumption'
@@ -303,6 +304,14 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <UsersAdvanced />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              {/* Gestão de colaboradores (gestor) — ajuste de setor e nível */}
+              <Route path="/colaboradores" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <GestaoColaboradores />
                   </MainLayout>
                 </ProtectedRoute>
               } />
