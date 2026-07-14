@@ -196,6 +196,8 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Unidades Externas', icon: Building2, href: '/farmacia/unidades-externas', show: (f) => f.canManageRequests },
         { name: 'Prescritores', icon: Stethoscope, href: '/farmacia/prescritores', show: (f) => f.canManageRequests },
         { name: 'Pacientes', icon: UsersRound, href: '/farmacia/pacientes', show: (f) => f.canManageRequests },
+        // Gestor ajusta setor e nível (Solicitante/Atendente/Farmacêutico) dos colaboradores.
+        { name: 'Colaboradores', icon: Users, href: '/colaboradores', show: (f) => f.isManager || f.isAdmin },
       ],
     },
     // --- CONTROLADOS + CCIH (farmacia — regulatório junto pra reduzir secoes) ---
