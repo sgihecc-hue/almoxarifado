@@ -3,6 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { ArrowLeft, ArrowRight, AlertCircle, AlertTriangle, ChevronDown, Clock, Cloud, CloudOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { RequestTypeStep } from './components/request-type'
 import { RequestDetails, type RequestDetails as RequestDetailsType } from './components/request-details'
 import { RequestItems, type RequestItem } from './components/request-items'
@@ -60,6 +67,10 @@ export function NewRequest() {
   const now = new Date()
   const currentHour = now.getHours()
   const isOutsideServiceHours = currentHour < 8 || currentHour >= 14
+
+  // P7: popup de confirmação de leitura para pedidos de almoxarifado feitos
+  // após as 14h. O usuário precisa clicar confirmando que leu antes do envio.
+  const [showLateOrderDialog, setShowLateOrderDialog] = useState(false)
 
   useEffect(() => {
     if (user?.department_id) {
@@ -221,6 +232,16 @@ export function NewRequest() {
   }
 
   const handleSubmit = async () => {
+    // P7: pedido de almoxarifado após as 14h — exige confirmação de leitura
+    // antes de enviar. Só interrompe uma vez (o botão do popup chama doSubmit).
+    if (isOutsideServiceHours && requestType === 'warehouse') {
+      setShowLateOrderDialog(true)
+      return
+    }
+    await doSubmit()
+  }
+
+  const doSubmit = async () => {
     // Validar se há itens selecionados
     if (!items || items.length === 0) {
       setError('Nenhum item foi selecionado. Por favor, volte e adicione itens à sua solicitação.')
@@ -383,14 +404,17 @@ export function NewRequest() {
         </div>
       )}
 
-      {/* Service Hours Warning — apenas para pedidos de almoxarifado */}
+      {/* Service Hours Warning — apenas para pedidos de almoxarifado.
+          Aviso ampliado (P6): mais chamativo para o solicitante não perder. */}
       {isOutsideServiceHours && requestType === 'warehouse' && (
-        <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-          <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
+        <div className="flex items-start gap-4 p-6 bg-amber-100 border-2 border-amber-400 rounded-xl shadow-sm">
+          <Clock className="w-10 h-10 text-amber-600 flex-shrink-0 mt-0.5" />
           <div>
-            <p className="font-medium text-amber-800">Fora do horario de atendimento</p>
-            <p className="text-sm text-amber-700">
-              Solicitacoes sao atendidas das <strong>8h as 14h</strong>. Sua solicitacao sera atendida no proximo dia util.
+            <p className="text-xl font-bold text-amber-900">⚠️ Fora do horário de atendimento</p>
+            <p className="text-base text-amber-800 mt-1">
+              O almoxarifado atende solicitações das <strong>8h às 14h</strong>.
+              Pedidos feitos <strong>após as 14h</strong> só serão entregues no{' '}
+              <strong>próximo dia útil</strong>.
             </p>
           </div>
         </div>
@@ -637,6 +661,47 @@ export function NewRequest() {
           </div>
         )}
       </div>
+
+      {/* P7: popup de confirmação para pedido de almoxarifado após as 14h */}
+      <Dialog open={showLateOrderDialog} onOpenChange={setShowLateOrderDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <Clock className="w-6 h-6" />
+              Pedido após as 14h
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2 space-y-3">
+            <div className="p-4 rounded-lg bg-amber-50 border-2 border-amber-300">
+              <p className="text-base text-amber-900">
+                Você está finalizando um pedido de <strong>almoxarifado</strong> após
+                as <strong>14h</strong>. Ele <strong>só será atendido e entregue no
+                próximo dia útil</strong>.
+              </p>
+            </div>
+            <p className="text-sm text-gray-600">
+              Clique em <strong>“Li e estou ciente”</strong> para confirmar que leu
+              o aviso e enviar a solicitação.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowLateOrderDialog(false)}
+              disabled={loading}
+            >
+              Voltar
+            </Button>
+            <Button
+              onClick={() => { setShowLateOrderDialog(false); doSubmit() }}
+              disabled={loading}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              Li e estou ciente
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
