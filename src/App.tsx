@@ -52,6 +52,7 @@ import { FilaAprovacaoFarmaceutica } from '@/pages/dispensacao/fila-aprovacao'
 import { HistoricoDispensacoes } from '@/pages/dispensacao/historico'
 import { WarehouseDispatchList } from '@/pages/saida-direta/index'
 import { NewWarehouseDispatch } from '@/pages/saida-direta/new'
+import { WarehouseDispatchDetailPage } from '@/pages/saida-direta/detail'
 import { PharmacyCatalogo } from '@/pages/farmacia/catalogo'
 import { HistoricoGlobal } from '@/pages/historico-global'
 import { Fornecedores } from '@/pages/farmacia/fornecedores'
@@ -442,6 +443,13 @@ export default function App() {
                   </MainLayout>
                 </ProtectedRoute>
               } />
+              <Route path="/saida-direta/:id" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <WarehouseDispatchDetailPage />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
 
               {/* Cadastros da Farmacia */}
               <Route path="/farmacia/catalogo" element={
@@ -728,6 +736,7 @@ export default function App() {
                 <Route path="inventory/:id/delete" element={<ItemDetails />} />
                 <Route path="saida-direta" element={<WarehouseDispatchList />} />
                 <Route path="saida-direta/new" element={<NewWarehouseDispatch />} />
+                <Route path="saida-direta/:id" element={<WarehouseDispatchDetailPage />} />
                 <Route path="movimentacoes" element={<PharmacyLoansList scope="warehouse" />} />
                 <Route path="movimentacoes/new" element={<NewPharmacyLoan scope="warehouse" />} />
                 <Route path="movimentacoes/:id" element={<PharmacyLoanDetail />} />

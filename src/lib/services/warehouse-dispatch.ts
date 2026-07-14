@@ -50,6 +50,19 @@ export interface WarehouseDispatchSummary {
   cancellation_reason?: string | null
 }
 
+export interface WarehouseDispatchItemDetail {
+  id: string
+  item_id: string
+  item_name: string
+  item_code: string | null
+  item_unit: string | null
+  quantity: number
+}
+
+export interface WarehouseDispatchDetail extends WarehouseDispatchSummary {
+  items: WarehouseDispatchItemDetail[]
+}
+
 class WarehouseDispatchService {
   private static instance: WarehouseDispatchService
   static getInstance() {
@@ -99,6 +112,59 @@ class WarehouseDispatchService {
       cancelled_at: row.cancelled_at ?? null,
       cancellation_reason: row.cancellation_reason ?? null,
     }))
+  }
+
+  async getById(id: string): Promise<WarehouseDispatchDetail | null> {
+    const { data, error } = await supabase
+      .from('warehouse_dispatches')
+      .select(
+        `id, dispatch_number, destination_department_id, destination_department_text,
+         dispatch_type, notes, status, created_at, created_by,
+         cancelled_at, cancellation_reason,
+         departments:destination_department_id (name),
+         users:created_by (full_name),
+         warehouse_dispatch_items (
+           id, item_id, quantity,
+           warehouse_items:item_id ( name, code, unit )
+         )`
+      )
+      .eq('id', id)
+      .maybeSingle()
+
+    if (error) {
+      console.error('Error loading warehouse dispatch:', error)
+      throw new Error(error.message)
+    }
+    if (!data) return null
+
+    const row: any = data
+    const items: WarehouseDispatchItemDetail[] = (row.warehouse_dispatch_items || []).map((it: any) => ({
+      id: it.id,
+      item_id: it.item_id,
+      item_name: it.warehouse_items?.name ?? '(item removido)',
+      item_code: it.warehouse_items?.code ?? null,
+      item_unit: it.warehouse_items?.unit ?? null,
+      quantity: it.quantity || 0,
+    }))
+
+    return {
+      id: row.id,
+      dispatch_number: row.dispatch_number,
+      destination_department_id: row.destination_department_id,
+      destination_department_text: row.destination_department_text,
+      destination_department_name: row.departments?.name ?? null,
+      dispatch_type: row.dispatch_type || 'consumo',
+      notes: row.notes,
+      status: row.status,
+      created_at: row.created_at,
+      created_by: row.created_by,
+      created_by_name: row.users?.full_name ?? null,
+      items_count: items.length,
+      total_quantity: items.reduce((acc, it) => acc + (it.quantity || 0), 0),
+      cancelled_at: row.cancelled_at ?? null,
+      cancellation_reason: row.cancellation_reason ?? null,
+      items,
+    }
   }
 
   async create(data: CreateWarehouseDispatchData): Promise<{ id: string }> {

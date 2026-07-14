@@ -5,7 +5,7 @@
 // =====================================================================
 
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useTheme } from '@/contexts/theme'
 import { useAuth } from '@/contexts/auth'
 import { ArrowLeft, AlertCircle, Loader2, CalendarX, Check, AlertTriangle, CheckCircle2 } from 'lucide-react'
@@ -19,8 +19,15 @@ const RESOLVE_ROLES = new Set(['pharmacist', 'gestor', 'administrador'])
 
 export function VencimentosABaixar() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user } = useAuth()
   const { mode } = useTheme()
+
+  // Isolamento de módulo: quando acessado por /almox/* esta é a tela do
+  // almoxarifado e deve mostrar SÓ itens 'warehouse'. Qualquer outro path
+  // (farmácia e default /estoque/vencimentos) mantém o comportamento original
+  // — nada aqui muda para a farmácia.
+  const isWarehouse = location.pathname.startsWith('/almox')
 
   const canResolve = !!user?.role && RESOLVE_ROLES.has(user.role)
   const allowedWriteoffRoles = new Set(['admin', 'manager', 'administrador', 'gestor', 'pharmacist', 'warehouse_manager', 'atendente'])
@@ -88,9 +95,20 @@ export function VencimentosABaixar() {
 
   useEffect(() => { loadAll() }, [])
 
-  // Filtrar resolvidos client-side
+  // Filtrar resolvidos client-side. No módulo almoxarifado, restringe a itens
+  // 'warehouse' (a view v_itens_a_vencer mistura os dois módulos). Fora do
+  // almox, sem filtro de tipo — farmácia inalterada.
   const visibleAlerts = alertRows.filter(
-    (r) => !resolutions.has(`${r.expiry_tracking_id}__${r.color_band}`)
+    (r) =>
+      !resolutions.has(`${r.expiry_tracking_id}__${r.color_band}`) &&
+      (!isWarehouse || r.item_type === 'warehouse')
+  )
+
+  // Seção B (vencidos a baixar) vem da view expiring_to_writeoff, que só
+  // retorna itens de farmácia. No almox filtramos por 'warehouse' (fica vazio
+  // hoje, mas evita vazar farmácia); fora do almox, mantém tudo.
+  const visibleWriteoff = rows.filter(
+    (r) => !isWarehouse || r.item_type === 'warehouse'
   )
 
   const handleResolve = async (row: ExpiringAlertRow) => {
@@ -144,10 +162,10 @@ export function VencimentosABaixar() {
     })
   const toggleAll = () =>
     setSelected((prev) =>
-      prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.expiry_tracking_id))
+      prev.size === visibleWriteoff.length ? new Set() : new Set(visibleWriteoff.map((r) => r.expiry_tracking_id))
     )
 
-  const totalLoss = rows
+  const totalLoss = visibleWriteoff
     .filter((r) => selected.has(r.expiry_tracking_id))
     .reduce((sum, r) => sum + (Number(r.estimated_loss) || 0), 0)
 
@@ -156,7 +174,7 @@ export function VencimentosABaixar() {
     setSubmitting(true)
     setError('')
     try {
-      for (const r of rows.filter((row) => selected.has(row.expiry_tracking_id))) {
+      for (const r of visibleWriteoff.filter((row) => selected.has(row.expiry_tracking_id))) {
         await stockService.createSaidaAvulsa({
           item_id: r.item_id,
           item_type: r.item_type,
@@ -325,7 +343,7 @@ export function VencimentosABaixar() {
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-6 h-6 animate-spin" style={{ color: txtMut }} />
             </div>
-          ) : rows.length === 0 ? (
+          ) : visibleWriteoff.length === 0 ? (
             <p className="text-sm text-center py-8" style={{ color: txtMut }}>
               Nenhum item vencido com saldo. Tudo limpo! 🎉
             </p>
@@ -340,10 +358,10 @@ export function VencimentosABaixar() {
                 <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: txt }}>
                   <input
                     type="checkbox"
-                    checked={selected.size === rows.length && rows.length > 0}
+                    checked={selected.size === visibleWriteoff.length && visibleWriteoff.length > 0}
                     onChange={toggleAll}
                   />
-                  {selected.size === rows.length ? 'Desmarcar todos' : `Selecionar todos (${rows.length})`}
+                  {selected.size === visibleWriteoff.length ? 'Desmarcar todos' : `Selecionar todos (${visibleWriteoff.length})`}
                 </label>
                 <div className="text-right">
                   {selected.size > 0 && (
@@ -358,7 +376,7 @@ export function VencimentosABaixar() {
               </div>
 
               <div className="space-y-2">
-                {rows.map((r) => (
+                {visibleWriteoff.map((r) => (
                   <label
                     key={r.expiry_tracking_id}
                     className="flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors"

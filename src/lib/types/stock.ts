@@ -229,6 +229,7 @@ export type ExpiryColorBand = '6m' | '3m' | '1m'
 export interface ExpiringAlertRow {
   expiry_tracking_id: string
   item_id: string
+  item_type: ItemType
   item_name: string
   medication_class: string | null
   batch_number: string
