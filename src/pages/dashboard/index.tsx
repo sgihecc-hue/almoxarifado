@@ -20,16 +20,23 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/contexts/theme'
+import { useModule } from '@/contexts/module'
 import { supabase } from '@/lib/supabase'
 
 interface DashboardProps {
   module?: 'farmacia' | 'almoxarifado'
 }
 
-export function Dashboard({ module: activeModule }: DashboardProps) {
+export function Dashboard({ module: moduleProp }: DashboardProps) {
   const navigate = useNavigate()
   const { user } = useAuth()
   const { mode } = useTheme()
+  // Na rota /almox|/farmacia o módulo vem por prop; na rota genérica "/" não
+  // vem prop, então usamos o módulo selecionado no seletor do topo (contexto).
+  // Sem isso, o dashboard de "/" mostrava validades de farmácia mesmo com o
+  // Almoxarifado selecionado.
+  const { activeModule: ctxModule } = useModule()
+  const activeModule = moduleProp ?? ctxModule ?? undefined
 
   if (!user) {
     return (
@@ -59,7 +66,8 @@ export function Dashboard({ module: activeModule }: DashboardProps) {
     setLoadingExpiry(true)
     try {
       const [alertRes, resolutionsRes] = await Promise.all([
-        supabase.from('v_itens_a_vencer').select('*').order('expiry_date'),
+        // Card é "Itens próximos de vencer — Farmácia": só itens de farmácia.
+        supabase.from('v_itens_a_vencer').select('*').eq('item_type', 'pharmacy').order('expiry_date'),
         supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
       ])
       const resolved = new Set<string>(
