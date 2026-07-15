@@ -132,12 +132,14 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     return cls
   }
 
-  // Lista sempre TODOS os itens ativos, ordenados por nome — sem qualquer
-  // pista de estoque (nem escondendo zerados, nem ordenando por saldo).
-  // Assim quem pede nao consegue inferir "esse item ficou embaixo, deve ta
-  // sem estoque" ou "aquele sumiu, deve ta zerado". Pedido reflete
-  // necessidade real, nao disponibilidade.
+  // Farmácia: lista TODOS os itens ativos (inclusive zerados) — sem pista de
+  // estoque, para o pedido refletir necessidade real e não disponibilidade.
+  // Almoxarifado: esconde itens com estoque zerado (não faz sentido pedir o
+  // que não há). Regra pedida pelo usuário — vale só para 'warehouse'.
   const filteredItems = items
+    .filter(item =>
+      type !== 'warehouse' || ((item as any).current_stock || 0) > 0
+    )
     .filter(item =>
       searchTerm === '' ||
       item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
