@@ -448,7 +448,12 @@ export function TVHistory({ type }: TVHistoryProps) {
             return (
               <div
                 key={request.id}
-                onClick={() => navigate(`/tv/${type}/${request.id}`)}
+                onClick={() => navigate(
+                  // Histórico do almoxarifado abre o pedido em SOMENTE LEITURA
+                  // (ro=1) — consulta, sem poder atender. Atendimento é só no
+                  // painel principal. Farmácia mantém o comportamento atual.
+                  `/tv/${type}/${request.id}${type === 'warehouse' ? '?ro=1' : ''}`
+                )}
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '80px 150px 1fr 1fr 1fr 100px 160px',
