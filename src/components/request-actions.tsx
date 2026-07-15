@@ -103,7 +103,10 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const isPharmacyRequest = request?.type === 'pharmacy'
   const canDeliver = isManager && !isPharmacyRequest &&
     (request?.status === 'approved' || request?.status === 'processing')
-  const canProcess = false
+  // "Em Processamento" reativado SÓ no almoxarifado: após aprovar, o operador
+  // pode mover pra processamento (separação/em rota) antes de entregar.
+  // Farmácia nunca vê (isPharmacyRequest bloqueia).
+  const canProcess = isManager && !isPharmacyRequest && request?.status === 'approved'
   // Recebimento SO existe pra farmacia E so quem SOLICITOU (ou alguem
   // do mesmo setor solicitante) pode confirmar. Quem atendeu/entregou
   // NAO ve o botao — senao a mesma pessoa que aprovou tambem "confirma"
@@ -218,9 +221,20 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
     }
   }
 
-  // handleProcessing removido: aprovar → entregue direto agora (sem etapa
-  // "processing"). Mantemos o fluxo antigo apenas via lista de "pending" em
-  // requests/processing.tsx pra requests que já estão em 'processing'.
+  // Move a solicitação de almox pra "Em Processamento" (separação/em rota).
+  // Ação direta, sem diálogo. Só almox (o botão só aparece quando canProcess).
+  const handleStartProcessing = async () => {
+    try {
+      setLoading(true)
+      const updated = await requestService.startProcessing(request.id)
+      requestService.clearCache()
+      onUpdate(updated)
+    } catch (error) {
+      setEmployeeError(getErrorMessage(error))
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleDeliver = () => {
     setAction('deliver')
@@ -322,17 +336,17 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
           </>
         )}
 
-        {/* Processing skip — direto pra entrega. Fluxo antigo "approved →
-            processing → delivered" foi encurtado pra "approved → delivered". */}
+        {/* Em Processamento (almox): move a solicitação aprovada pra separação.
+            Depois o operador usa "Marcar como Entregue" pra concluir. */}
         {canProcess && (
           <Button
             size="sm"
             className="bg-blue-500 hover:bg-blue-600 text-white"
-            onClick={handleDeliver}
+            onClick={handleStartProcessing}
             disabled={loading}
           >
             <PlayCircle className="w-4 h-4 mr-2" />
-            Marcar como entregue
+            Iniciar processamento
           </Button>
         )}
 
