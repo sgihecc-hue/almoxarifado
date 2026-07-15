@@ -101,10 +101,12 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   //   Entregue" e o pedido vai direto pra completed (sem confirmacao de
   //   recebimento — almox nao pede confirmacao).
   const isPharmacyRequest = request?.type === 'pharmacy'
-  const canDeliver = isManager && !isPharmacyRequest &&
-    (request?.status === 'approved' || request?.status === 'processing')
+  // Fluxo sequencial do almox: aprovar → Iniciar processamento → Marcar como
+  // Entregue. Por isso "Marcar como Entregue" (canDeliver) só aparece quando
+  // já está em 'processing' — não quando ainda está 'approved'.
+  const canDeliver = isManager && !isPharmacyRequest && request?.status === 'processing'
   // "Em Processamento" reativado SÓ no almoxarifado: após aprovar, o operador
-  // pode mover pra processamento (separação/em rota) antes de entregar.
+  // move pra processamento (separação/em rota) antes de entregar.
   // Farmácia nunca vê (isPharmacyRequest bloqueia).
   const canProcess = isManager && !isPharmacyRequest && request?.status === 'approved'
   // Recebimento SO existe pra farmacia E so quem SOLICITOU (ou alguem
