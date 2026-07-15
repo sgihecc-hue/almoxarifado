@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Undo2, Loader2, AlertCircle, CheckCircle2, Search, Package2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -32,6 +32,10 @@ export function EstornoAlmox() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const canUse = !!user?.role && STAFF_ROLES.has(user.role)
+  const [searchParams] = useSearchParams()
+  // Item pré-selecionado (ex: vindo do detalhe de um pedido no Histórico).
+  const preItemId = searchParams.get('item')
+  const preQty = searchParams.get('qty')
 
   const [items, setItems] = useState<WhItem[]>([])
   const [loadingItems, setLoadingItems] = useState(true)
@@ -67,6 +71,18 @@ export function EstornoAlmox() {
   useEffect(() => {
     if (canUse) { loadItems(); loadRecent() }
   }, [canUse])
+
+  // Ao carregar os itens, se veio um item por parâmetro (?item=...), já
+  // seleciona ele (e a quantidade sugerida, se houver).
+  useEffect(() => {
+    if (!preItemId || selected || items.length === 0) return
+    const found = items.find((i) => i.id === preItemId)
+    if (found) {
+      setSelected(found)
+      if (preQty && Number(preQty) > 0) setQuantity(Number(preQty))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, preItemId, preQty])
 
   const filtered = search.trim()
     ? items.filter((i) =>

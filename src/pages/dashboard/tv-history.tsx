@@ -265,7 +265,12 @@ export function TVHistory({ type }: TVHistoryProps) {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <button onClick={() => navigate(`/tv/${type}`)} style={{
+          <button onClick={() => {
+            // Volta pra tela anterior (de onde veio) em vez de ir sempre pro
+            // painel. Fallback pro painel se não houver histórico de navegação.
+            if (window.history.length > 1) navigate(-1)
+            else navigate(`/tv/${type}`)
+          }} style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             width: 42, height: 42, borderRadius: 12, cursor: 'pointer',
             color: theme.headerText, background: theme.btnBg,

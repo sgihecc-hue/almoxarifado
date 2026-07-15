@@ -12,7 +12,8 @@ import {
   User,
   Building2,
   Hash,
-  Check
+  Check,
+  Undo2
 } from 'lucide-react'
 import { tvRequestService } from '@/lib/services/tv-requests'
 import { employeesService } from '@/lib/services/employees'
@@ -398,9 +399,20 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
                       )}
                     </div>
 
-                    {/* Checkbox */}
+                    {/* Última coluna: em modo somente-leitura (Histórico do
+                        almox) vira botão "Estornar" que leva o item pra tela
+                        de estorno já selecionado. Fora disso, o check normal. */}
                     <div className="col-span-1 text-center">
-                      {isEditable ? (
+                      {readOnly && type === 'warehouse' ? (
+                        <button
+                          onClick={() => navigate(`/almox/estoque/estorno?item=${item.item_id}`)}
+                          title="Estornar este item (devolve ao estoque)"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-700/80 hover:bg-amber-600 text-white text-xs font-medium transition-colors"
+                        >
+                          <Undo2 className="w-3.5 h-3.5" />
+                          Estornar
+                        </button>
+                      ) : isEditable ? (
                         <input
                           type="checkbox"
                           checked={itemData?.is_checked || false}
