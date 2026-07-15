@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -156,6 +156,10 @@ export function TVHistory({ type }: TVHistoryProps) {
   const [requests, setRequests] = useState<TVRequest[]>([])
   const [, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
+  // Restauração de scroll (só almox): guarda a posição ao abrir um pedido e
+  // devolve ao voltar, pra não perder o lugar na lista.
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const SCROLL_KEY = `tv-history-scroll-${type}`
   const [themeMode, setThemeMode] = useState<'a' | 'b'>('a')
   const theme = themeMode === 'a' ? THEME_A : THEME_B
 
@@ -168,6 +172,21 @@ export function TVHistory({ type }: TVHistoryProps) {
   const [dateTo, setDateTo] = useState('')
 
   useEffect(() => { loadData() }, [])
+
+  // Após os dados carregarem, restaura a posição salva (se houver) e limpa.
+  // Só no almox — evita mexer no comportamento da farmácia.
+  useEffect(() => {
+    if (loading || type !== 'warehouse') return
+    const saved = sessionStorage.getItem(SCROLL_KEY)
+    if (saved && scrollRef.current) {
+      const y = Number(saved)
+      requestAnimationFrame(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = y
+      })
+      sessionStorage.removeItem(SCROLL_KEY)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, requests])
 
   async function loadData() {
     setLoading(true)
@@ -424,7 +443,7 @@ export function TVHistory({ type }: TVHistoryProps) {
       </div>
 
       {/* Table Body */}
-      <div style={{
+      <div ref={scrollRef} style={{
         flex: 1,
         overflowY: 'auto',
         background: theme.glass,
@@ -453,12 +472,18 @@ export function TVHistory({ type }: TVHistoryProps) {
             return (
               <div
                 key={request.id}
-                onClick={() => navigate(
-                  // Histórico do almoxarifado abre o pedido em SOMENTE LEITURA
-                  // (ro=1) — consulta, sem poder atender. Atendimento é só no
-                  // painel principal. Farmácia mantém o comportamento atual.
-                  `/tv/${type}/${request.id}${type === 'warehouse' ? '?ro=1' : ''}`
-                )}
+                onClick={() => {
+                  // Salva a posição do scroll pra restaurar ao voltar (almox).
+                  if (type === 'warehouse' && scrollRef.current) {
+                    sessionStorage.setItem(SCROLL_KEY, String(scrollRef.current.scrollTop))
+                  }
+                  navigate(
+                    // Histórico do almoxarifado abre o pedido em SOMENTE LEITURA
+                    // (ro=1) — consulta, sem poder atender. Atendimento é só no
+                    // painel principal. Farmácia mantém o comportamento atual.
+                    `/tv/${type}/${request.id}${type === 'warehouse' ? '?ro=1' : ''}`
+                  )
+                }}
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '80px 150px 1fr 1fr 1fr 100px 160px',
