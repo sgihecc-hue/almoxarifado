@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -156,9 +156,9 @@ export function TVHistory({ type }: TVHistoryProps) {
   const [requests, setRequests] = useState<TVRequest[]>([])
   const [, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
-  // Restauração de scroll (só almox): guarda a posição ao abrir um pedido e
-  // devolve ao voltar, pra não perder o lugar na lista.
-  const scrollRef = useRef<HTMLDivElement | null>(null)
+  // Restauração de scroll (só almox): guarda a posição da JANELA ao abrir um
+  // pedido e devolve ao voltar, pra não perder o lugar na lista. (A página
+  // rola na window, não num container interno.)
   const SCROLL_KEY = `tv-history-scroll-${type}`
   const [themeMode, setThemeMode] = useState<'a' | 'b'>('a')
   const theme = themeMode === 'a' ? THEME_A : THEME_B
@@ -174,15 +174,14 @@ export function TVHistory({ type }: TVHistoryProps) {
   useEffect(() => { loadData() }, [])
 
   // Após os dados carregarem, restaura a posição salva (se houver) e limpa.
-  // Só no almox — evita mexer no comportamento da farmácia.
+  // Só no almox — evita mexer no comportamento da farmácia. Dois rAF pra
+  // garantir que a lista (grande) já renderizou antes de rolar.
   useEffect(() => {
     if (loading || type !== 'warehouse') return
     const saved = sessionStorage.getItem(SCROLL_KEY)
-    if (saved && scrollRef.current) {
+    if (saved) {
       const y = Number(saved)
-      requestAnimationFrame(() => {
-        if (scrollRef.current) scrollRef.current.scrollTop = y
-      })
+      requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo(0, y)))
       sessionStorage.removeItem(SCROLL_KEY)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -443,7 +442,7 @@ export function TVHistory({ type }: TVHistoryProps) {
       </div>
 
       {/* Table Body */}
-      <div ref={scrollRef} style={{
+      <div style={{
         flex: 1,
         overflowY: 'auto',
         background: theme.glass,
@@ -473,9 +472,9 @@ export function TVHistory({ type }: TVHistoryProps) {
               <div
                 key={request.id}
                 onClick={() => {
-                  // Salva a posição do scroll pra restaurar ao voltar (almox).
-                  if (type === 'warehouse' && scrollRef.current) {
-                    sessionStorage.setItem(SCROLL_KEY, String(scrollRef.current.scrollTop))
+                  // Salva a posição do scroll da janela pra restaurar ao voltar (almox).
+                  if (type === 'warehouse') {
+                    sessionStorage.setItem(SCROLL_KEY, String(window.scrollY))
                   }
                   navigate(
                     // Histórico do almoxarifado abre o pedido em SOMENTE LEITURA
@@ -556,10 +555,13 @@ export function TVHistory({ type }: TVHistoryProps) {
       <style>{`
         @keyframes spin { to { transform: rotate(360deg) } }
         select option { background: #1a2e23; color: #fff; }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+        /* Barra de rolagem visível nos dois temas (a página rola na janela).
+           Cor neutra (slate) que aparece tanto no tema claro quanto no escuro. */
+        ::-webkit-scrollbar { width: 14px; }
+        ::-webkit-scrollbar-track { background: rgba(100,116,139,0.15); }
+        ::-webkit-scrollbar-thumb { background: rgba(71,85,105,0.7); border-radius: 7px; border: 3px solid transparent; background-clip: padding-box; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(51,65,85,0.9); background-clip: padding-box; }
+        html { scrollbar-width: auto; scrollbar-color: rgba(71,85,105,0.7) rgba(100,116,139,0.15); }
       `}</style>
     </div>
   )
