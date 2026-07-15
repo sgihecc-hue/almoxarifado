@@ -173,17 +173,31 @@ export function TVHistory({ type }: TVHistoryProps) {
 
   useEffect(() => { loadData() }, [])
 
+  // Desliga a restauração automática do navegador (que, em SPA, joga a página
+  // pro topo e atropela a nossa restauração manual). Só enquanto o histórico
+  // do almox está montado; devolve ao normal na saída.
+  useEffect(() => {
+    if (type !== 'warehouse') return
+    const prev = window.history.scrollRestoration
+    try { window.history.scrollRestoration = 'manual' } catch { /* noop */ }
+    return () => { try { window.history.scrollRestoration = prev } catch { /* noop */ } }
+  }, [type])
+
   // Após os dados carregarem, restaura a posição salva (se houver) e limpa.
-  // Só no almox — evita mexer no comportamento da farmácia. Dois rAF pra
-  // garantir que a lista (grande) já renderizou antes de rolar.
+  // Só no almox. Tenta algumas vezes (rAF + timeouts) pra garantir que a lista
+  // grande já renderizou e pra vencer qualquer reset tardio do navegador.
   useEffect(() => {
     if (loading || type !== 'warehouse') return
     const saved = sessionStorage.getItem(SCROLL_KEY)
-    if (saved) {
-      const y = Number(saved)
-      requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo(0, y)))
-      sessionStorage.removeItem(SCROLL_KEY)
-    }
+    if (!saved) return
+    const y = Number(saved)
+    sessionStorage.removeItem(SCROLL_KEY)
+    const apply = () => window.scrollTo(0, y)
+    requestAnimationFrame(() => { apply(); requestAnimationFrame(apply) })
+    const t1 = setTimeout(apply, 80)
+    const t2 = setTimeout(apply, 250)
+    const t3 = setTimeout(apply, 600)
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, requests])
 
