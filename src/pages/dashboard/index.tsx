@@ -59,7 +59,10 @@ export function Dashboard({ module: activeModule }: DashboardProps) {
     setLoadingExpiry(true)
     try {
       const [alertRes, resolutionsRes] = await Promise.all([
-        supabase.from('v_itens_a_vencer').select('*').order('expiry_date'),
+        // O card é "Itens próximos de vencer — Farmácia", mas a view
+        // v_itens_a_vencer junta os dois módulos (pharmacy + warehouse).
+        // Sem este filtro, materiais do almoxarifado apareciam na farmácia.
+        supabase.from('v_itens_a_vencer').select('*').eq('item_type', 'pharmacy').order('expiry_date'),
         supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
       ])
       const resolved = new Set<string>(
