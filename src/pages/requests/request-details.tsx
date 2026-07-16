@@ -29,28 +29,80 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   requestType?: 'pharmacy' | 'warehouse'
 }) {
   const [suppliedQty, setSuppliedQty] = useState<number | ''>(item.supplied_quantity ?? '')
-  // Lote e validade — so pharmacy usa. Ao selecionar lote, validade preenche
-  // automatica via expiry_tracking. Persiste em request_items.expiry_tracking_id.
-  const [expiryTrackingId, setExpiryTrackingId] = useState<string | null>((item as any).expiry_tracking_id ?? null)
+  // FA3: um item pode sair de VÁRIOS lotes. As linhas ficam em
+  // request_item_lots (lote + quantidade). O campo antigo
+  // request_items.expiry_tracking_id continua como fallback de 1 lote só.
   const [lots, setLots] = useState<LotOption[]>([])
+  const [itemLots, setItemLots] = useState<Array<{ expiry_tracking_id: string; quantity: number }>>([])
   const isPharmacy = requestType === 'pharmacy'
+
   useEffect(() => {
     if (!isPharmacy) return
-    // Carrega lotes disponiveis do item (ordem FEFO)
     ;(async () => {
       const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
       if (!pharmacyItemId) return
-      const { data, error } = await supabase
+      // FA4: só lotes DO LOCAL que atende a solicitação (CAF) e com saldo > 0.
+      // Antes vinham todos os lotes do item, de qualquer estoque — por isso o
+      // satélite mostrava lote do CAF e item zerado ainda listava lote.
+      const { data: caf } = await supabase
+        .from('stock_locations').select('id').eq('code', 'CAF').maybeSingle()
+      let q = supabase
         .from('expiry_tracking')
         .select('id, batch_number, expiry_date, current_quantity')
         .eq('item_id', pharmacyItemId)
         .gt('current_quantity', 0)
-        .order('expiry_date', { ascending: true, nullsFirst: false })
+        .order('expiry_date', { ascending: true, nullsFirst: false }) // FEFO
+      const cafId = (caf as { id?: string } | null)?.id
+      if (cafId) q = q.eq('location_id', cafId)
+      const { data, error } = await q
       if (error) { console.error('lots', error); return }
       setLots((data || []) as LotOption[])
+
+      // Lotes já informados neste item
+      const { data: ril } = await supabase
+        .from('request_item_lots')
+        .select('expiry_tracking_id, quantity')
+        .eq('request_item_id', item.id)
+      const existentes = (ril || []).map((r: any) => ({
+        expiry_tracking_id: r.expiry_tracking_id, quantity: r.quantity,
+      }))
+      // Compatibilidade: se não há linhas novas mas existe o lote antigo, mostra ele.
+      const legado = (item as any).expiry_tracking_id
+      if (existentes.length === 0 && legado) {
+        setItemLots([{ expiry_tracking_id: legado, quantity: item.supplied_quantity ?? 0 }])
+      } else {
+        setItemLots(existentes)
+      }
     })()
   }, [isPharmacy, item])
-  const selectedLot = lots.find((l) => l.id === expiryTrackingId) || null
+
+  // Grava os lotes do item (substitui as linhas anteriores).
+  const saveLots = async (novos: Array<{ expiry_tracking_id: string; quantity: number }>) => {
+    try {
+      await supabase.from('request_item_lots').delete().eq('request_item_id', item.id)
+      const validos = novos.filter((l) => l.expiry_tracking_id && l.quantity > 0)
+      if (validos.length > 0) {
+        await supabase.from('request_item_lots').insert(
+          validos.map((l) => {
+            const lo = lots.find((x) => x.id === l.expiry_tracking_id)
+            return {
+              request_item_id: item.id,
+              expiry_tracking_id: l.expiry_tracking_id,
+              batch_number: lo?.batch_number ?? null,
+              expiry_date: lo?.expiry_date ?? null,
+              quantity: l.quantity,
+            }
+          })
+        )
+      }
+      // Mantém o campo antigo coerente (1º lote) para telas/relatórios legados.
+      await saveField('expiry_tracking_id', validos[0]?.expiry_tracking_id ?? null)
+    } catch (e) {
+      console.error('Erro ao salvar lotes:', e)
+    }
+  }
+
+  const somaLotes = itemLots.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
   // Observations stored as lines separated by \n
   const [observations, setObservations] = useState<string[]>(() => {
     const raw = item.observation || ''
@@ -105,36 +157,79 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       </td>
       {isPharmacy && (
         <>
-          <td className="text-center py-3 px-2">
+          {/* FA3: multi-lote — o item pode sair de vários lotes. A soma é
+              conferida contra a Qtd Fornecida. FA2: lote NÃO é obrigatório;
+              sem lote informado o item ainda pode ser atendido. */}
+          <td className="py-3 px-2">
             {canEdit ? (
-              <select
-                value={expiryTrackingId ?? ''}
-                onChange={(e) => {
-                  const v = e.target.value || null
-                  setExpiryTrackingId(v)
-                  saveField('expiry_tracking_id', v)
-                }}
-                className={`w-full max-w-[220px] h-8 px-2 text-xs rounded mx-auto ${
-                  expiryTrackingId
-                    ? 'border border-gray-300 bg-white'
-                    : 'border-2 border-red-400 bg-red-50'
-                }`}
-              >
-                <option value="">{lots.length ? '— Selecione o lote —' : 'Sem lotes'}</option>
-                {lots.map((lo, i) => (
-                  <option key={lo.id} value={lo.id}>
-                    {i === 0 ? '★ ' : ''}Lote {lo.batch_number} · saldo {lo.current_quantity}
-                  </option>
+              <div className="space-y-1">
+                {itemLots.map((l, idx) => (
+                  <div key={idx} className="flex items-center gap-1">
+                    <select
+                      value={l.expiry_tracking_id}
+                      onChange={(e) => {
+                        const novos = itemLots.map((x, i) =>
+                          i === idx ? { ...x, expiry_tracking_id: e.target.value } : x)
+                        setItemLots(novos); saveLots(novos)
+                      }}
+                      className="flex-1 min-w-[150px] h-7 px-1 text-xs rounded border border-gray-300 bg-white"
+                    >
+                      <option value="">{lots.length ? '— Lote —' : 'Sem lotes'}</option>
+                      {lots.map((lo, i) => (
+                        <option key={lo.id} value={lo.id}>
+                          {i === 0 ? '★ ' : ''}{lo.batch_number} · {lo.current_quantity}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number" min={0} value={l.quantity || ''} placeholder="qtd"
+                      onChange={(e) => {
+                        const q = Math.max(0, parseInt(e.target.value) || 0)
+                        setItemLots(itemLots.map((x, i) => i === idx ? { ...x, quantity: q } : x))
+                      }}
+                      onBlur={() => saveLots(itemLots)}
+                      className="w-14 h-7 px-1 text-xs text-center rounded border border-gray-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => { const novos = itemLots.filter((_, i) => i !== idx); setItemLots(novos); saveLots(novos) }}
+                      className="text-red-500 hover:text-red-700 text-xs px-1"
+                      title="Remover lote"
+                    >✕</button>
+                  </div>
                 ))}
-              </select>
+                <button
+                  type="button"
+                  onClick={() => setItemLots([...itemLots, { expiry_tracking_id: '', quantity: 0 }])}
+                  disabled={lots.length === 0}
+                  className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-400"
+                >+ Adicionar lote</button>
+                {itemLots.length > 0 && suppliedQty !== '' && somaLotes !== Number(suppliedQty) && (
+                  <p className="text-[10px] text-amber-600">
+                    Soma dos lotes ({somaLotes}) ≠ fornecido ({suppliedQty})
+                  </p>
+                )}
+              </div>
             ) : (
-              <span className="text-xs">{selectedLot ? `Lote ${selectedLot.batch_number}` : '—'}</span>
+              <div className="text-xs space-y-0.5">
+                {itemLots.length === 0 ? <span>—</span> : itemLots.map((l, i) => {
+                  const lo = lots.find((x) => x.id === l.expiry_tracking_id)
+                  return <div key={i}>{lo ? `${lo.batch_number} · ${l.quantity}` : `${l.quantity}`}</div>
+                })}
+              </div>
             )}
           </td>
           <td className="text-center py-3 px-2 text-xs">
-            {selectedLot?.expiry_date
-              ? new Date(selectedLot.expiry_date + 'T00:00:00').toLocaleDateString('pt-BR')
-              : '—'}
+            {itemLots.length === 0 ? '—' : itemLots.map((l, i) => {
+              const lo = lots.find((x) => x.id === l.expiry_tracking_id)
+              return (
+                <div key={i}>
+                  {lo?.expiry_date
+                    ? new Date(lo.expiry_date + 'T00:00:00').toLocaleDateString('pt-BR')
+                    : '—'}
+                </div>
+              )
+            })}
           </td>
         </>
       )}
@@ -682,8 +777,10 @@ export function RequestDetails() {
                     preenche automatica). Almoxarifado nao usa. */}
                 {request.type === 'pharmacy' && (
                   <>
-                    <th className="text-center py-3 px-3 font-medium text-gray-600 w-56">
-                      Lote <span className="text-red-500">*</span>
+                    {/* FA2: lote deixou de ser obrigatório — item sem lote não
+                        barra a solicitação, só fica como não atendido. */}
+                    <th className="text-center py-3 px-3 font-medium text-gray-600 w-64">
+                      Lote(s)
                     </th>
                     <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Validade</th>
                   </>

@@ -3,7 +3,7 @@ import { getErrorMessage } from '@/lib/utils/error-messages'
 import { useAuth } from '@/contexts/auth'
 import {
   CheckCircle2, XCircle, PlayCircle,
-  CheckSquare, Ban, Loader2, Truck, PackageCheck, Search, User
+  CheckSquare, Ban, Loader2, Truck, PackageCheck, Search, User, AlertTriangle
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,6 +33,12 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const [showDialog, setShowDialog] = useState(false)
   const [showApprovalToast, setShowApprovalToast] = useState(false)
   const [action, setAction] = useState<'approve' | 'reject' | 'cancel' | 'deliver' | 'confirm_receipt' | null>(null)
+  // FA5: saída sem saldo no sistema (item existe no físico mas não foi
+  // lançado). O atendente confirma na caixinha e o estoque fica negativo —
+  // ao dar entrada depois, o negativo é compensado.
+  const [showNegativoDialog, setShowNegativoDialog] = useState(false)
+  const [negativoCiente, setNegativoCiente] = useState(false)
+  const [itensSemSaldo, setItensSemSaldo] = useState<Array<{ nome: string; pedido: number; saldo: number }>>([])
   const [reason, setReason] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [employee, setEmployee] = useState<Employee | null>(null)
@@ -238,6 +244,60 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
     }
   }
 
+  // Executa a aprovação de fato (chamado direto ou após confirmar o negativo).
+  const executarAprovacao = async () => {
+    try {
+      setLoading(true)
+      // FA2: lote NAO barra mais a solicitacao inteira. Um item sem lote/estoque
+      // nao impede os demais — ele fica como NAO ATENDIDO (fornecido 0). O
+      // estoque abate o que de fato saiu (supplied_quantity), nao o pedido.
+      if (isPharmacyRequest) {
+        const naoAtendidos = (request.request_items || [])
+          .filter((it) => !(Number(itemQuantities[it.id]) > 0))
+          .map((it) => it.id)
+        if (naoAtendidos.length > 0) {
+          await supabase.from('request_items').update({ status: 'nao_atendido' }).in('id', naoAtendidos)
+        }
+        const atendidos = (request.request_items || [])
+          .filter((it) => Number(itemQuantities[it.id]) > 0)
+          .map((it) => it.id)
+        if (atendidos.length > 0) {
+          await supabase.from('request_items').update({ status: 'atendido' }).in('id', atendidos)
+        }
+      }
+      const updatedRequest = await requestService.approve(request.id, itemQuantities, '')
+      if (isPharmacyRequest) setShowApprovalToast(true)
+      requestService.clearCache()
+      onUpdate(updatedRequest)
+    } catch (error) {
+      console.error('Error approving:', error)
+      setEmployeeError(getErrorMessage(error))
+    } finally {
+      setLoading(false)
+      setShowNegativoDialog(false)
+      setNegativoCiente(false)
+    }
+  }
+
+  // Gate do FA5: se algum item vai sair com mais do que o saldo do sistema,
+  // pede confirmação explícita (o estoque ficará negativo).
+  const handleAprovarClick = () => {
+    const semSaldo = (request.request_items || [])
+      .map((it) => ({
+        nome: it.item?.name || '(item)',
+        pedido: Number(itemQuantities[it.id]) || 0,
+        saldo: Number(it.item?.current_stock) || 0,
+      }))
+      .filter((x) => x.pedido > 0 && x.pedido > x.saldo)
+    if (isPharmacyRequest && semSaldo.length > 0) {
+      setItensSemSaldo(semSaldo)
+      setNegativoCiente(false)
+      setShowNegativoDialog(true)
+      return
+    }
+    executarAprovacao()
+  }
+
   const handleDeliver = () => {
     setAction('deliver')
     setSearchQuery('')
@@ -279,45 +339,7 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
             <Button
               size="sm"
               className="bg-green-500 hover:bg-green-600 text-white"
-              onClick={async () => {
-                try {
-                  setLoading(true)
-                  // Farmacia: lote obrigatorio em todos os itens antes de
-                  // aprovar. Estado no ItemRow ja persiste em
-                  // request_items.expiry_tracking_id via saveField, entao
-                  // checamos direto no banco (o parent nao remonta a lista
-                  // enquanto o user escolhe o lote).
-                  if (isPharmacyRequest) {
-                    const ids = (request.request_items || []).map((it) => it.id)
-                    const { data: rows, error: eLot } = await supabase
-                      .from('request_items')
-                      .select('id, expiry_tracking_id, item_name')
-                      .in('id', ids)
-                    if (eLot) throw eLot
-                    const semLote = (rows || []).filter((r: any) => !r.expiry_tracking_id)
-                    if (semLote.length > 0) {
-                      const nomes = semLote.map((r: any) => r.item_name || '(item)').join('\n• ')
-                      alert(`Selecione o lote antes de aprovar:\n\n• ${nomes}`)
-                      setLoading(false)
-                      return
-                    }
-                  }
-                  const updatedRequest = await requestService.approve(request.id, itemQuantities, '')
-                  // Modal com redirect pra Confirmar Recebimento so pra
-                  // farmacia. Almox nao tem confirmacao de recebimento —
-                  // aprovar so seta 'approved' e o proximo passo (marcar
-                  // como entregue) e do proprio staff sem redirect.
-                  if (isPharmacyRequest) {
-                    setShowApprovalToast(true)
-                  }
-                  requestService.clearCache()
-                  onUpdate(updatedRequest)
-                } catch (error) {
-                  console.error('Error approving:', error)
-                } finally {
-                  setLoading(false)
-                }
-              }}
+              onClick={handleAprovarClick}
               disabled={loading}
             >
               <CheckCircle2 className="w-4 h-4 mr-2" />
@@ -501,6 +523,61 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
           </div>
         </div>
       )}
+
+      {/* FA5: confirmação de saída sem saldo no sistema (estoque fica negativo) */}
+      <Dialog open={showNegativoDialog} onOpenChange={(o) => { setShowNegativoDialog(o); if (!o) setNegativoCiente(false) }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="w-5 h-5" />
+              Saída sem saldo no sistema
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-gray-700">
+              Estes itens vão sair em quantidade <strong>maior que o saldo registrado</strong>.
+              Isso é esperado quando o medicamento existe fisicamente mas ainda não foi
+              lançado no sistema.
+            </p>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-200 max-h-48 overflow-y-auto">
+              {itensSemSaldo.map((x, i) => (
+                <div key={i} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <span className="text-amber-900 truncate">{x.nome}</span>
+                  <span className="text-amber-800 flex-shrink-0 ml-2">
+                    saindo <strong>{x.pedido}</strong> · saldo <strong>{x.saldo}</strong>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-sm text-gray-600">
+              O estoque ficará <strong>negativo</strong> e será <strong>compensado
+              automaticamente</strong> quando o item for lançado na entrada.
+            </p>
+            <label className="flex items-start gap-2 text-sm cursor-pointer p-2 rounded hover:bg-gray-50">
+              <input
+                type="checkbox"
+                checked={negativoCiente}
+                onChange={(e) => setNegativoCiente(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>Confirmo a saída e estou ciente de que o estoque ficará negativo.</span>
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNegativoDialog(false)} disabled={loading}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={executarAprovacao}
+              disabled={loading || !negativoCiente}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Confirmar e aprovar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Action Dialog (for non-delivery actions only) */}
       <Dialog open={showDialog && action !== 'deliver'} onOpenChange={setShowDialog}>
