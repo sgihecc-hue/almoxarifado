@@ -130,7 +130,21 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         merged.push({ ...s, items: [...s.items] })
       }
     }
-    return merged
+    // Sem módulo ativo (solicitante), as secoes de farmacia e almox se juntam
+    // e os itens apareciam DUPLICADOS (ex.: "Solicitacoes" e "Minhas
+    // Solicitacoes", ambos indo pra /requests). Deduplica por href — mantem o
+    // primeiro. Para quem tem modulo ativo isso e no-op (ja vem filtrado).
+    return merged.map((s) => {
+      const vistos = new Set<string>()
+      return {
+        ...s,
+        items: s.items.filter((it) => {
+          if (vistos.has(it.href)) return false
+          vistos.add(it.href)
+          return true
+        }),
+      }
+    })
   }
 
   const modulePrefix = activeModule

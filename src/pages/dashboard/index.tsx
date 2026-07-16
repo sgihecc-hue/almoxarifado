@@ -70,7 +70,10 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
     setLoadingExpiry(true)
     try {
       const [alertRes, resolutionsRes] = await Promise.all([
-        // Só itens do módulo atual (warehouse no almox, pharmacy na farmácia).
+        // Só itens do módulo atual. A view v_itens_a_vencer junta os dois
+        // módulos; sem este filtro, material do almoxarifado aparecia no card
+        // da farmácia. Na farmácia (ou default) => 'pharmacy'; no almox =>
+        // 'warehouse'. Para a farmácia o efeito é o mesmo da produção.
         supabase.from('v_itens_a_vencer').select('*').eq('item_type', expiryItemType).order('expiry_date'),
         supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
       ])

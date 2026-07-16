@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
+import { supabase } from '@/lib/supabase'
 import { pharmacyStockById, type PharmacyStock } from '@/lib/constants/stock-locations'
 
 export type ModuleType = 'farmacia' | 'almoxarifado' | null
@@ -31,7 +32,30 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const location = useLocation()
 
+  // Só gestor/administrador ESCOLHEM entre Farmácia e Almoxarifado.
   const isModuleUser = user?.role === 'administrador' || user?.role === 'gestor'
+
+  // Atendente não escolhe o módulo — ele vem do SETOR dele (Almoxarifado =>
+  // almox; CAF/Satélites => farmácia). Ele continua escolhendo entre as 4
+  // farmácias pelo seletor de estoque (activeStock), que é outra coisa.
+  const isAtendente = user?.role === 'atendente'
+  const [atendenteModule, setAtendenteModule] = useState<ModuleType>(null)
+
+  useEffect(() => {
+    if (!isAtendente || !user?.department_id) { setAtendenteModule(null); return }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('departments')
+        .select('name')
+        .eq('id', user.department_id)
+        .maybeSingle()
+      if (cancelled) return
+      const nome = (data as { name?: string } | null)?.name || ''
+      setAtendenteModule(nome.trim().toLowerCase() === 'almoxarifado' ? 'almoxarifado' : 'farmacia')
+    })()
+    return () => { cancelled = true }
+  }, [isAtendente, user?.department_id])
 
   const [activeModule, setActiveModuleState] = useState<ModuleType>(() => {
     if (!isModuleUser) return null
@@ -105,8 +129,12 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isModuleUser])
 
+  // Módulo efetivo: gestor/admin usam o que escolheram; atendente usa o
+  // derivado do setor; solicitante fica sem módulo (menu único, sem escolha).
+  const effectiveModule: ModuleType = isAtendente ? atendenteModule : activeModule
+
   return (
-    <ModuleContext.Provider value={{ activeModule, setActiveModule, isModuleUser, activeStock, setActiveStock }}>
+    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, activeStock, setActiveStock }}>
       {children}
     </ModuleContext.Provider>
   )

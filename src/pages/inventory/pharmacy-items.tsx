@@ -340,8 +340,19 @@ export function PharmacyItems({ locationId: _locationId, locationName }: Pharmac
       {/* Inventory Table — barra de rolagem sempre visivel embaixo, pra o
           usuario perceber que da pra rolar horizontal (a tabela tem ~15
           colunas e nao cabe em telas medias). */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="overflow-x-scroll pb-1 min-w-0" style={{ scrollbarWidth: 'thin' }}>
+      {/* Barra de rolagem horizontal visivel (a tabela tem ~15 colunas e nao
+          cabe na tela). Escopado na classe pra nao afetar outras telas. */}
+      <style>{`
+        .tabela-scroll-x { scrollbar-width: auto; scrollbar-color: rgba(71,85,105,0.7) rgba(100,116,139,0.15); }
+        .tabela-scroll-x::-webkit-scrollbar { height: 14px; }
+        .tabela-scroll-x::-webkit-scrollbar-track { background: rgba(100,116,139,0.15); border-radius: 7px; }
+        .tabela-scroll-x::-webkit-scrollbar-thumb { background: rgba(71,85,105,0.7); border-radius: 7px; border: 3px solid transparent; background-clip: padding-box; }
+        .tabela-scroll-x::-webkit-scrollbar-thumb:hover { background: rgba(51,65,85,0.9); background-clip: padding-box; }
+      `}</style>
+      {/* overflow-hidden no pai cortava a barra de rolagem do filho — por isso
+          ela nao aparecia. Sem ele, a barra fica visivel embaixo da tabela. */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+        <div className="overflow-x-scroll pb-1 min-w-0 tabela-scroll-x">
           <table className="w-full border-collapse min-w-[1400px]">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
