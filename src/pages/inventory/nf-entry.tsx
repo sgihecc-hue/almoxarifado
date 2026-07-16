@@ -138,7 +138,10 @@ export function NfEntry({ type }: NfEntryProps) {
   }, [search, table])
 
   function addLine(item: ItemRow) {
-    if (lines.some((l) => l.item_id === item.id)) { setSearch(''); setResults([]); return }
+    // O MESMO item pode entrar em várias linhas — uma por LOTE. Uma NF costuma
+    // trazer o mesmo medicamento em lotes diferentes, e cada linha carrega seu
+    // batch_number/validade. A RPC trata cada linha de forma independente e
+    // cria/incrementa o lote por (item, lote, local).
     setLines((prev) => [...prev, {
       item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
       quantity: 1, batch_number: '', expiry_date: '', unit_price: 0,
@@ -309,13 +312,19 @@ export function NfEntry({ type }: NfEntryProps) {
               ) : results.length === 0 ? (
                 <div className="px-4 py-3 text-sm text-gray-400">Nenhum item encontrado.</div>
               ) : results.map((i) => {
-                const already = lines.some((l) => l.item_id === i.id)
+                // Item já na lista NÃO é mais bloqueado: clicar de novo cria
+                // outra linha, pra lançar um segundo lote do mesmo item.
+                const qtdLinhas = lines.filter((l) => l.item_id === i.id).length
                 return (
-                  <button key={i.id} onClick={() => addLine(i)} disabled={already}
-                    className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 disabled:opacity-50 flex items-center justify-between">
+                  <button key={i.id} onClick={() => addLine(i)}
+                    className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-900 flex items-center gap-1">
                       <Plus className="w-3.5 h-3.5" /> {i.name}
-                      {already && <span className="text-xs text-gray-400 ml-1">(já na lista)</span>}
+                      {qtdLinhas > 0 && (
+                        <span className="text-xs text-blue-500 ml-1">
+                          ({qtdLinhas} {qtdLinhas === 1 ? 'lote' : 'lotes'} — clique p/ outro)
+                        </span>
+                      )}
                     </span>
                     <span className="text-xs text-gray-400">{i.code || 'sem código'} · {i.unit}</span>
                   </button>
