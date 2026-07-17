@@ -229,12 +229,10 @@ export function NewDispensation() {
     return lots
   }
 
-  // Adiciona o item já com o lote FEFO (primeiro por validade) selecionado.
+  // Adiciona o item numa nova linha. O MESMO medicamento pode entrar em várias
+  // linhas — uma por LOTE — pra dispensar de mais de um lote (igual ao
+  // atendimento de solicitação). Cada linha tem seu lote e sua quantidade.
   async function addItem(item: PharmacyItemRow) {
-    if (selectedItems.some((s) => s.item_id === item.id)) {
-      setItemSearch(''); setItemResults([])
-      return
-    }
     setAddingItem(item.id)
     try {
       // NAO pre-seleciona FEFO. O operador tem que escolher explicitamente
@@ -645,13 +643,15 @@ export function NewDispensation() {
                 ) : itemResults.length === 0 ? (
                   <div className="px-4 py-3 text-sm" style={{ color: txtMut }}>Nenhum medicamento encontrado.</div>
                 ) : itemResults.map((i) => {
-                  const already = selectedItems.some((s) => s.item_id === i.id)
+                  // Item já na lista não é mais bloqueado: clicar de novo cria
+                  // outra linha, pra dispensar de um segundo lote.
+                  const qtdLinhas = selectedItems.filter((s) => s.item_id === i.id).length
                   const out = i.current_stock <= 0
                   return (
                     <button
                       key={i.id}
                       onClick={() => addItem(i)}
-                      disabled={already || addingItem === i.id}
+                      disabled={addingItem === i.id}
                       className="w-full text-left px-4 py-3 block disabled:opacity-50"
                       style={{ borderBottom: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'}` }}>
                       <div className="flex items-center justify-between gap-2">
@@ -660,7 +660,11 @@ export function NewDispensation() {
                           {i.is_mav && (
                             <span className="ml-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">⚠️ MAV</span>
                           )}
-                          {already && <span className="ml-1 text-xs" style={{ color: txtMut }}>(já adicionado)</span>}
+                          {qtdLinhas > 0 && (
+                            <span className="ml-1 text-xs text-blue-500">
+                              ({qtdLinhas} {qtdLinhas === 1 ? 'lote' : 'lotes'} — clique p/ outro)
+                            </span>
+                          )}
                         </p>
                         <span className="text-xs ml-2 flex items-center gap-1" style={{ color: out ? '#dc2626' : txtMut }}>
                           {addingItem === i.id && <Loader2 size={12} className="animate-spin" />}
