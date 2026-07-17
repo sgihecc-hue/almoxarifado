@@ -8,6 +8,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useTheme } from '@/contexts/theme'
 import { useAuth } from '@/contexts/auth'
+import { useModule } from '@/contexts/module'
 import { ArrowLeft, AlertCircle, Loader2, CalendarX, Check, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
@@ -20,14 +21,17 @@ const RESOLVE_ROLES = new Set(['pharmacist', 'gestor', 'administrador'])
 export function VencimentosABaixar() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { activeModule } = useModule()
   const { user } = useAuth()
   const { mode } = useTheme()
 
-  // Isolamento de módulo: quando acessado por /almox/* esta é a tela do
-  // almoxarifado e deve mostrar SÓ itens 'warehouse'. Qualquer outro path
-  // (farmácia e default /estoque/vencimentos) mantém o comportamento original
-  // — nada aqui muda para a farmácia.
-  const isWarehouse = location.pathname.startsWith('/almox')
+  // A view v_itens_a_vencer JUNTA os dois modulos (pharmacy + warehouse).
+  // Sem filtro, material do almoxarifado aparecia na tela da farmacia (e
+  // vice-versa). O modulo vem do contexto; o path /almox/* serve de reforco
+  // pra quem nao tem modulo ativo.
+  const isWarehouse = activeModule === 'almoxarifado' || location.pathname.startsWith('/almox')
+  const itemType: 'pharmacy' | 'warehouse' = isWarehouse ? 'warehouse' : 'pharmacy'
+  const moduloLabel = isWarehouse ? 'Almoxarifado' : 'Farmácia'
 
   const canResolve = !!user?.role && RESOLVE_ROLES.has(user.role)
   const allowedWriteoffRoles = new Set(['admin', 'manager', 'administrador', 'gestor', 'pharmacist', 'warehouse_manager', 'atendente'])
@@ -65,7 +69,8 @@ export function VencimentosABaixar() {
     setError('')
     try {
       const [alertData, writeoffData, locs, resData] = await Promise.all([
-        supabase.from('v_itens_a_vencer').select('*').order('expiry_date'),
+        // Só itens do módulo atual — a view junta farmácia + almoxarifado.
+        supabase.from('v_itens_a_vencer').select('*').eq('item_type', itemType).order('expiry_date'),
         stockService.listExpiringToWriteoff(),
         stockService.getLocations(),
         supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
@@ -93,23 +98,18 @@ export function VencimentosABaixar() {
     }
   }
 
-  useEffect(() => { loadAll() }, [])
+  // Recarrega ao trocar de módulo (itemType muda pharmacy/warehouse)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadAll() }, [itemType])
 
-  // Filtrar resolvidos client-side. No módulo almoxarifado, restringe a itens
-  // 'warehouse' (a view v_itens_a_vencer mistura os dois módulos). Fora do
-  // almox, sem filtro de tipo — farmácia inalterada.
+  // Filtrar resolvidos client-side
   const visibleAlerts = alertRows.filter(
-    (r) =>
-      !resolutions.has(`${r.expiry_tracking_id}__${r.color_band}`) &&
-      (!isWarehouse || r.item_type === 'warehouse')
+    (r) => !resolutions.has(`${r.expiry_tracking_id}__${r.color_band}`)
   )
 
-  // Seção B (vencidos a baixar) vem da view expiring_to_writeoff, que só
-  // retorna itens de farmácia. No almox filtramos por 'warehouse' (fica vazio
-  // hoje, mas evita vazar farmácia); fora do almox, mantém tudo.
-  const visibleWriteoff = rows.filter(
-    (r) => !isWarehouse || r.item_type === 'warehouse'
-  )
+  // Seção B (vencidos a baixar): a view expiring_to_writeoff também mistura
+  // os módulos — filtra pelo módulo atual.
+  const visibleWriteoff = rows.filter((r) => r.item_type === itemType)
 
   const handleResolve = async (row: ExpiringAlertRow) => {
     if (!user?.id) return
@@ -226,7 +226,7 @@ export function VencimentosABaixar() {
         </button>
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" style={{ color: txt }}>
-            <AlertTriangle size={22} /> Itens a Vencer
+            <AlertTriangle size={22} /> Itens a Vencer — {moduloLabel}
           </h1>
           <p className="text-sm" style={{ color: txtSec }}>
             Itens proximos do vencimento e itens vencidos para baixa em massa.
