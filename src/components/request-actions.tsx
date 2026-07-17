@@ -244,28 +244,47 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
     }
   }
 
+  // Le a QUANTIDADE FORNECIDA que o atendente digitou. Ela e salva pelo
+  // ItemRow direto em request_items.supplied_quantity (no blur), e NAO passa
+  // pelo itemQuantities daqui — que e o estado antigo de "quantidade
+  // aprovada" e vem preenchido com o valor SOLICITADO. Usar itemQuantities
+  // fazia o item sem quantidade digitada ser tratado como atendido.
+  const lerFornecidos = async (): Promise<Record<string, number>> => {
+    const ids = (request.request_items || []).map((it) => it.id)
+    if (ids.length === 0) return {}
+    const { data } = await supabase
+      .from('request_items')
+      .select('id, supplied_quantity')
+      .in('id', ids)
+    const mapa: Record<string, number> = {}
+    ;(data || []).forEach((r: any) => { mapa[r.id] = Number(r.supplied_quantity) || 0 })
+    return mapa
+  }
+
   // Executa a aprovação de fato (chamado direto ou após confirmar o negativo).
   const executarAprovacao = async () => {
     try {
       setLoading(true)
-      // FA2: lote NAO barra mais a solicitacao inteira. Um item sem lote/estoque
-      // nao impede os demais — ele fica como NAO ATENDIDO (fornecido 0). O
-      // estoque abate o que de fato saiu (supplied_quantity), nao o pedido.
+      const fornecidos = await lerFornecidos()
+      // FA2: item sem quantidade fornecida NAO barra a solicitacao — ele fica
+      // como NAO ATENDIDO e os demais seguem. O estoque abate o que de fato
+      // saiu (supplied_quantity), nao o solicitado.
       if (isPharmacyRequest) {
         const naoAtendidos = (request.request_items || [])
-          .filter((it) => !(Number(itemQuantities[it.id]) > 0))
-          .map((it) => it.id)
+          .filter((it) => !(fornecidos[it.id] > 0)).map((it) => it.id)
         if (naoAtendidos.length > 0) {
           await supabase.from('request_items').update({ status: 'nao_atendido' }).in('id', naoAtendidos)
         }
         const atendidos = (request.request_items || [])
-          .filter((it) => Number(itemQuantities[it.id]) > 0)
-          .map((it) => it.id)
+          .filter((it) => fornecidos[it.id] > 0).map((it) => it.id)
         if (atendidos.length > 0) {
           await supabase.from('request_items').update({ status: 'atendido' }).in('id', atendidos)
         }
       }
-      const updatedRequest = await requestService.approve(request.id, itemQuantities, '')
+      // approve() grava approved_quantity: usa o fornecido pra os dois campos
+      // ficarem coerentes (aprovado = o que realmente vai sair).
+      const quantidades = isPharmacyRequest ? fornecidos : itemQuantities
+      const updatedRequest = await requestService.approve(request.id, quantidades, '')
       if (isPharmacyRequest) setShowApprovalToast(true)
       requestService.clearCache()
       onUpdate(updatedRequest)
@@ -279,17 +298,21 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
     }
   }
 
-  // Gate do FA5: se algum item vai sair com mais do que o saldo do sistema,
-  // pede confirmação explícita (o estoque ficará negativo).
-  const handleAprovarClick = () => {
+  // Gate do FA5: lista SO os itens que vao sair acima do saldo — usando a
+  // quantidade FORNECIDA (nao a solicitada).
+  const handleAprovarClick = async () => {
+    if (!isPharmacyRequest) { executarAprovacao(); return }
+    setLoading(true)
+    const fornecidos = await lerFornecidos()
+    setLoading(false)
     const semSaldo = (request.request_items || [])
       .map((it) => ({
         nome: it.item?.name || '(item)',
-        pedido: Number(itemQuantities[it.id]) || 0,
+        pedido: fornecidos[it.id] || 0,
         saldo: Number(it.item?.current_stock) || 0,
       }))
       .filter((x) => x.pedido > 0 && x.pedido > x.saldo)
-    if (isPharmacyRequest && semSaldo.length > 0) {
+    if (semSaldo.length > 0) {
       setItensSemSaldo(semSaldo)
       setNegativoCiente(false)
       setShowNegativoDialog(true)

@@ -41,16 +41,18 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     ;(async () => {
       const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
       if (!pharmacyItemId) return
-      // FA4: só lotes DO LOCAL que atende a solicitação (CAF) e com saldo > 0.
-      // Antes vinham todos os lotes do item, de qualquer estoque — por isso o
-      // satélite mostrava lote do CAF e item zerado ainda listava lote.
+      // FA4: só lotes DO LOCAL que atende a solicitação (CAF). Antes vinham
+      // os lotes do item em QUALQUER estoque — por isso o satélite mostrava
+      // lote do CAF. O filtro de local resolve isso.
+      // NÃO filtramos por saldo > 0: com o FA5 o item pode sair sem saldo
+      // (existe no físico, não foi lançado) e mesmo assim precisa ter o lote
+      // atribuído. O saldo aparece ao lado de cada lote pra ficar explícito.
       const { data: caf } = await supabase
         .from('stock_locations').select('id').eq('code', 'CAF').maybeSingle()
       let q = supabase
         .from('expiry_tracking')
         .select('id, batch_number, expiry_date, current_quantity')
         .eq('item_id', pharmacyItemId)
-        .gt('current_quantity', 0)
         .order('expiry_date', { ascending: true, nullsFirst: false }) // FEFO
       const cafId = (caf as { id?: string } | null)?.id
       if (cafId) q = q.eq('location_id', cafId)
@@ -174,10 +176,13 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                       }}
                       className="flex-1 min-w-[150px] h-7 px-1 text-xs rounded border border-gray-300 bg-white"
                     >
-                      <option value="">{lots.length ? '— Lote —' : 'Sem lotes'}</option>
+                      <option value="">{lots.length ? '— Lote —' : 'Sem lotes cadastrados'}</option>
                       {lots.map((lo, i) => (
                         <option key={lo.id} value={lo.id}>
-                          {i === 0 ? '★ ' : ''}{lo.batch_number} · {lo.current_quantity}
+                          {i === 0 ? '★ ' : ''}{lo.batch_number}
+                          {lo.current_quantity > 0
+                            ? ` · saldo ${lo.current_quantity}`
+                            : ' · sem saldo'}
                         </option>
                       ))}
                     </select>
