@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Sidebar } from '@/components/sidebar'
 import { Header } from '@/components/header'
 import { useTheme } from '@/contexts/theme'
+import { useModule } from '@/contexts/module'
 import { ExpiryAlertPopup } from '@/components/expiry-alert-popup'
 import { ActiveStockBanner } from '@/components/active-stock-banner'
 
@@ -12,9 +14,22 @@ interface MainLayoutProps {
 export function MainLayout({ children }: MainLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { mode, colors } = useTheme()
+  const { activeModule, isModuleUser } = useModule()
+  const location = useLocation()
 
   const toggleSidebar = () => {
     setSidebarOpen(!sidebarOpen)
+  }
+
+  // Tela de seleção de módulo (raiz "/", usuário de módulo sem módulo ativo):
+  // é uma tela de escolha em tela cheia — sem sidebar, header, banner ou popup.
+  const isModuleSelection = isModuleUser && !activeModule && location.pathname === '/'
+  if (isModuleSelection) {
+    return (
+      <div className="h-screen overflow-y-auto" style={{ background: colors.gradient, transition: 'background 0.6s ease' }}>
+        {children}
+      </div>
+    )
   }
 
   return (
