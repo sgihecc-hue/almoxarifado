@@ -33,56 +33,90 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   // request_item_lots (lote + quantidade). O campo antigo
   // request_items.expiry_tracking_id continua como fallback de 1 lote só.
   const [lots, setLots] = useState<LotOption[]>([])
-  const [itemLots, setItemLots] = useState<Array<{ expiry_tracking_id: string; quantity: number }>>([])
+  // Cada linha é um lote do item. `manual` = lote digitado na hora (item
+  // zerado, sem lote cadastrado): guarda batch_number/expiry_date até o
+  // saveLots criar o registro real (RPC farmacia_garantir_lote).
+  const [itemLots, setItemLots] = useState<Array<{
+    expiry_tracking_id: string; quantity: number
+    manual?: boolean; batch_number?: string; expiry_date?: string
+  }>>([])
   const isPharmacy = requestType === 'pharmacy'
+
+  const reloadLots = async () => {
+    const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
+    if (!pharmacyItemId) return
+    // FA4: só lotes DO LOCAL que atende a solicitação (CAF). Antes vinham
+    // os lotes do item em QUALQUER estoque — por isso o satélite mostrava
+    // lote do CAF. O filtro de local resolve isso.
+    // NÃO filtramos por saldo > 0: com o FA5 o item pode sair sem saldo
+    // (existe no físico, não foi lançado) e mesmo assim precisa ter o lote
+    // atribuído. O saldo aparece ao lado de cada lote pra ficar explícito.
+    const { data: caf } = await supabase
+      .from('stock_locations').select('id').eq('code', 'CAF').maybeSingle()
+    let q = supabase
+      .from('expiry_tracking')
+      .select('id, batch_number, expiry_date, current_quantity')
+      .eq('item_id', pharmacyItemId)
+      .order('expiry_date', { ascending: true, nullsFirst: false }) // FEFO
+    const cafId = (caf as { id?: string } | null)?.id
+    if (cafId) q = q.eq('location_id', cafId)
+    const { data, error } = await q
+    if (error) { console.error('lots', error); return }
+    setLots((data || []) as LotOption[])
+
+    // Lotes já informados neste item
+    const { data: ril } = await supabase
+      .from('request_item_lots')
+      .select('expiry_tracking_id, quantity')
+      .eq('request_item_id', item.id)
+    const existentes = (ril || []).map((r: any) => ({
+      expiry_tracking_id: r.expiry_tracking_id, quantity: r.quantity,
+    }))
+    // Compatibilidade: se não há linhas novas mas existe o lote antigo, mostra ele.
+    const legado = (item as any).expiry_tracking_id
+    if (existentes.length === 0 && legado) {
+      setItemLots([{ expiry_tracking_id: legado, quantity: item.supplied_quantity ?? 0 }])
+    } else {
+      setItemLots(existentes)
+    }
+  }
 
   useEffect(() => {
     if (!isPharmacy) return
-    ;(async () => {
-      const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
-      if (!pharmacyItemId) return
-      // FA4: só lotes DO LOCAL que atende a solicitação (CAF). Antes vinham
-      // os lotes do item em QUALQUER estoque — por isso o satélite mostrava
-      // lote do CAF. O filtro de local resolve isso.
-      // NÃO filtramos por saldo > 0: com o FA5 o item pode sair sem saldo
-      // (existe no físico, não foi lançado) e mesmo assim precisa ter o lote
-      // atribuído. O saldo aparece ao lado de cada lote pra ficar explícito.
-      const { data: caf } = await supabase
-        .from('stock_locations').select('id').eq('code', 'CAF').maybeSingle()
-      let q = supabase
-        .from('expiry_tracking')
-        .select('id, batch_number, expiry_date, current_quantity')
-        .eq('item_id', pharmacyItemId)
-        .order('expiry_date', { ascending: true, nullsFirst: false }) // FEFO
-      const cafId = (caf as { id?: string } | null)?.id
-      if (cafId) q = q.eq('location_id', cafId)
-      const { data, error } = await q
-      if (error) { console.error('lots', error); return }
-      setLots((data || []) as LotOption[])
-
-      // Lotes já informados neste item
-      const { data: ril } = await supabase
-        .from('request_item_lots')
-        .select('expiry_tracking_id, quantity')
-        .eq('request_item_id', item.id)
-      const existentes = (ril || []).map((r: any) => ({
-        expiry_tracking_id: r.expiry_tracking_id, quantity: r.quantity,
-      }))
-      // Compatibilidade: se não há linhas novas mas existe o lote antigo, mostra ele.
-      const legado = (item as any).expiry_tracking_id
-      if (existentes.length === 0 && legado) {
-        setItemLots([{ expiry_tracking_id: legado, quantity: item.supplied_quantity ?? 0 }])
-      } else {
-        setItemLots(existentes)
-      }
-    })()
+    reloadLots()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPharmacy, item])
 
   // Grava os lotes do item (substitui as linhas anteriores).
-  const saveLots = async (novos: Array<{ expiry_tracking_id: string; quantity: number }>) => {
+  const saveLots = async (novos: Array<{
+    expiry_tracking_id: string; quantity: number
+    manual?: boolean; batch_number?: string; expiry_date?: string
+  }>) => {
     try {
+      const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
+      let criouManual = false
+      // Resolve lotes DIGITADOS na hora: cria/acha o registro real e pega o id.
+      const resolvidos: Array<{ expiry_tracking_id: string; quantity: number; batch_number?: string; expiry_date?: string }> = []
+      for (const l of novos) {
+        let etid = l.expiry_tracking_id
+        let batch = l.batch_number
+        let expiry = l.expiry_date
+        if (l.manual) {
+          if (!l.batch_number || !l.batch_number.trim()) continue // sem número: ignora a linha
+          const { data, error } = await supabase.rpc('farmacia_garantir_lote', {
+            p_item_id: pharmacyItemId,
+            p_batch_number: l.batch_number.trim(),
+            p_expiry_date: l.expiry_date || null,
+          })
+          if (error) { console.error('garantir_lote', error); continue }
+          etid = data as string
+          criouManual = true
+        }
+        resolvidos.push({ expiry_tracking_id: etid, quantity: l.quantity, batch_number: batch, expiry_date: expiry })
+      }
+
       await supabase.from('request_item_lots').delete().eq('request_item_id', item.id)
-      const validos = novos.filter((l) => l.expiry_tracking_id && l.quantity > 0)
+      const validos = resolvidos.filter((l) => l.expiry_tracking_id && l.quantity > 0)
       if (validos.length > 0) {
         await supabase.from('request_item_lots').insert(
           validos.map((l) => {
@@ -90,8 +124,8 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
             return {
               request_item_id: item.id,
               expiry_tracking_id: l.expiry_tracking_id,
-              batch_number: lo?.batch_number ?? null,
-              expiry_date: lo?.expiry_date ?? null,
+              batch_number: lo?.batch_number ?? l.batch_number ?? null,
+              expiry_date: lo?.expiry_date ?? l.expiry_date ?? null,
               quantity: l.quantity,
             }
           })
@@ -99,6 +133,8 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       }
       // Mantém o campo antigo coerente (1º lote) para telas/relatórios legados.
       await saveField('expiry_tracking_id', validos[0]?.expiry_tracking_id ?? null)
+      // Se criou lote novo, recarrega pra ele aparecer no dropdown/validade.
+      if (criouManual) await reloadLots()
     } catch (e) {
       console.error('Erro ao salvar lotes:', e)
     }
@@ -167,25 +203,48 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
               <div className="space-y-1">
                 {itemLots.map((l, idx) => (
                   <div key={idx} className="flex items-center gap-1">
-                    <select
-                      value={l.expiry_tracking_id}
-                      onChange={(e) => {
-                        const novos = itemLots.map((x, i) =>
-                          i === idx ? { ...x, expiry_tracking_id: e.target.value } : x)
-                        setItemLots(novos); saveLots(novos)
-                      }}
-                      className="flex-1 min-w-[150px] h-7 px-1 text-xs rounded border border-gray-300 bg-white"
-                    >
-                      <option value="">{lots.length ? '— Lote —' : 'Sem lotes cadastrados'}</option>
-                      {lots.map((lo, i) => (
-                        <option key={lo.id} value={lo.id}>
-                          {i === 0 ? '★ ' : ''}{lo.batch_number}
-                          {lo.current_quantity > 0
-                            ? ` · saldo ${lo.current_quantity}`
-                            : ' · sem saldo'}
-                        </option>
-                      ))}
-                    </select>
+                    {l.manual ? (
+                      // Lote DIGITADO na hora (item zerado, sem lote cadastrado).
+                      <div className="flex-1 flex items-center gap-1 min-w-[150px]">
+                        <input
+                          type="text" value={l.batch_number || ''} placeholder="Nº do lote"
+                          onChange={(e) => setItemLots(itemLots.map((x, i) => i === idx ? { ...x, batch_number: e.target.value } : x))}
+                          onBlur={() => saveLots(itemLots)}
+                          className="flex-1 min-w-[80px] h-7 px-1 text-xs rounded border border-blue-300"
+                        />
+                        <input
+                          type="date" value={l.expiry_date || ''} title="Validade"
+                          onChange={(e) => setItemLots(itemLots.map((x, i) => i === idx ? { ...x, expiry_date: e.target.value } : x))}
+                          onBlur={() => saveLots(itemLots)}
+                          className="w-[120px] h-7 px-1 text-xs rounded border border-blue-300"
+                        />
+                      </div>
+                    ) : (
+                      <select
+                        value={l.expiry_tracking_id}
+                        onChange={(e) => {
+                          if (e.target.value === '__novo__') {
+                            setItemLots(itemLots.map((x, i) => i === idx ? { expiry_tracking_id: '', quantity: x.quantity, manual: true, batch_number: '', expiry_date: '' } : x))
+                            return
+                          }
+                          const novos = itemLots.map((x, i) =>
+                            i === idx ? { ...x, expiry_tracking_id: e.target.value } : x)
+                          setItemLots(novos); saveLots(novos)
+                        }}
+                        className="flex-1 min-w-[150px] h-7 px-1 text-xs rounded border border-gray-300 bg-white"
+                      >
+                        <option value="">{lots.length ? '— Lote —' : 'Sem lotes cadastrados'}</option>
+                        {lots.map((lo, i) => (
+                          <option key={lo.id} value={lo.id}>
+                            {i === 0 ? '★ ' : ''}{lo.batch_number}
+                            {lo.current_quantity > 0
+                              ? ` · saldo ${lo.current_quantity}`
+                              : ' · sem saldo'}
+                          </option>
+                        ))}
+                        <option value="__novo__">➕ Digitar lote novo…</option>
+                      </select>
+                    )}
                     <input
                       type="number" min={0} value={l.quantity || ''} placeholder="qtd"
                       onChange={(e) => {
@@ -203,12 +262,20 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                     >✕</button>
                   </div>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => setItemLots([...itemLots, { expiry_tracking_id: '', quantity: 0 }])}
-                  disabled={lots.length === 0}
-                  className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-400"
-                >+ Adicionar lote</button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setItemLots([...itemLots, { expiry_tracking_id: '', quantity: 0 }])}
+                    disabled={lots.length === 0}
+                    className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-300"
+                    title={lots.length === 0 ? 'Nenhum lote cadastrado — use "Digitar lote"' : ''}
+                  >+ Adicionar lote</button>
+                  <button
+                    type="button"
+                    onClick={() => setItemLots([...itemLots, { expiry_tracking_id: '', quantity: 0, manual: true, batch_number: '', expiry_date: '' }])}
+                    className="text-xs text-blue-600 hover:text-blue-800"
+                  >+ Digitar lote</button>
+                </div>
                 {itemLots.length > 0 && suppliedQty !== '' && somaLotes !== Number(suppliedQty) && (
                   <p className="text-[10px] text-amber-600">
                     Soma dos lotes ({somaLotes}) ≠ fornecido ({suppliedQty})

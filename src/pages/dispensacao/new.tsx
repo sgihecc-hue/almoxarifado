@@ -280,6 +280,25 @@ export function NewDispensation() {
     setSelectedItems((prev) => prev.filter((_, i) => i !== idx))
   }
 
+  // "+ Adicionar lote": cria outra linha do MESMO medicamento (lote vazio),
+  // logo abaixo, pra dispensar de mais de um lote — igual ao atendimento de
+  // solicitação. Os lotes já estão carregados (lotsByItem) da 1ª linha.
+  function addAnotherLot(idx: number) {
+    setSelectedItems((prev) => {
+      const src = prev[idx]
+      const copy = [...prev]
+      copy.splice(idx + 1, 0, {
+        ...src,
+        expiry_tracking_id: null,
+        batch_number: null,
+        expiry_date: null,
+        available_in_batch: src.item_stock,
+        quantity: 1,
+      })
+      return copy
+    })
+  }
+
   function setQty(idx: number, qty: number) {
     setSelectedItems((prev) => prev.map((it, i) =>
       i === idx ? { ...it, quantity: Math.max(1, qty) } : it
@@ -751,6 +770,14 @@ export function NewDispensation() {
                         Disponível: {it.available_in_batch}
                       </span>
                     </div>
+                    {/* Multi-lote: dispensar o mesmo medicamento de mais de um
+                        lote — cria outra linha logo abaixo, cada uma com seu
+                        lote e sua quantidade (igual ao atendimento). */}
+                    <button
+                      type="button"
+                      onClick={() => addAnotherLot(idx)}
+                      className="text-xs text-blue-500 hover:text-blue-700"
+                    >+ Adicionar lote deste medicamento</button>
                   </div>
                 )
               })}
