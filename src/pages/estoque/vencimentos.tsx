@@ -5,9 +5,10 @@
 // =====================================================================
 
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useTheme } from '@/contexts/theme'
 import { useAuth } from '@/contexts/auth'
+import { useModule } from '@/contexts/module'
 import { ArrowLeft, AlertCircle, Loader2, CalendarX, Check, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
@@ -19,8 +20,18 @@ const RESOLVE_ROLES = new Set(['pharmacist', 'gestor', 'administrador'])
 
 export function VencimentosABaixar() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const { activeModule } = useModule()
   const { user } = useAuth()
   const { mode } = useTheme()
+
+  // A view v_itens_a_vencer JUNTA os dois modulos (pharmacy + warehouse).
+  // Sem filtro, material do almoxarifado aparecia na tela da farmacia (e
+  // vice-versa). O modulo vem do contexto; o path /almox/* serve de reforco
+  // pra quem nao tem modulo ativo.
+  const isWarehouse = activeModule === 'almoxarifado' || location.pathname.startsWith('/almox')
+  const itemType: 'pharmacy' | 'warehouse' = isWarehouse ? 'warehouse' : 'pharmacy'
+  const moduloLabel = isWarehouse ? 'Almoxarifado' : 'Farmácia'
 
   const canResolve = !!user?.role && RESOLVE_ROLES.has(user.role)
   const allowedWriteoffRoles = new Set(['admin', 'manager', 'administrador', 'gestor', 'pharmacist', 'warehouse_manager', 'atendente'])
@@ -58,7 +69,8 @@ export function VencimentosABaixar() {
     setError('')
     try {
       const [alertData, writeoffData, locs, resData] = await Promise.all([
-        supabase.from('v_itens_a_vencer').select('*').order('expiry_date'),
+        // Só itens do módulo atual — a view junta farmácia + almoxarifado.
+        supabase.from('v_itens_a_vencer').select('*').eq('item_type', itemType).order('expiry_date'),
         stockService.listExpiringToWriteoff(),
         stockService.getLocations(),
         supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
@@ -86,12 +98,18 @@ export function VencimentosABaixar() {
     }
   }
 
-  useEffect(() => { loadAll() }, [])
+  // Recarrega ao trocar de módulo (itemType muda pharmacy/warehouse)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadAll() }, [itemType])
 
   // Filtrar resolvidos client-side
   const visibleAlerts = alertRows.filter(
     (r) => !resolutions.has(`${r.expiry_tracking_id}__${r.color_band}`)
   )
+
+  // Seção B (vencidos a baixar): a view expiring_to_writeoff também mistura
+  // os módulos — filtra pelo módulo atual.
+  const visibleWriteoff = rows.filter((r) => r.item_type === itemType)
 
   const handleResolve = async (row: ExpiringAlertRow) => {
     if (!user?.id) return
@@ -144,10 +162,10 @@ export function VencimentosABaixar() {
     })
   const toggleAll = () =>
     setSelected((prev) =>
-      prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.expiry_tracking_id))
+      prev.size === visibleWriteoff.length ? new Set() : new Set(visibleWriteoff.map((r) => r.expiry_tracking_id))
     )
 
-  const totalLoss = rows
+  const totalLoss = visibleWriteoff
     .filter((r) => selected.has(r.expiry_tracking_id))
     .reduce((sum, r) => sum + (Number(r.estimated_loss) || 0), 0)
 
@@ -156,7 +174,7 @@ export function VencimentosABaixar() {
     setSubmitting(true)
     setError('')
     try {
-      for (const r of rows.filter((row) => selected.has(row.expiry_tracking_id))) {
+      for (const r of visibleWriteoff.filter((row) => selected.has(row.expiry_tracking_id))) {
         await stockService.createSaidaAvulsa({
           item_id: r.item_id,
           item_type: r.item_type,
@@ -208,7 +226,7 @@ export function VencimentosABaixar() {
         </button>
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" style={{ color: txt }}>
-            <AlertTriangle size={22} /> Itens a Vencer
+            <AlertTriangle size={22} /> Itens a Vencer — {moduloLabel}
           </h1>
           <p className="text-sm" style={{ color: txtSec }}>
             Itens proximos do vencimento e itens vencidos para baixa em massa.
@@ -325,7 +343,7 @@ export function VencimentosABaixar() {
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-6 h-6 animate-spin" style={{ color: txtMut }} />
             </div>
-          ) : rows.length === 0 ? (
+          ) : visibleWriteoff.length === 0 ? (
             <p className="text-sm text-center py-8" style={{ color: txtMut }}>
               Nenhum item vencido com saldo. Tudo limpo! 🎉
             </p>
@@ -340,10 +358,10 @@ export function VencimentosABaixar() {
                 <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: txt }}>
                   <input
                     type="checkbox"
-                    checked={selected.size === rows.length && rows.length > 0}
+                    checked={selected.size === visibleWriteoff.length && visibleWriteoff.length > 0}
                     onChange={toggleAll}
                   />
-                  {selected.size === rows.length ? 'Desmarcar todos' : `Selecionar todos (${rows.length})`}
+                  {selected.size === visibleWriteoff.length ? 'Desmarcar todos' : `Selecionar todos (${visibleWriteoff.length})`}
                 </label>
                 <div className="text-right">
                   {selected.size > 0 && (
@@ -358,7 +376,7 @@ export function VencimentosABaixar() {
               </div>
 
               <div className="space-y-2">
-                {rows.map((r) => (
+                {visibleWriteoff.map((r) => (
                   <label
                     key={r.expiry_tracking_id}
                     className="flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors"
