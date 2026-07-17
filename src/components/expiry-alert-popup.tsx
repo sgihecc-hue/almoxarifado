@@ -133,6 +133,10 @@ export function ExpiryAlertPopup({ onAlertsLoaded }: { onAlertsLoaded?: (count: 
     // Só admin/gestor recebem o popup (SHOW_ROLES). Solicitante/atendente/
     // enfermagem não são interrompidos com alerta que não é da alçada deles.
     if (!user?.role || !SHOW_ROLES.has(user.role)) return
+    // Sem módulo ativo (tela de seleção Farmácia/Almox), NÃO mostra o popup:
+    // não há "de qual módulo" e sem filtro ele misturava os dois. O alerta
+    // aparece só depois que o usuário entra num módulo, com os itens dele.
+    if (!itemTypeFilter) return
     // Skip if this module's session key already shown
     if (sessionStorage.getItem(sessionKey)) return
 
