@@ -132,7 +132,11 @@ export function WarehouseDispatchList() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {dispatches.map((d) => (
-                  <tr key={d.id} className={`hover:bg-gray-50 ${d.status === 'cancelled' ? 'opacity-60' : ''}`}>
+                  <tr
+                    key={d.id}
+                    onClick={() => navigate(`/saida-direta/${d.id}`)}
+                    className={`hover:bg-gray-50 cursor-pointer ${d.status === 'cancelled' ? 'opacity-60' : ''}`}
+                  >
                     <td className="px-4 py-3 text-sm font-mono text-gray-600">
                       #{d.dispatch_number}
                     </td>
@@ -171,7 +175,7 @@ export function WarehouseDispatchList() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => openCancel(d)}
+                          onClick={(e) => { e.stopPropagation(); openCancel(d) }}
                           className="text-amber-600 border-amber-200 hover:bg-amber-50 h-8 px-2"
                           title="Estornar saída (devolve o estoque)"
                         >

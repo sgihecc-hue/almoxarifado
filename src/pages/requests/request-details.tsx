@@ -598,7 +598,16 @@ export function RequestDetails() {
           <Button
             variant="ghost"
             className="text-primary-600 hover:text-primary-700"
-            onClick={() => navigate('/requests')}
+            onClick={() => {
+              // Só no almoxarifado: volta pra tela de origem (Histórico, Caixa
+              // de Entrada, Em Processamento, etc.) em vez de ir sempre pras
+              // solicitações atuais. Farmácia mantém o comportamento anterior.
+              if (request?.type === 'warehouse' && window.history.length > 1) {
+                navigate(-1)
+              } else {
+                navigate('/requests')
+              }
+            }}
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
             Voltar

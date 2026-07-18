@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   Pill,
@@ -12,7 +12,8 @@ import {
   User,
   Building2,
   Hash,
-  Check
+  Check,
+  Undo2
 } from 'lucide-react'
 import { tvRequestService } from '@/lib/services/tv-requests'
 import { employeesService } from '@/lib/services/employees'
@@ -58,6 +59,10 @@ interface TVRequestDetailProps {
 export function TVRequestDetail({ type }: TVRequestDetailProps) {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  // Modo somente-leitura: usado quando aberto pelo Histórico. Consulta o
+  // pedido sem permitir atender (nada de editar qtd, marcar entrega, etc.).
+  const readOnly = searchParams.get('ro') === '1'
   const theme = themes[type]
   const Icon = theme.icon
 
@@ -233,7 +238,12 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
-              onClick={() => navigate(`/tv/${type}`)}
+              onClick={() => {
+                // Aberto pelo Histórico (read-only): volta pro Histórico.
+                // Caso contrário, volta pro painel principal.
+                if (readOnly && window.history.length > 1) navigate(-1)
+                else navigate(`/tv/${type}`)
+              }}
               className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -307,7 +317,7 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
           <div className="divide-y divide-gray-700">
             {request.items.map((item, index) => {
               const itemData = suppliedItems.get(item.id)
-              const isEditable = workflowStep === 1 && ['approved', 'processing'].includes(request.status)
+              const isEditable = !readOnly && workflowStep === 1 && ['approved', 'processing'].includes(request.status)
 
               return (
                 <div
@@ -389,9 +399,20 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
                       )}
                     </div>
 
-                    {/* Checkbox */}
+                    {/* Última coluna: em modo somente-leitura (Histórico do
+                        almox) vira botão "Estornar" que leva o item pra tela
+                        de estorno já selecionado. Fora disso, o check normal. */}
                     <div className="col-span-1 text-center">
-                      {isEditable ? (
+                      {readOnly && type === 'warehouse' ? (
+                        <button
+                          onClick={() => navigate(`/almox/estoque/estorno?item=${item.item_id}`)}
+                          title="Estornar este item (devolve ao estoque)"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-700/80 hover:bg-amber-600 text-white text-xs font-medium transition-colors"
+                        >
+                          <Undo2 className="w-3.5 h-3.5" />
+                          Estornar
+                        </button>
+                      ) : isEditable ? (
                         <input
                           type="checkbox"
                           checked={itemData?.is_checked || false}
@@ -417,8 +438,9 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
         {/* WORKFLOW ACTIONS */}
         {/* ============================================ */}
 
-        {/* Step 1: "Saiu para entrega" button */}
-        {workflowStep === 1 && ['approved', 'processing'].includes(request.status) && (
+        {/* Step 1: "Saiu para entrega" button — oculto no modo somente-leitura
+            (aberto pelo Histórico). Atendimento só pelo painel principal. */}
+        {!readOnly && workflowStep === 1 && ['approved', 'processing'].includes(request.status) && (
           <div className="mt-6 flex justify-center">
             <button
               onClick={handleMarkAsDelivered}
@@ -437,8 +459,9 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
           </div>
         )}
 
-        {/* Step 2: Employee matricula input (appears after delivery) */}
-        {workflowStep === 2 && (
+        {/* Step 2: Employee matricula input (appears after delivery).
+            Oculto no modo somente-leitura (Histórico). */}
+        {!readOnly && workflowStep === 2 && (
           <div className="mt-6 bg-gray-800 rounded-xl border border-gray-700 p-6">
             <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
               <User className="w-5 h-5 text-gray-400" />

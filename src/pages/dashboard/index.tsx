@@ -20,16 +20,23 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/contexts/theme'
+import { useModule } from '@/contexts/module'
 import { supabase } from '@/lib/supabase'
 
 interface DashboardProps {
   module?: 'farmacia' | 'almoxarifado'
 }
 
-export function Dashboard({ module: activeModule }: DashboardProps) {
+export function Dashboard({ module: moduleProp }: DashboardProps) {
   const navigate = useNavigate()
   const { user } = useAuth()
   const { mode } = useTheme()
+  // Na rota /almox|/farmacia o módulo vem por prop; na rota genérica "/" não
+  // vem prop, então usamos o módulo selecionado no seletor do topo (contexto).
+  // Sem isso, o dashboard de "/" mostrava validades de farmácia mesmo com o
+  // Almoxarifado selecionado.
+  const { activeModule: ctxModule } = useModule()
+  const activeModule = moduleProp ?? ctxModule ?? undefined
 
   if (!user) {
     return (
@@ -52,17 +59,22 @@ export function Dashboard({ module: activeModule }: DashboardProps) {
   const [resolvingIds, setResolvingIds] = useState<Set<string>>(new Set())
 
   const canResolveExpiry = String(user?.role) === 'pharmacist' || isAdmin || isManager
-  // Alerta de validades só faz sentido no contexto farmácia
-  const showPharmacyExpiry = activeModule !== 'almoxarifado'
+  // O card de validades mostra os itens DO MÓDULO atual: no almoxarifado os
+  // itens 'warehouse', na farmácia (ou default) os 'pharmacy'.
+  const expiryItemType: 'pharmacy' | 'warehouse' =
+    activeModule === 'almoxarifado' ? 'warehouse' : 'pharmacy'
+  const expiryModuleLabel = activeModule === 'almoxarifado' ? 'Almoxarifado' : 'Farmácia'
+  const vencimentosHref = activeModule === 'almoxarifado' ? '/almox/estoque/vencimentos' : '/estoque/vencimentos'
 
   async function loadExpiring() {
     setLoadingExpiry(true)
     try {
       const [alertRes, resolutionsRes] = await Promise.all([
-        // O card é "Itens próximos de vencer — Farmácia", mas a view
-        // v_itens_a_vencer junta os dois módulos (pharmacy + warehouse).
-        // Sem este filtro, materiais do almoxarifado apareciam na farmácia.
-        supabase.from('v_itens_a_vencer').select('*').eq('item_type', 'pharmacy').order('expiry_date'),
+        // Só itens do módulo atual. A view v_itens_a_vencer junta os dois
+        // módulos; sem este filtro, material do almoxarifado aparecia no card
+        // da farmácia. Na farmácia (ou default) => 'pharmacy'; no almox =>
+        // 'warehouse'. Para a farmácia o efeito é o mesmo da produção.
+        supabase.from('v_itens_a_vencer').select('*').eq('item_type', expiryItemType).order('expiry_date'),
         supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
       ])
       const resolved = new Set<string>(
@@ -80,12 +92,14 @@ export function Dashboard({ module: activeModule }: DashboardProps) {
   }
 
   useEffect(() => {
-    if (!canManageRequests || !showPharmacyExpiry) {
+    if (!canManageRequests) {
       setExpiringItems([])
       return
     }
     loadExpiring()
-  }, [canManageRequests, showPharmacyExpiry])
+    // Recarrega ao trocar de módulo (expiryItemType muda warehouse/pharmacy)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManageRequests, expiryItemType])
 
   async function handleResolve(trackingId: string, colorBand: string) {
     if (!canResolveExpiry || !user?.id) return
@@ -161,8 +175,8 @@ export function Dashboard({ module: activeModule }: DashboardProps) {
         </Button>
       </div>
 
-      {/* Alerta de Validade — somente quando módulo farmácia (ou não-modular) */}
-      {canManageRequests && showPharmacyExpiry && !loadingExpiry && expiringItems.length > 0 && (() => {
+      {/* Alerta de Validade — itens do módulo atual (farmácia ou almoxarifado) */}
+      {canManageRequests && !loadingExpiry && expiringItems.length > 0 && (() => {
         const bandLabel: Record<string, string> = { '1m': 'Vence em até 1 mês', '3m': 'Vence em até 3 meses', '6m': 'Vence em até 6 meses' }
         const bandColor: Record<string, { fg: string; bg: string; border: string }> = {
           '1m': { fg: '#ef4444', bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.3)' },
@@ -185,7 +199,7 @@ export function Dashboard({ module: activeModule }: DashboardProps) {
                 </div>
                 <div>
                   <h3 className="font-semibold" style={{ color: mode === 'dark' ? '#fca5a5' : '#991b1b' }}>
-                    Itens próximos de vencer — Farmácia
+                    Itens próximos de vencer — {expiryModuleLabel}
                   </h3>
                   <p className="text-sm" style={{ color: mode === 'dark' ? 'rgba(252,165,165,0.7)' : 'rgba(153,27,27,0.7)' }}>
                     {byBand['1m'] > 0 && <span className="font-bold">{byBand['1m']} em 1 mês</span>}
@@ -197,7 +211,7 @@ export function Dashboard({ module: activeModule }: DashboardProps) {
                 </div>
               </div>
               <button
-                onClick={() => navigate('/estoque/vencimentos')}
+                onClick={() => navigate(vencimentosHref)}
                 className="flex items-center gap-1 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
                 style={{
                   color: mode === 'dark' ? '#fca5a5' : '#991b1b',
@@ -259,7 +273,7 @@ export function Dashboard({ module: activeModule }: DashboardProps) {
               })}
               {expiringItems.length > 10 && (
                 <p className="text-center text-sm py-2" style={{ color: txtMut }}>
-                  + {expiringItems.length - 10} item(ns) · <button onClick={() => navigate('/estoque/vencimentos')} className="underline" style={{ color: mode === 'dark' ? '#fca5a5' : '#991b1b' }}>Ver todos</button>
+                  + {expiringItems.length - 10} item(ns) · <button onClick={() => navigate(vencimentosHref)} className="underline" style={{ color: mode === 'dark' ? '#fca5a5' : '#991b1b' }}>Ver todos</button>
                 </p>
               )}
             </div>

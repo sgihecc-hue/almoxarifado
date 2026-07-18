@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Search, Filter, Download, AlertCircle,
   Loader2, Package2, Pill, Building2, ArrowRightLeft,
@@ -25,14 +25,20 @@ import { formatRequestNumber } from '@/lib/utils/request'
 
 export function RequestProcessing() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { activeModule, activeStock } = useModule()
   const [requests, setRequests] = useState<Request[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'pharmacy' | 'warehouse'>('all')
 
-  // Derive the request type from the active module
-  const moduleRequestType = activeModule === 'almoxarifado' ? 'warehouse' : 'pharmacy'
+  // Derive the request type from the active module. Atendente não tem
+  // activeModule, então usamos o path (/almox/*) para não vazar farmácia
+  // para o perfil de almoxarifado. Fora do /almox mantém 'pharmacy'.
+  const moduleRequestType =
+    activeModule === 'almoxarifado' || location.pathname.startsWith('/almox')
+      ? 'warehouse'
+      : 'pharmacy'
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [showPeriodDialog, setShowPeriodDialog] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultDateRange())

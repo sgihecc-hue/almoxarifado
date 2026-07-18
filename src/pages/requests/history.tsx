@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { 
   Search, Filter, Download, AlertCircle, 
   Loader2, Package2, Pill, Building2, ArrowRightLeft,
@@ -23,12 +23,18 @@ import { useModule } from '@/contexts/module'
 
 export function RequestHistory() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { activeStock } = useModule()
   const [requests, setRequests] = useState<Request[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'approved' | 'rejected' | 'cancelled'>('all')
-  const [requestType, setRequestType] = useState<RequestType>('pharmacy')
+  // Default do tipo vem do path: no almox (/almox/*) começa em 'warehouse'
+  // para não mostrar farmácia ao perfil de almoxarifado (atendente não tem
+  // activeModule). Fora do /almox mantém 'pharmacy'.
+  const [requestType, setRequestType] = useState<RequestType>(
+    location.pathname.startsWith('/almox') ? 'warehouse' : 'pharmacy'
+  )
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [showPeriodDialog, setShowPeriodDialog] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultDateRange())

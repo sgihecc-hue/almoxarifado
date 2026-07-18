@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Search, Filter, Download, AlertCircle,
   Loader2, Building2, ArrowRightLeft,
@@ -23,6 +23,7 @@ import { formatRequestNumber } from '@/lib/utils/request'
 
 export function RequestInbox() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { activeModule, activeStock } = useModule()
   const [requests, setRequests] = useState<Request[]>([])
   const [loading, setLoading] = useState(true)
@@ -32,8 +33,13 @@ export function RequestInbox() {
   const [showPeriodDialog, setShowPeriodDialog] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultDateRange())
 
-  // Derive the request type from the active module
-  const moduleRequestType = activeModule === 'almoxarifado' ? 'warehouse' : 'pharmacy'
+  // Derive the request type from the active module. Atendente não tem
+  // activeModule, então caímos no path (/almox/*) para não vazar farmácia
+  // para o perfil de almoxarifado. Fora do /almox mantém 'pharmacy'.
+  const moduleRequestType =
+    activeModule === 'almoxarifado' || location.pathname.startsWith('/almox')
+      ? 'warehouse'
+      : 'pharmacy'
 
   useEffect(() => {
     loadRequests()

@@ -107,13 +107,15 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       title: 'Solicitações',
       module: 'almoxarifado',
       items: [
-        { name: 'Minhas Solicitações', icon: ClipboardList, href: '/requests', show: () => true },
+        // Paths /almox/* para as telas filtrarem só solicitações 'warehouse'
+        // (o path indica o módulo mesmo para atendente, que não tem activeModule).
+        { name: 'Minhas Solicitações', icon: ClipboardList, href: '/almox/requests', show: () => true },
         { name: 'Nova Solicitação', icon: ListChecks, href: '/requests/new', show: () => true },
         { name: 'Confirmar Recebimento', icon: PackageCheck, href: '/requests/receipt-confirmation', show: () => true },
-        { name: 'Caixa de Entrada', icon: InboxIcon, href: '/requests/inbox', show: (f) => f.canManageRequests },
-        { name: 'Em Processamento', icon: CheckSquare, href: '/requests/processing', show: (f) => f.canManageRequests },
-        { name: 'Histórico', icon: History, href: '/requests/history', show: (f) => f.canManageRequests },
-        { name: 'Pendências', icon: AlertCircle, href: '/requests/pending', show: (f) => f.canManageRequests },
+        { name: 'Caixa de Entrada', icon: InboxIcon, href: '/almox/requests/inbox', show: (f) => f.canManageRequests },
+        { name: 'Em Processamento', icon: CheckSquare, href: '/almox/requests/processing', show: (f) => f.canManageRequests },
+        { name: 'Histórico', icon: History, href: '/almox/requests/history', show: (f) => f.canManageRequests },
+        { name: 'Pendências', icon: AlertCircle, href: '/almox/requests/pending', show: (f) => f.canManageRequests },
       ],
     },
     // --- ESTOQUE ---
@@ -149,8 +151,11 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       items: [
         { name: 'Quebras e Avarias', icon: PackageMinus, href: '/estoque/saida-avulsa', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Devoluções', icon: Undo2, href: '/estoque/devolucao', show: () => true },
+        { name: 'Estorno', icon: Undo2, href: '/almox/estoque/estorno', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Empréstimos', icon: Handshake, href: '/estoque/emprestimos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
-        { name: 'Vencimentos', icon: CalendarX, href: '/estoque/vencimentos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Usa o path /almox/* para a tela de vencimentos saber que é o módulo
+        // almoxarifado e filtrar só itens 'warehouse' (evita mostrar farmácia).
+        { name: 'Vencimentos', icon: CalendarX, href: '/almox/estoque/vencimentos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
       ],
     },
     {

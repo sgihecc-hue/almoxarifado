@@ -64,17 +64,26 @@ export function MyRequests() {
     }
   }
 
+  // Isolamento de módulo: quando a tela é aberta por /almox/* (Minhas
+  // Solicitações do almoxarifado), mostra SÓ solicitações do tipo 'warehouse'.
+  // Impede que pedidos de farmácia apareçam no almox. Fora do /almox
+  // (farmácia e /requests genérico), nada muda — farmácia intacta.
+  const isWarehouse = location.pathname.startsWith('/almox')
+  const typeScopedRequests = isWarehouse
+    ? requests.filter(r => r.type === 'warehouse')
+    : requests
+
   // Se ha estoque ativo, mostra solicitacoes onde ele participa como
   // SOLICITANTE (fez o pedido) OU DESTINO (vai atender o pedido). Ex: Sat 1
   // pede pro CAF -> aparece tanto na "Minhas Solicitacoes" da Sat 1 quanto na
   // do CAF. O filtro anterior era so por solicitante e escondia da farmacia
   // que precisava atender.
   const scopedRequests = activeStock
-    ? requests.filter(r =>
+    ? typeScopedRequests.filter(r =>
         departmentBelongsToStock(r.department, activeStock) ||
         departmentBelongsToStock(r.destination_department, activeStock)
       )
-    : requests
+    : typeScopedRequests
 
   const getRequestStats = () => {
     const total = scopedRequests.length

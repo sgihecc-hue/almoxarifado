@@ -156,6 +156,10 @@ export function TVHistory({ type }: TVHistoryProps) {
   const [requests, setRequests] = useState<TVRequest[]>([])
   const [, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
+  // Restauração de scroll (só almox): guarda a posição da JANELA ao abrir um
+  // pedido e devolve ao voltar, pra não perder o lugar na lista. (A página
+  // rola na window, não num container interno.)
+  const SCROLL_KEY = `tv-history-scroll-${type}`
   const [themeMode, setThemeMode] = useState<'a' | 'b'>('a')
   const theme = themeMode === 'a' ? THEME_A : THEME_B
 
@@ -168,6 +172,34 @@ export function TVHistory({ type }: TVHistoryProps) {
   const [dateTo, setDateTo] = useState('')
 
   useEffect(() => { loadData() }, [])
+
+  // Desliga a restauração automática do navegador (que, em SPA, joga a página
+  // pro topo e atropela a nossa restauração manual). Só enquanto o histórico
+  // do almox está montado; devolve ao normal na saída.
+  useEffect(() => {
+    if (type !== 'warehouse') return
+    const prev = window.history.scrollRestoration
+    try { window.history.scrollRestoration = 'manual' } catch { /* noop */ }
+    return () => { try { window.history.scrollRestoration = prev } catch { /* noop */ } }
+  }, [type])
+
+  // Após os dados carregarem, restaura a posição salva (se houver) e limpa.
+  // Só no almox. Tenta algumas vezes (rAF + timeouts) pra garantir que a lista
+  // grande já renderizou e pra vencer qualquer reset tardio do navegador.
+  useEffect(() => {
+    if (loading || type !== 'warehouse') return
+    const saved = sessionStorage.getItem(SCROLL_KEY)
+    if (!saved) return
+    const y = Number(saved)
+    sessionStorage.removeItem(SCROLL_KEY)
+    const apply = () => window.scrollTo(0, y)
+    requestAnimationFrame(() => { apply(); requestAnimationFrame(apply) })
+    const t1 = setTimeout(apply, 80)
+    const t2 = setTimeout(apply, 250)
+    const t3 = setTimeout(apply, 600)
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, requests])
 
   async function loadData() {
     setLoading(true)
@@ -265,7 +297,12 @@ export function TVHistory({ type }: TVHistoryProps) {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <button onClick={() => navigate(`/tv/${type}`)} style={{
+          <button onClick={() => {
+            // Volta pra tela anterior (de onde veio) em vez de ir sempre pro
+            // painel. Fallback pro painel se não houver histórico de navegação.
+            if (window.history.length > 1) navigate(-1)
+            else navigate(`/tv/${type}`)
+          }} style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             width: 42, height: 42, borderRadius: 12, cursor: 'pointer',
             color: theme.headerText, background: theme.btnBg,
@@ -448,7 +485,18 @@ export function TVHistory({ type }: TVHistoryProps) {
             return (
               <div
                 key={request.id}
-                onClick={() => navigate(`/tv/${type}/${request.id}`)}
+                onClick={() => {
+                  // Salva a posição do scroll da janela pra restaurar ao voltar (almox).
+                  if (type === 'warehouse') {
+                    sessionStorage.setItem(SCROLL_KEY, String(window.scrollY))
+                  }
+                  navigate(
+                    // Histórico do almoxarifado abre o pedido em SOMENTE LEITURA
+                    // (ro=1) — consulta, sem poder atender. Atendimento é só no
+                    // painel principal. Farmácia mantém o comportamento atual.
+                    `/tv/${type}/${request.id}${type === 'warehouse' ? '?ro=1' : ''}`
+                  )
+                }}
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '80px 150px 1fr 1fr 1fr 100px 160px',
@@ -521,10 +569,13 @@ export function TVHistory({ type }: TVHistoryProps) {
       <style>{`
         @keyframes spin { to { transform: rotate(360deg) } }
         select option { background: #1a2e23; color: #fff; }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+        /* Barra de rolagem visível nos dois temas (a página rola na janela).
+           Cor neutra (slate) que aparece tanto no tema claro quanto no escuro. */
+        ::-webkit-scrollbar { width: 14px; }
+        ::-webkit-scrollbar-track { background: rgba(100,116,139,0.15); }
+        ::-webkit-scrollbar-thumb { background: rgba(71,85,105,0.7); border-radius: 7px; border: 3px solid transparent; background-clip: padding-box; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(51,65,85,0.9); background-clip: padding-box; }
+        html { scrollbar-width: auto; scrollbar-color: rgba(71,85,105,0.7) rgba(100,116,139,0.15); }
       `}</style>
     </div>
   )
