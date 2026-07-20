@@ -42,7 +42,9 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   }>>([])
   const isPharmacy = requestType === 'pharmacy'
 
-  const reloadLots = async () => {
+  // Carrega SÓ as opções de lote do dropdown. Pode ser chamada a qualquer
+  // momento — não mexe nas linhas que o usuário está preenchendo.
+  const carregarOpcoesLotes = async () => {
     const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
     if (!pharmacyItemId) return
     // FA4: só lotes DO LOCAL que atende a solicitação (CAF). Antes vinham
@@ -63,6 +65,14 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     const { data, error } = await q
     if (error) { console.error('lots', error); return }
     setLots((data || []) as LotOption[])
+  }
+
+  // Recarrega opções + as linhas do item a partir do banco.
+  // ATENÇÃO: sobrescreve o que estiver sendo digitado, então só deve rodar na
+  // montagem. (Chamá-la depois de gravar apagava a linha de lote manual que
+  // ainda estava sem quantidade — a tela "resetava".)
+  const reloadLots = async () => {
+    await carregarOpcoesLotes()
 
     // Lotes já informados neste item
     const { data: ril } = await supabase
@@ -96,27 +106,42 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
       let criouManual = false
       // Resolve lotes DIGITADOS na hora: cria/acha o registro real e pega o id.
-      const resolvidos: Array<{ expiry_tracking_id: string; quantity: number; batch_number?: string; expiry_date?: string }> = []
-      for (const l of novos) {
+      // Importante: a linha NUNCA é descartada aqui. Se ainda está incompleta
+      // (sem número, ou sem quantidade), ela apenas não é gravada — mas
+      // continua na tela pro usuário terminar de preencher.
+      const resolvidos: Array<{ expiry_tracking_id: string; quantity: number; batch_number?: string; expiry_date?: string } | null> = []
+      const idPorIndice: Record<number, string> = {}
+      for (let i = 0; i < novos.length; i++) {
+        const l = novos[i]
         let etid = l.expiry_tracking_id
-        let batch = l.batch_number
-        let expiry = l.expiry_date
         if (l.manual) {
-          if (!l.batch_number || !l.batch_number.trim()) continue // sem número: ignora a linha
+          if (!l.batch_number || !l.batch_number.trim()) { resolvidos.push(null); continue }
           const { data, error } = await supabase.rpc('farmacia_garantir_lote', {
             p_item_id: pharmacyItemId,
             p_batch_number: l.batch_number.trim(),
             p_expiry_date: l.expiry_date || null,
           })
-          if (error) { console.error('garantir_lote', error); continue }
+          if (error) { console.error('garantir_lote', error); resolvidos.push(null); continue }
           etid = data as string
+          idPorIndice[i] = etid
           criouManual = true
         }
-        resolvidos.push({ expiry_tracking_id: etid, quantity: l.quantity, batch_number: batch, expiry_date: expiry })
+        resolvidos.push({ expiry_tracking_id: etid, quantity: l.quantity, batch_number: l.batch_number, expiry_date: l.expiry_date })
+      }
+
+      // Guarda o id do lote recém-criado na própria linha, SEM recarregar a
+      // tela e sem tirar o modo "manual" (o usuário ainda pode estar digitando
+      // a validade). Só preenche onde ainda não havia id.
+      if (criouManual) {
+        setItemLots((prev) => prev.map((x, i) =>
+          idPorIndice[i] && !x.expiry_tracking_id
+            ? { ...x, expiry_tracking_id: idPorIndice[i] }
+            : x))
       }
 
       await supabase.from('request_item_lots').delete().eq('request_item_id', item.id)
-      const validos = resolvidos.filter((l) => l.expiry_tracking_id && l.quantity > 0)
+      const validos = resolvidos.filter((l): l is NonNullable<typeof l> =>
+        !!l && !!l.expiry_tracking_id && l.quantity > 0)
       if (validos.length > 0) {
         await supabase.from('request_item_lots').insert(
           validos.map((l) => {
@@ -133,8 +158,10 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       }
       // Mantém o campo antigo coerente (1º lote) para telas/relatórios legados.
       await saveField('expiry_tracking_id', validos[0]?.expiry_tracking_id ?? null)
-      // Se criou lote novo, recarrega pra ele aparecer no dropdown/validade.
-      if (criouManual) await reloadLots()
+      // Só atualiza as OPÇÕES de lote (pro lote novo aparecer no dropdown e na
+      // coluna Validade). Não recarrega as linhas — era isso que apagava o
+      // lote manual em digitação.
+      if (criouManual) await carregarOpcoesLotes()
     } catch (e) {
       console.error('Erro ao salvar lotes:', e)
     }
@@ -252,7 +279,15 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                         <input
                           type="text" value={l.batch_number || ''} placeholder="Nº do lote"
                           onChange={(e) => setItemLots(itemLots.map((x, i) => i === idx ? { ...x, batch_number: e.target.value } : x))}
-                          onBlur={() => saveLots(itemLots)}
+                          onBlur={() => {
+                            // Já preenche a qtd com o que falta pro fornecido,
+                            // senão a linha ficaria com 0 e não seria gravada.
+                            const novos = (l.batch_number || '').trim()
+                              ? preencherQtdFaltante(itemLots, idx)
+                              : itemLots
+                            setItemLots(novos)
+                            saveLots(novos)
+                          }}
                           className="flex-1 min-w-[80px] h-7 px-1 text-xs rounded border border-blue-300"
                         />
                         <input
