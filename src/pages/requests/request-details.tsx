@@ -141,6 +141,40 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   }
 
   const somaLotes = itemLots.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
+
+  // --- Sincronia Qtd Fornecida <-> quantidades dos lotes -------------------
+  // Antes era preciso digitar a quantidade DUAS vezes (uma na Qtd Fornecida e
+  // outra na linha do lote). Agora:
+  //  - ao escolher um lote, a qtd dele já vem com o que falta pra fechar o
+  //    fornecido (preencherQtdFaltante);
+  //  - ao digitar a qtd de um lote, a Qtd Fornecida vira a soma dos lotes
+  //    (sincronizarFornecido).
+  // Resultado: 1 lote => digita uma vez; N lotes => uma vez por lote.
+
+  // Preenche a qtd da linha `idx` com o que falta pra bater o fornecido.
+  // Não sobrescreve uma quantidade já digitada pelo usuário.
+  const preencherQtdFaltante = (
+    linhas: typeof itemLots,
+    idx: number,
+  ): typeof itemLots => {
+    const fornecido = Number(suppliedQty) || 0
+    if (!fornecido) return linhas
+    if ((Number(linhas[idx]?.quantity) || 0) > 0) return linhas
+    const outros = linhas.reduce(
+      (s, l, i) => (i === idx ? s : s + (Number(l.quantity) || 0)), 0)
+    const falta = Math.max(0, fornecido - outros)
+    if (falta <= 0) return linhas
+    return linhas.map((x, i) => (i === idx ? { ...x, quantity: falta } : x))
+  }
+
+  // Qtd Fornecida passa a refletir a soma dos lotes informados.
+  const sincronizarFornecido = async (linhas: typeof itemLots) => {
+    const soma = linhas.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
+    if (soma > 0 && soma !== Number(suppliedQty)) {
+      setSuppliedQty(soma)
+      await saveField('supplied_quantity', soma)
+    }
+  }
   // Observations stored as lines separated by \n
   const [observations, setObservations] = useState<string[]>(() => {
     const raw = item.observation || ''
@@ -186,7 +220,16 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
               const val = e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0)
               setSuppliedQty(val)
             }}
-            onBlur={() => saveField('supplied_quantity', suppliedQty)}
+            onBlur={async () => {
+              await saveField('supplied_quantity', suppliedQty)
+              // Se já existe UMA linha de lote sem quantidade, ela recebe o
+              // fornecido — evita ter que digitar o mesmo número de novo.
+              if (itemLots.length === 1 && !(Number(itemLots[0].quantity) || 0)) {
+                const novos = preencherQtdFaltante(itemLots, 0)
+                setItemLots(novos)
+                saveLots(novos)
+              }
+            }}
             className="w-20 text-center mx-auto h-8 text-sm"
           />
         ) : (
@@ -227,8 +270,13 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                             setItemLots(itemLots.map((x, i) => i === idx ? { expiry_tracking_id: '', quantity: x.quantity, manual: true, batch_number: '', expiry_date: '' } : x))
                             return
                           }
-                          const novos = itemLots.map((x, i) =>
+                          const base = itemLots.map((x, i) =>
                             i === idx ? { ...x, expiry_tracking_id: e.target.value } : x)
+                          // Já preenche a qtd deste lote com o que falta pra
+                          // fechar o fornecido (não precisa redigitar).
+                          const novos = e.target.value
+                            ? preencherQtdFaltante(base, idx)
+                            : base
                           setItemLots(novos); saveLots(novos)
                         }}
                         className="flex-1 min-w-[150px] h-7 px-1 text-xs rounded border border-gray-300 bg-white"
@@ -251,7 +299,11 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                         const q = Math.max(0, parseInt(e.target.value) || 0)
                         setItemLots(itemLots.map((x, i) => i === idx ? { ...x, quantity: q } : x))
                       }}
-                      onBlur={() => saveLots(itemLots)}
+                      onBlur={async () => {
+                        // A Qtd Fornecida passa a ser a soma dos lotes.
+                        await sincronizarFornecido(itemLots)
+                        saveLots(itemLots)
+                      }}
                       className="w-14 h-7 px-1 text-xs text-center rounded border border-gray-300"
                     />
                     <button
