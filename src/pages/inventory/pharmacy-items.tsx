@@ -32,7 +32,7 @@ interface PharmacyItemsProps {
   locationName?: string
 }
 
-export function PharmacyItems({ locationId: _locationId, locationName }: PharmacyItemsProps = {}) {
+export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps = {}) {
   const { user } = useAuth()
   const { activeStock } = useModule()
   const navigate = useNavigate()
@@ -85,8 +85,10 @@ export function PharmacyItems({ locationId: _locationId, locationName }: Pharmac
   }
 
   useEffect(() => {
+    // Recarrega ao trocar de estoque: os lotes são filtrados por local.
     loadItems()
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationId])
 
   async function loadItems() {
     try {
@@ -140,17 +142,26 @@ export function PharmacyItems({ locationId: _locationId, locationName }: Pharmac
     }
   }
 
-  // Busca todos os lotes ativos (saldo > 0) e agrupa por item_id, ordenados por validade (FEFO).
+  // Busca os lotes ativos (saldo > 0) DESTE LOCAL e agrupa por item_id,
+  // ordenados por validade (FEFO).
+  //
+  // FA4: o filtro por location_id é essencial. Sem ele a tela do Satélite
+  // mostrava o lote/validade de um lote que está no CAF, mesmo com o item
+  // zerado no satélite — dando a impressão de que havia lote ali.
+  // Sem locationId (visão geral de farmácia, fora de um estoque específico)
+  // continua listando os lotes de todos os locais.
   async function loadAllLots(): Promise<Map<string, LotRow[]>> {
     try {
       const result = new Map<string, LotRow[]>()
       // Paginação simples — 5000 lotes deve ser suficiente para o estoque atual.
-      const { data, error } = await supabase
+      let query = supabase
         .from('expiry_tracking')
         .select('item_id, batch_number, expiry_date, current_quantity')
         .gt('current_quantity', 0)
         .order('expiry_date', { ascending: true, nullsFirst: false })
         .limit(5000)
+      if (locationId) query = query.eq('location_id', locationId)
+      const { data, error } = await query
       if (error) throw error
       for (const row of (data || []) as Array<LotRow & { item_id: string }>) {
         const list = result.get(row.item_id) ?? []
@@ -468,8 +479,13 @@ export function PharmacyItems({ locationId: _locationId, locationName }: Pharmac
                       const lots = lotsByItem.get(item.id) ?? []
                       const selectedIdx = selectedLotByItem.get(item.id) ?? 0
                       const currentLot = lots[selectedIdx] ?? lots[0]
-                      const batchDisplay = currentLot?.batch_number || (item as any).batch_number || '-'
-                      const expiryDisplay = currentLot?.expiry_date || item.expiry_date || null
+                      // SEM fallback para item.batch_number/item.expiry_date:
+                      // esses campos legados do item guardam o último lote já
+                      // usado e continuavam sendo exibidos mesmo com o item
+                      // zerado (sem nenhum lote com saldo neste local), dando a
+                      // impressão de que havia lote. Item zerado agora mostra "—".
+                      const batchDisplay = currentLot?.batch_number || '—'
+                      const expiryDisplay = currentLot?.expiry_date || null
                       return (
                         <>
                           <td className="px-2 py-2 text-xs text-gray-600 whitespace-nowrap">
