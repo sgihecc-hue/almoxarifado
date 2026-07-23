@@ -70,7 +70,11 @@ export function ModuleSelector() {
       }
       if (modulo === 'farmacia') {
         // Vai direto pra escolha de estoque (CAF / Satélites).
-        setActiveModule('farmacia')
+        // NÃO chamar setActiveModule aqui: esta tela só é renderizada
+        // enquanto não há módulo ativo (MainLayout: isModuleUser &&
+        // !activeModule). Definir o módulo agora faria a própria tela sumir e
+        // o app cair no dashboard. Quem define é o selectPharmacyStock, ao
+        // escolher o estoque.
         setView('pharmacy')
       }
       setVerificandoSetor(false)
