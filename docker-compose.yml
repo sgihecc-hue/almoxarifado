@@ -1,0 +1,31 @@
+# Sobe o app do mesmo jeito que a VPS vai subir (nginx servindo o build),
+# para você conferir ANTES de mexer no EasyPanel.
+#
+#   docker compose up --build
+#   depois abra http://localhost:8080
+#
+# As credenciais vêm do .env da raiz (as mesmas que você já usa no dev).
+# Elas entram como BUILD ARGS porque o Vite injeta VITE_* no bundle em tempo
+# de build — não são lidas em tempo de execução.
+#
+# ATENÇÃO: por padrão isto aponta para o Supabase que estiver no seu .env.
+# Se for o de PRODUÇÃO, o que você fizer aqui mexe em dados reais. Para testar
+# contra o ambiente de teste, rode assim:
+#   VITE_SUPABASE_URL=https://xcmczyoyffivxnveldpq.supabase.co \
+#   VITE_SUPABASE_ANON_KEY=<anon do teste> docker compose up --build
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+    ports:
+      - "8080:80"
+    environment:
+      # Origem usada na CSP (connect-src/img-src). O wss:// é derivado dela
+      # pelo docker/15-derive-ws.envsh na subida do container.
+      SUPABASE_ORIGIN: ${VITE_SUPABASE_URL}
+    restart: unless-stopped

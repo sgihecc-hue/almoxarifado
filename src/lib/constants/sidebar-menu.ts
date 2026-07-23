@@ -27,7 +27,6 @@ import {
   CalendarClock,
   Clock,
   BookOpen,
-  AlertOctagon,
   Shield,
   PackageCheck,
 } from 'lucide-react'
@@ -63,6 +62,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
   const stock = ctx?.pharmacyStock ?? null
   // Dispensação só ocorre nas farmácias satélites — não no CAF.
   const isSat = !!stock && stock.code !== 'CAF'
+  // Cadastros (medicamentos, fornecedores, prescritores...) são centralizados:
+  // só aparecem no CAF. Satélite opera com o cadastro feito lá.
+  const isCaf = !!stock && stock.code === 'CAF'
   return [
     // --- PRINCIPAL: dashboard + painéis de TV numa seção só, compacta ---
     {
@@ -97,8 +99,10 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Solicitações', icon: ClipboardList, href: '/requests', show: () => true },
         { name: 'Nova Solicitação', icon: ListChecks, href: '/requests/new', show: () => true },
         { name: 'Confirmar Recebimento', icon: PackageCheck, href: '/requests/receipt-confirmation', show: () => true },
-        { name: 'Caixa de Entrada', icon: InboxIcon, href: '/requests/inbox', show: (f) => f.canManageRequests },
-        { name: 'Em Processamento', icon: CheckSquare, href: '/requests/processing', show: (f) => f.canManageRequests },
+        // "Caixa de Entrada" e "Em Processamento" removidas da FARMÁCIA a
+        // pedido do usuário — o atendimento é feito por "Solicitações". As
+        // equivalentes do ALMOXARIFADO (/almox/requests/*) continuam, porque
+        // lá o fluxo é sequencial (aprovar → processar → entregar).
         { name: 'Histórico', icon: History, href: '/requests/history', show: (f) => f.canManageRequests },
         { name: 'Pendências', icon: AlertCircle, href: '/requests/pending', show: (f) => f.canManageRequests },
       ],
@@ -187,7 +191,6 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       module: 'farmacia',
       items: [
         { name: 'Dispensações', icon: Syringe, href: '/dispensacao', show: (f) => isSat && f.canManageRequests },
-        { name: 'Fila de Aprovação', icon: Clock, href: '/dispensacao/fila-aprovacao', show: (f) => isSat && f.canManageRequests },
         { name: 'Histórico', icon: History, href: '/dispensacao/historico', show: (f) => isSat && f.canManageRequests },
       ],
     },
@@ -195,16 +198,17 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
     {
       title: 'Cadastros',
       module: 'farmacia',
+      // Seção inteira só no CAF (ver isCaf).
       items: [
         // "Catálogo" -> "Medicamentos" (ícone de comprimido): o nome antigo não
         // dizia do que era o catálogo. A rota segue /farmacia/catalogo.
-        { name: 'Medicamentos', icon: Pill, href: '/farmacia/catalogo', show: (f) => f.canManageRequests },
-        { name: 'Fornecedores', icon: Building2, href: '/farmacia/fornecedores', show: (f) => f.canManageRequests },
-        { name: 'Unidades Externas', icon: Building2, href: '/farmacia/unidades-externas', show: (f) => f.canManageRequests },
-        { name: 'Prescritores', icon: Stethoscope, href: '/farmacia/prescritores', show: (f) => f.canManageRequests },
-        { name: 'Pacientes', icon: UsersRound, href: '/farmacia/pacientes', show: (f) => f.canManageRequests },
+        { name: 'Medicamentos', icon: Pill, href: '/farmacia/catalogo', show: (f) => isCaf && f.canManageRequests },
+        { name: 'Fornecedores', icon: Building2, href: '/farmacia/fornecedores', show: (f) => isCaf && f.canManageRequests },
+        { name: 'Unidades Externas', icon: Building2, href: '/farmacia/unidades-externas', show: (f) => isCaf && f.canManageRequests },
+        { name: 'Prescritores', icon: Stethoscope, href: '/farmacia/prescritores', show: (f) => isCaf && f.canManageRequests },
+        { name: 'Pacientes', icon: UsersRound, href: '/farmacia/pacientes', show: (f) => isCaf && f.canManageRequests },
         // Gestor ajusta setor e nível (Solicitante/Atendente/Farmacêutico) dos colaboradores.
-        { name: 'Colaboradores', icon: Users, href: '/colaboradores', show: (f) => f.isManager || f.isAdmin },
+        { name: 'Colaboradores', icon: Users, href: '/colaboradores', show: (f) => isCaf && (f.isManager || f.isAdmin) },
       ],
     },
     // --- CONTROLADOS + CCIH (farmacia — regulatório junto pra reduzir secoes) ---
@@ -213,10 +217,8 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       module: 'farmacia',
       items: [
         { name: 'Livro de Controlados', icon: BookOpen, href: '/farmacia/livro-controlados', show: (f) => f.canManageRequests },
-        { name: 'Notificação de Receita', icon: FileText, href: '/farmacia/notificacao-receita', show: (f) => f.canManageRequests },
         { name: 'BMPO', icon: BarChart3, href: '/farmacia/bmpo', show: (f) => f.canManageRequests },
         { name: 'Perdas', icon: PackageMinus, href: '/farmacia/perdas', show: (f) => f.canManageRequests },
-        { name: 'Talidomida', icon: AlertOctagon, href: '/farmacia/talidomida', show: (f) => f.canManageRequests },
         { name: 'Antimicrobianos', icon: Shield, href: '/farmacia/antimicrobianos', show: (f) => f.canManageRequests },
         { name: 'Intervenção Farmacêutica', icon: Stethoscope, href: '/farmacia/intervencao-farmaceutica', show: (f) => f.canManageRequests },
       ],
