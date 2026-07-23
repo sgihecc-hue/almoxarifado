@@ -1,0 +1,8 @@
+# O repositório é editado no Windows, onde o git converte para CRLF. Dentro do
+# container (Linux) um "\r" no fim da linha quebra scripts de shell — o erro
+# aparece como algo do tipo "not found" ou "invalid option" e é difícil de
+# diagnosticar. Estes arquivos precisam ficar com LF sempre.
+*.sh        text eol=lf
+*.envsh     text eol=lf
+Dockerfile  text eol=lf
+*.template  text eol=lf
