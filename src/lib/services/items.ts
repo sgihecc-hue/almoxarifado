@@ -74,6 +74,9 @@ export interface Item {
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
+  // Consumo médio mensal informado no cadastro (un/mês). Null/undefined =>
+  // a tela cai no cálculo por consumption_history.
+  avg_monthly_consumption?: number | null
   allowed_department_ids?: string[]
 }
 
@@ -134,6 +137,8 @@ interface CreateItemData {
     | 'comprimidos' | 'injetaveis' | 'solucoes_orais' | 'topicos' | 'aerosol'
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
+  // Consumo médio mensal informado (un/mês) — só farmácia.
+  avg_monthly_consumption?: number | null
 }
 
 interface PaginationOptions {
@@ -172,6 +177,7 @@ interface UpdateItemData {
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
+  avg_monthly_consumption?: number | null
 }
 
 export interface ImportItemData {
@@ -1054,6 +1060,17 @@ class ItemsService {
 
       if (data.last_purchase_price !== undefined && data.last_purchase_price !== null) {
         insertData.last_purchase_price = data.last_purchase_price
+      }
+
+      // Consumo médio mensal informado (só farmácia). NaN vem de input vazio
+      // com valueAsNumber, então filtramos.
+      if (
+        table === 'pharmacy_items' &&
+        data.avg_monthly_consumption !== undefined &&
+        data.avg_monthly_consumption !== null &&
+        !Number.isNaN(data.avg_monthly_consumption)
+      ) {
+        insertData.avg_monthly_consumption = data.avg_monthly_consumption
       }
 
       if (data.reference_price !== undefined && data.reference_price !== null) {

@@ -44,6 +44,10 @@ const itemSchema = z.object({
   max_stock: optionalNumber,
   last_purchase_price: optionalNumber,
   reference_price: optionalNumber,
+  // Consumo médio mensal informado pela farmácia (unidades/mês). Quando
+  // preenchido, é o que a tela usa na coluna "Consumo" e no ponto de pedido;
+  // vazio mantém o cálculo pelo histórico.
+  avg_monthly_consumption: optionalNumber,
   // Farmacia (so usados quando type='pharmacy')
   // medication_classes: classificação múltipla. O service grava o array e
   // sincroniza medication_class (single) com a primeira pra back-compat.
@@ -155,6 +159,8 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
           ? data.controlled_subclass : null,
         presentation: type === 'pharmacy' ? data.presentation : undefined,
         padronizado: type === 'pharmacy' ? !!data.padronizado : undefined,
+        avg_monthly_consumption: type === 'pharmacy'
+          ? data.avg_monthly_consumption : undefined,
       }, type)
 
       reset()
@@ -347,6 +353,24 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
                 placeholder="0"
               />
             </div>
+
+            {type === 'pharmacy' && (
+              <div>
+                <Label htmlFor="avg_monthly_consumption">Consumo Médio Mensal</Label>
+                <Input
+                  id="avg_monthly_consumption"
+                  type="number"
+                  min="0"
+                  {...register('avg_monthly_consumption', { valueAsNumber: true })}
+                  className="mt-1"
+                  placeholder="Ex: 120"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Quantidade consumida por mês. Usada na coluna “Consumo” e no
+                  cálculo do ponto de pedido. Deixe vazio para calcular pelo histórico.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

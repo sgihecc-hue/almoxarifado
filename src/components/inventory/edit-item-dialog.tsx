@@ -41,6 +41,11 @@ const schema = z.object({
     (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? 0 : Number(v)),
     z.number().min(0, 'Estoque deve ser maior ou igual a 0'),
   ),
+  // Consumo médio mensal informado (un/mês). Vazio => volta a calcular pelo histórico.
+  avg_monthly_consumption: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? null : Number(v)),
+    z.number().min(0).nullable(),
+  ).optional(),
   batch_number: z.string().optional(),
   expiry_date: z.string().optional(),
   last_purchase_price: optionalNumber,
@@ -90,6 +95,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       category: item.category,
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
+      avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
       current_stock: item.current_stock ?? 0,
       batch_number: (item as any).batch_number || '',
       expiry_date: item.expiry_date || '',
@@ -109,6 +115,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       category: item.category,
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
+      avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
       current_stock: item.current_stock ?? 0,
       batch_number: (item as any).batch_number || '',
       expiry_date: item.expiry_date || '',
@@ -159,6 +166,9 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
         category: data.category as ItemCategory,
         unit: data.unit as UnitType,
         min_stock: data.min_stock,
+        ...(type === 'pharmacy'
+          ? { avg_monthly_consumption: data.avg_monthly_consumption ?? null }
+          : {}),
         current_stock: data.current_stock,
         batch_number: data.batch_number || null,
         expiry_date: data.expiry_date || null,
@@ -332,6 +342,22 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
                 className="mt-1"
               />
             </div>
+            {type === 'pharmacy' && (
+              <div>
+                <Label htmlFor="avg_monthly_consumption">Consumo Médio Mensal</Label>
+                <Input
+                  id="avg_monthly_consumption"
+                  type="number"
+                  min="0"
+                  {...register('avg_monthly_consumption', { valueAsNumber: true })}
+                  className="mt-1"
+                  placeholder="Ex: 120"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Un/mês. Vazio = calcular pelo histórico.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">

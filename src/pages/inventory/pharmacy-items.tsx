@@ -231,15 +231,23 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     return 0
   })
 
-  // Ponto de pedido — mesma conta usada na coluna "Pto. Sup." da tabela.
-  // Fica aqui (e não solto no map) pra o filtro e a tabela nunca divergirem.
-  const pontoDePedido = (item: Item): number => {
+  // Consumo médio mensal: o valor INFORMADO no cadastro tem prioridade; sem
+  // ele, cai na média do histórico (comportamento anterior).
+  const consumoMensal = (item: Item): number => {
+    const informado = item.avg_monthly_consumption
+    if (informado !== undefined && informado !== null && !Number.isNaN(informado)) {
+      return Number(informado)
+    }
     const history = Array.isArray(item.consumption_history) ? item.consumption_history : []
-    const avg = history.length
+    return history.length
       ? history.reduce((acc, curr) => acc + (curr?.quantity || 0), 0) / history.length
       : 0
-    return Math.ceil((avg / 30) * (item.lead_time_days || 7) * 1.5)
   }
+
+  // Ponto de pedido — mesma conta usada na coluna "Pto. Sup." da tabela.
+  // Fica aqui (e não solto no map) pra o filtro e a tabela nunca divergirem.
+  const pontoDePedido = (item: Item): number =>
+    Math.ceil((consumoMensal(item) / 30) * (item.lead_time_days || 7) * 1.5)
 
   // Status do item no LOCAL atual — mesma regra do badge da coluna Status,
   // pra o filtro casar exatamente com o que aparece na tela.
@@ -491,14 +499,10 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredItems.map((item) => {
-                const history = Array.isArray(item.consumption_history) ? item.consumption_history : []
-                const avgConsumption = history.length
-                  ? history.reduce((acc, curr) => acc + (curr?.quantity || 0), 0) / history.length
-                  : 0
-
-                const supplyPoint = Math.ceil(
-                  (avgConsumption / 30) * (item.lead_time_days || 7) * 1.5
-                )
+                // Usa o consumo informado no cadastro quando existir; senão, a
+                // média do histórico. Mesma função do filtro, pra não divergir.
+                const avgConsumption = consumoMensal(item)
+                const supplyPoint = pontoDePedido(item)
                 
                 return (
                   <tr key={item.id} className="hover:bg-gray-50">
