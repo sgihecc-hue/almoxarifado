@@ -1,0 +1,8 @@
+#!/bin/sh
+# Deriva a origem WebSocket do Supabase (Realtime) a partir da origem HTTPS.
+# Ex.: https://abc.supabase.co  ->  wss://abc.supabase.co
+#
+# A extensão .envsh é proposital: o entrypoint da imagem oficial do nginx
+# SOURCEIA arquivos .envsh (e apenas executa os .sh), então o export aqui fica
+# visível para o 20-envsubst-on-templates.sh, que monta o nginx.conf com a CSP.
+export SUPABASE_ORIGIN_WS="$(echo "$SUPABASE_ORIGIN" | sed -e 's#^https://#wss://#' -e 's#^http://#ws://#')"

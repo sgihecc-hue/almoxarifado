@@ -1,0 +1,48 @@
+# Substitui o que o vercel.json fazia (rewrites + headers). Processado por
+# envsubst na subida do container: ${SUPABASE_ORIGIN} vem do ambiente.
+#
+# IMPORTANTE: só ${SUPABASE_ORIGIN} é substituído. Variáveis do próprio nginx
+# ($uri, $host...) usam $ e não são tocadas porque a imagem oficial só troca
+# as que existem no ambiente — mantenha nomes distintos.
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # O TLS é terminado pelo proxy do EasyPanel (Traefik), então aqui é HTTP.
+    # HSTS continua sendo enviado porque quem fala com o navegador é o proxy
+    # via HTTPS.
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=()" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: ${SUPABASE_ORIGIN}; connect-src 'self' ${SUPABASE_ORIGIN} ${SUPABASE_ORIGIN_WS}; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # Assets com hash no nome podem ser cacheados agressivamente.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # O index.html NUNCA pode ser cacheado: é ele que aponta pro bundle novo
+    # depois de cada deploy.
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
+
+    # Fallback de SPA — equivalente ao rewrite do vercel.json.
+    # Sem isto, dar F5 em /requests/123 devolve 404, porque não existe esse
+    # arquivo em disco: quem resolve a rota é o React Router, no navegador.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -196,7 +196,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       title: 'Cadastros',
       module: 'farmacia',
       items: [
-        { name: 'Catálogo', icon: BookOpen, href: '/farmacia/catalogo', show: (f) => f.canManageRequests },
+        // "Catálogo" -> "Medicamentos" (ícone de comprimido): o nome antigo não
+        // dizia do que era o catálogo. A rota segue /farmacia/catalogo.
+        { name: 'Medicamentos', icon: Pill, href: '/farmacia/catalogo', show: (f) => f.canManageRequests },
         { name: 'Fornecedores', icon: Building2, href: '/farmacia/fornecedores', show: (f) => f.canManageRequests },
         { name: 'Unidades Externas', icon: Building2, href: '/farmacia/unidades-externas', show: (f) => f.canManageRequests },
         { name: 'Prescritores', icon: Stethoscope, href: '/farmacia/prescritores', show: (f) => f.canManageRequests },
