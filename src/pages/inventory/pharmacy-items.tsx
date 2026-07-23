@@ -746,7 +746,11 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                     Lotes — {lotModalItem.name}
                   </h2>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    Estoque total: <strong>{lotModalItem.current_stock} {lotModalItem.unit}</strong> · {lots.length} lote(s) rastreado(s)
+                    {/* Saldo DO LOCAL (item_stocks), não o current_stock global
+                        do cadastro — este último mostrava, por exemplo, "-1 Un"
+                        no Satélite enquanto a linha da tabela exibia "1 Un". */}
+                    Estoque{activeStock ? ` no ${activeStock.label}` : ' total'}:{' '}
+                    <strong>{getLocalQty(lotModalItem)} {lotModalItem.unit}</strong> · {lots.length} lote(s) rastreado(s)
                   </p>
                 </div>
                 <button
