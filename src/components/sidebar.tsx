@@ -208,7 +208,9 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
   function handleSwitchModule() {
     setActiveModule(null)
-    navigate('/')
+    // escolherModulo avisa o seletor que a troca foi PEDIDA pelo usuário, pra
+    // ele não reaplicar o atalho por setor e mandar de volta pro mesmo módulo.
+    navigate('/', { state: { escolherModulo: true } })
     onClose()
   }
 

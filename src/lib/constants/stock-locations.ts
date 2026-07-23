@@ -46,3 +46,28 @@ export function departmentBelongsToStock(departmentName: string | null | undefin
   if (stock.code === 'CAF' && d.startsWith('caf')) return true
   return false
 }
+
+/**
+ * Módulo "natural" de um setor, usado só como ATALHO de entrada: quem é
+ * lotado numa farmácia (CAF/Satélites) entra na Farmácia e quem é do
+ * Almoxarifado entra no Almoxarifado, sem passar pela tela de escolha.
+ *
+ * A regra é ESTRITA de propósito: setor administrativo (Supervisão
+ * Administrativa, TI, etc.) devolve null e continua vendo o seletor, porque
+ * essas pessoas transitam nos dois módulos.
+ *
+ * Isto NÃO restringe acesso — gestor/admin continuam podendo trocar de módulo
+ * pelo botão da sidebar.
+ */
+export function moduloDoSetor(
+  departmentName: string | null | undefined,
+): 'farmacia' | 'almoxarifado' | null {
+  if (!departmentName) return null
+  const d = departmentName.trim().toLowerCase()
+  if (d === 'almoxarifado') return 'almoxarifado'
+  // "caf (central de abastecimento farmaceutico)" e os satélites
+  // ("Farmácia Satélite 1º Andar"...). Casamos por "farm" pra não depender do
+  // acento de "Farmácia" — nenhum outro setor começa com esse prefixo.
+  if (d.startsWith('caf') || d.startsWith('farm')) return 'farmacia'
+  return null
+}

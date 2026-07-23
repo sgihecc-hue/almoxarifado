@@ -1,18 +1,33 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { useModule } from '@/contexts/module'
 import { useTheme } from '@/contexts/theme'
+import { supabase } from '@/lib/supabase'
 import { Pill, Package2, ArrowRight, ArrowLeft, Building2, Warehouse } from 'lucide-react'
-import { PHARMACY_STOCKS, type PharmacyStock } from '@/lib/constants/stock-locations'
+import { PHARMACY_STOCKS, moduloDoSetor, type PharmacyStock } from '@/lib/constants/stock-locations'
 
 export function ModuleSelector() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user } = useAuth()
   const { setActiveModule, setActiveStock } = useModule()
   const { mode } = useTheme()
 
   const firstName = user?.full_name?.split(' ')[0] || 'Usuário'
+
+  // Atalho por setor: quem é lotado numa farmácia já cai na escolha de estoque
+  // e quem é do Almoxarifado entra direto no módulo dele. Setor administrativo
+  // (Supervisão Administrativa, TI...) continua vendo os dois cartões.
+  //
+  // Quando o usuário clica em "trocar módulo" na sidebar, ela navega pra "/"
+  // com state.escolherModulo = true — aí o atalho NÃO roda, senão ele voltaria
+  // pro mesmo módulo num loop e a troca ficaria impossível.
+  const trocaExplicita = (location.state as { escolherModulo?: boolean } | null)?.escolherModulo === true
+  // Só aplica o atalho uma vez: depois disso o usuário navega à vontade
+  // (ex.: "Voltar aos módulos" não pode ser desfeito pelo atalho).
+  const atalhoAplicado = useRef(false)
+  const [verificandoSetor, setVerificandoSetor] = useState(!trocaExplicita)
 
   const glass = mode === 'dark' ? 'rgba(30, 46, 38, 0.7)' : 'rgba(255, 255, 255, 0.7)'
   const textColor = mode === 'dark' ? '#e8f0ec' : '#1a2a22'
@@ -32,6 +47,41 @@ export function ModuleSelector() {
     setActiveModule('farmacia')
     setActiveStock(stock)
     navigate(`/inventory/stock/${stock.id}`)
+  }
+
+  useEffect(() => {
+    if (trocaExplicita || atalhoAplicado.current) { setVerificandoSetor(false); return }
+    if (!user) return // auth ainda carregando
+    if (!user.department_id) { setVerificandoSetor(false); return }
+
+    let cancelado = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('departments')
+        .select('name')
+        .eq('id', user.department_id)
+        .maybeSingle()
+      if (cancelado) return
+      atalhoAplicado.current = true
+      const modulo = moduloDoSetor((data as { name?: string } | null)?.name)
+      if (modulo === 'almoxarifado') {
+        selectAlmoxarifado()
+        return
+      }
+      if (modulo === 'farmacia') {
+        // Vai direto pra escolha de estoque (CAF / Satélites).
+        setActiveModule('farmacia')
+        setView('pharmacy')
+      }
+      setVerificandoSetor(false)
+    })()
+    return () => { cancelado = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.department_id, trocaExplicita])
+
+  // Evita piscar os dois cartões antes de saber o setor.
+  if (verificandoSetor) {
+    return <div style={{ padding: 40, textAlign: 'center', color: mutedColor }}>Carregando…</div>
   }
 
   const cardBase: React.CSSProperties = {
