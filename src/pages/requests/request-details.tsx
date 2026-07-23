@@ -44,15 +44,12 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
 
   // Carrega SÓ as opções de lote do dropdown. Pode ser chamada a qualquer
   // momento — não mexe nas linhas que o usuário está preenchendo.
-  const carregarOpcoesLotes = async () => {
+  const carregarOpcoesLotes = async (idsEmUso: string[] = []) => {
     const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
     if (!pharmacyItemId) return
     // FA4: só lotes DO LOCAL que atende a solicitação (CAF). Antes vinham
     // os lotes do item em QUALQUER estoque — por isso o satélite mostrava
     // lote do CAF. O filtro de local resolve isso.
-    // NÃO filtramos por saldo > 0: com o FA5 o item pode sair sem saldo
-    // (existe no físico, não foi lançado) e mesmo assim precisa ter o lote
-    // atribuído. O saldo aparece ao lado de cada lote pra ficar explícito.
     const { data: caf } = await supabase
       .from('stock_locations').select('id').eq('code', 'CAF').maybeSingle()
     let q = supabase
@@ -62,6 +59,18 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       .order('expiry_date', { ascending: true, nullsFirst: false }) // FEFO
     const cafId = (caf as { id?: string } | null)?.id
     if (cafId) q = q.eq('location_id', cafId)
+
+    // Só lotes COM saldo. Lote zerado poluía a lista (o item podia ter dezenas
+    // de lotes mortos) e não serve pra atender: se o lote físico não está no
+    // sistema, o atendente usa "Digitar lote novo". Os zerados continuam no
+    // banco para auditoria, apenas não aparecem aqui.
+    // Exceção: lotes já vinculados a ESTE item — inclusive um recém-digitado,
+    // que nasce com saldo 0 e sumiria da lista no meio do preenchimento.
+    const extras = idsEmUso.filter(Boolean)
+    q = extras.length
+      ? q.or(`current_quantity.gt.0,id.in.(${extras.join(',')})`)
+      : q.gt('current_quantity', 0)
+
     const { data, error } = await q
     if (error) { console.error('lots', error); return }
     setLots((data || []) as LotOption[])
@@ -72,9 +81,8 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   // montagem. (Chamá-la depois de gravar apagava a linha de lote manual que
   // ainda estava sem quantidade — a tela "resetava".)
   const reloadLots = async () => {
-    await carregarOpcoesLotes()
-
-    // Lotes já informados neste item
+    // Lotes já informados neste item — lidos ANTES das opções, porque um lote
+    // já vinculado precisa aparecer no dropdown mesmo estando zerado.
     const { data: ril } = await supabase
       .from('request_item_lots')
       .select('expiry_tracking_id, quantity')
@@ -82,6 +90,11 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     const existentes = (ril || []).map((r: any) => ({
       expiry_tracking_id: r.expiry_tracking_id, quantity: r.quantity,
     }))
+
+    const legadoId = (item as any).expiry_tracking_id
+    await carregarOpcoesLotes(
+      [...existentes.map((e) => e.expiry_tracking_id), legadoId].filter(Boolean)
+    )
     // Compatibilidade: se não há linhas novas mas existe o lote antigo, mostra ele.
     const legado = (item as any).expiry_tracking_id
     if (existentes.length === 0 && legado) {
@@ -156,12 +169,24 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
           })
         )
       }
+      // Na farmácia a QUANTIDADE FORNECIDA é a soma dos lotes (não existe mais
+      // campo separado). É ela que o RPC de recebimento usa pra abater estoque.
+      const soma = validos.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
+      setSuppliedQty(soma)
+      await saveField('supplied_quantity', soma)
+
       // Mantém o campo antigo coerente (1º lote) para telas/relatórios legados.
       await saveField('expiry_tracking_id', validos[0]?.expiry_tracking_id ?? null)
       // Só atualiza as OPÇÕES de lote (pro lote novo aparecer no dropdown e na
       // coluna Validade). Não recarrega as linhas — era isso que apagava o
-      // lote manual em digitação.
-      if (criouManual) await carregarOpcoesLotes()
+      // lote manual em digitação. Os ids em uso vão junto porque o lote
+      // recém-criado nasce com saldo 0 e seria filtrado da lista.
+      if (criouManual) {
+        await carregarOpcoesLotes([
+          ...novos.map((l) => l.expiry_tracking_id),
+          ...Object.values(idPorIndice),
+        ].filter(Boolean))
+      }
     } catch (e) {
       console.error('Erro ao salvar lotes:', e)
     }
@@ -169,39 +194,10 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
 
   const somaLotes = itemLots.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
 
-  // --- Sincronia Qtd Fornecida <-> quantidades dos lotes -------------------
-  // Antes era preciso digitar a quantidade DUAS vezes (uma na Qtd Fornecida e
-  // outra na linha do lote). Agora:
-  //  - ao escolher um lote, a qtd dele já vem com o que falta pra fechar o
-  //    fornecido (preencherQtdFaltante);
-  //  - ao digitar a qtd de um lote, a Qtd Fornecida vira a soma dos lotes
-  //    (sincronizarFornecido).
-  // Resultado: 1 lote => digita uma vez; N lotes => uma vez por lote.
+  // A quantidade é digitada uma única vez, na linha do lote. O fornecido do
+  // item é a SOMA dos lotes e é gravado pelo saveLots — não há mais campo
+  // separado pra preencher (nem a antiga sincronização entre os dois).
 
-  // Preenche a qtd da linha `idx` com o que falta pra bater o fornecido.
-  // Não sobrescreve uma quantidade já digitada pelo usuário.
-  const preencherQtdFaltante = (
-    linhas: typeof itemLots,
-    idx: number,
-  ): typeof itemLots => {
-    const fornecido = Number(suppliedQty) || 0
-    if (!fornecido) return linhas
-    if ((Number(linhas[idx]?.quantity) || 0) > 0) return linhas
-    const outros = linhas.reduce(
-      (s, l, i) => (i === idx ? s : s + (Number(l.quantity) || 0)), 0)
-    const falta = Math.max(0, fornecido - outros)
-    if (falta <= 0) return linhas
-    return linhas.map((x, i) => (i === idx ? { ...x, quantity: falta } : x))
-  }
-
-  // Qtd Fornecida passa a refletir a soma dos lotes informados.
-  const sincronizarFornecido = async (linhas: typeof itemLots) => {
-    const soma = linhas.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
-    if (soma > 0 && soma !== Number(suppliedQty)) {
-      setSuppliedQty(soma)
-      await saveField('supplied_quantity', soma)
-    }
-  }
   // Observations stored as lines separated by \n
   const [observations, setObservations] = useState<string[]>(() => {
     const raw = item.observation || ''
@@ -235,34 +231,28 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
           </span>
         </td>
       )}
-      <td className="text-center py-3 px-2">
-        {canEdit ? (
-          <Input
-            type="number"
-            min="0"
-            value={suppliedQty === 0 ? '' : suppliedQty}
-            placeholder="0"
-            onFocus={(e) => e.target.select()}
-            onChange={(e) => {
-              const val = e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0)
-              setSuppliedQty(val)
-            }}
-            onBlur={async () => {
-              await saveField('supplied_quantity', suppliedQty)
-              // Se já existe UMA linha de lote sem quantidade, ela recebe o
-              // fornecido — evita ter que digitar o mesmo número de novo.
-              if (itemLots.length === 1 && !(Number(itemLots[0].quantity) || 0)) {
-                const novos = preencherQtdFaltante(itemLots, 0)
-                setItemLots(novos)
-                saveLots(novos)
-              }
-            }}
-            className="w-20 text-center mx-auto h-8 text-sm"
-          />
-        ) : (
-          <span>{item.supplied_quantity ?? '—'}</span>
-        )}
-      </td>
+      {/* Farmácia digita a quantidade em cada LOTE; o fornecido é a soma. */}
+      {!isPharmacy && (
+        <td className="text-center py-3 px-2">
+          {canEdit ? (
+            <Input
+              type="number"
+              min="0"
+              value={suppliedQty === 0 ? '' : suppliedQty}
+              placeholder="0"
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => {
+                const val = e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0)
+                setSuppliedQty(val)
+              }}
+              onBlur={() => saveField('supplied_quantity', suppliedQty)}
+              className="w-20 text-center mx-auto h-8 text-sm"
+            />
+          ) : (
+            <span>{item.supplied_quantity ?? '—'}</span>
+          )}
+        </td>
+      )}
       {isPharmacy && (
         <>
           {/* FA3: multi-lote — o item pode sair de vários lotes. A soma é
@@ -270,31 +260,25 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
               sem lote informado o item ainda pode ser atendido. */}
           <td className="py-3 px-2">
             {canEdit ? (
-              <div className="space-y-1">
+              /* Fonte/altura no MESMO padrão do resto da tabela (text-sm/h-8),
+                 mesmo quando o item gera várias linhas de lote. */
+              <div className="space-y-1.5">
                 {itemLots.map((l, idx) => (
-                  <div key={idx} className="flex items-center gap-1">
+                  <div key={idx} className="flex items-center gap-1.5">
                     {l.manual ? (
                       // Lote DIGITADO na hora (item zerado, sem lote cadastrado).
-                      <div className="flex-1 flex items-center gap-1 min-w-[150px]">
+                      <div className="flex-1 flex items-center gap-1.5 min-w-[150px]">
                         <input
                           type="text" value={l.batch_number || ''} placeholder="Nº do lote"
                           onChange={(e) => setItemLots(itemLots.map((x, i) => i === idx ? { ...x, batch_number: e.target.value } : x))}
-                          onBlur={() => {
-                            // Já preenche a qtd com o que falta pro fornecido,
-                            // senão a linha ficaria com 0 e não seria gravada.
-                            const novos = (l.batch_number || '').trim()
-                              ? preencherQtdFaltante(itemLots, idx)
-                              : itemLots
-                            setItemLots(novos)
-                            saveLots(novos)
-                          }}
-                          className="flex-1 min-w-[80px] h-7 px-1 text-xs rounded border border-blue-300"
+                          onBlur={() => saveLots(itemLots)}
+                          className="flex-1 min-w-[90px] h-8 px-2 text-sm rounded border border-blue-300"
                         />
                         <input
                           type="date" value={l.expiry_date || ''} title="Validade"
                           onChange={(e) => setItemLots(itemLots.map((x, i) => i === idx ? { ...x, expiry_date: e.target.value } : x))}
                           onBlur={() => saveLots(itemLots)}
-                          className="w-[120px] h-7 px-1 text-xs rounded border border-blue-300"
+                          className="w-[130px] h-8 px-2 text-sm rounded border border-blue-300"
                         />
                       </div>
                     ) : (
@@ -305,18 +289,13 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                             setItemLots(itemLots.map((x, i) => i === idx ? { expiry_tracking_id: '', quantity: x.quantity, manual: true, batch_number: '', expiry_date: '' } : x))
                             return
                           }
-                          const base = itemLots.map((x, i) =>
+                          const novos = itemLots.map((x, i) =>
                             i === idx ? { ...x, expiry_tracking_id: e.target.value } : x)
-                          // Já preenche a qtd deste lote com o que falta pra
-                          // fechar o fornecido (não precisa redigitar).
-                          const novos = e.target.value
-                            ? preencherQtdFaltante(base, idx)
-                            : base
                           setItemLots(novos); saveLots(novos)
                         }}
-                        className="flex-1 min-w-[150px] h-7 px-1 text-xs rounded border border-gray-300 bg-white"
+                        className="flex-1 min-w-[160px] h-8 px-2 text-sm rounded border border-gray-300 bg-white"
                       >
-                        <option value="">{lots.length ? '— Lote —' : 'Sem lotes cadastrados'}</option>
+                        <option value="">{lots.length ? '— Lote —' : 'Sem lote com saldo'}</option>
                         {lots.map((lo, i) => (
                           <option key={lo.id} value={lo.id}>
                             {i === 0 ? '★ ' : ''}{lo.batch_number}
@@ -330,47 +309,42 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                     )}
                     <input
                       type="number" min={0} value={l.quantity || ''} placeholder="qtd"
+                      title="Quantidade fornecida deste lote"
                       onChange={(e) => {
                         const q = Math.max(0, parseInt(e.target.value) || 0)
                         setItemLots(itemLots.map((x, i) => i === idx ? { ...x, quantity: q } : x))
                       }}
-                      onBlur={async () => {
-                        // A Qtd Fornecida passa a ser a soma dos lotes.
-                        await sincronizarFornecido(itemLots)
-                        saveLots(itemLots)
-                      }}
-                      className="w-14 h-7 px-1 text-xs text-center rounded border border-gray-300"
+                      onBlur={() => saveLots(itemLots)}
+                      className="w-16 h-8 px-2 text-sm text-center rounded border border-gray-300"
                     />
                     <button
                       type="button"
                       onClick={() => { const novos = itemLots.filter((_, i) => i !== idx); setItemLots(novos); saveLots(novos) }}
-                      className="text-red-500 hover:text-red-700 text-xs px-1"
+                      className="text-red-500 hover:text-red-700 text-sm px-1"
                       title="Remover lote"
                     >✕</button>
                   </div>
                 ))}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
                   <button
                     type="button"
                     onClick={() => setItemLots([...itemLots, { expiry_tracking_id: '', quantity: 0 }])}
                     disabled={lots.length === 0}
-                    className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-300"
-                    title={lots.length === 0 ? 'Nenhum lote cadastrado — use "Digitar lote"' : ''}
+                    className="text-sm text-blue-600 hover:text-blue-800 disabled:text-gray-300"
+                    title={lots.length === 0 ? 'Nenhum lote com saldo — use "Digitar lote"' : ''}
                   >+ Adicionar lote</button>
                   <button
                     type="button"
                     onClick={() => setItemLots([...itemLots, { expiry_tracking_id: '', quantity: 0, manual: true, batch_number: '', expiry_date: '' }])}
-                    className="text-xs text-blue-600 hover:text-blue-800"
+                    className="text-sm text-blue-600 hover:text-blue-800"
                   >+ Digitar lote</button>
+                  {somaLotes > 0 && (
+                    <span className="text-sm text-gray-500">Total: {somaLotes}</span>
+                  )}
                 </div>
-                {itemLots.length > 0 && suppliedQty !== '' && somaLotes !== Number(suppliedQty) && (
-                  <p className="text-[10px] text-amber-600">
-                    Soma dos lotes ({somaLotes}) ≠ fornecido ({suppliedQty})
-                  </p>
-                )}
               </div>
             ) : (
-              <div className="text-xs space-y-0.5">
+              <div className="text-sm space-y-0.5">
                 {itemLots.length === 0 ? <span>—</span> : itemLots.map((l, i) => {
                   const lo = lots.find((x) => x.id === l.expiry_tracking_id)
                   return <div key={i}>{lo ? `${lo.batch_number} · ${l.quantity}` : `${l.quantity}`}</div>
@@ -378,7 +352,7 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
               </div>
             )}
           </td>
-          <td className="text-center py-3 px-2 text-xs">
+          <td className="text-center py-3 px-2 text-sm">
             {itemLots.length === 0 ? '—' : itemLots.map((l, i) => {
               const lo = lots.find((x) => x.id === l.expiry_tracking_id)
               return (
@@ -930,16 +904,20 @@ export function RequestDetails() {
                 {(user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente') && (
                   <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Saldo</th>
                 )}
-                <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Qtd Fornec.</th>
+                {/* Na FARMÁCIA não existe "Qtd Fornec." separada: a quantidade
+                    é digitada por LOTE (o lote é sempre escolhido), e o
+                    fornecido é a soma dos lotes. Evita digitar duas vezes.
+                    O ALMOXARIFADO não usa lote, então lá a coluna continua. */}
+                {request.type !== 'pharmacy' && (
+                  <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Qtd Fornec.</th>
+                )}
                 {/* Colunas Lote e Validade so aparecem em solicitacoes de
                     FARMACIA (o staff informa o lote no atendimento; validade
                     preenche automatica). Almoxarifado nao usa. */}
                 {request.type === 'pharmacy' && (
                   <>
-                    {/* FA2: lote deixou de ser obrigatório — item sem lote não
-                        barra a solicitação, só fica como não atendido. */}
-                    <th className="text-center py-3 px-3 font-medium text-gray-600 w-64">
-                      Lote(s)
+                    <th className="text-center py-3 px-3 font-medium text-gray-600 w-72">
+                      Lote(s) e quantidade
                     </th>
                     <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Validade</th>
                   </>

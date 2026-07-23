@@ -96,7 +96,10 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       setError(null)
       // Carrega itens, saldos por local e lotes ativos em paralelo
       const [pharmacyItems, allStocks, allLots] = await Promise.all([
-        itemsService.getByType('pharmacy', filters),
+        // Sem filtros aqui de propósito: eles são aplicados no cliente, sobre o
+        // saldo do LOCAL (ver filteredItems). Passá-los aqui filtraria pelo
+        // estoque global do cadastro e divergiria do que a tela mostra.
+        itemsService.getByType('pharmacy'),
         loadAllPharmacyStocks(),
         loadAllLots(),
       ])
@@ -228,12 +231,43 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     return 0
   })
 
+  // Ponto de pedido — mesma conta usada na coluna "Pto. Sup." da tabela.
+  // Fica aqui (e não solto no map) pra o filtro e a tabela nunca divergirem.
+  const pontoDePedido = (item: Item): number => {
+    const history = Array.isArray(item.consumption_history) ? item.consumption_history : []
+    const avg = history.length
+      ? history.reduce((acc, curr) => acc + (curr?.quantity || 0), 0) / history.length
+      : 0
+    return Math.ceil((avg / 30) * (item.lead_time_days || 7) * 1.5)
+  }
+
+  // Status do item no LOCAL atual — mesma regra do badge da coluna Status,
+  // pra o filtro casar exatamente com o que aparece na tela.
+  const statusLocal = (item: Item): 'out' | 'low' | 'critical' | 'normal' => {
+    const qty = getLocalQty(item)
+    if (qty === 0) return 'out'
+    if (qty <= (item.min_stock ?? 0)) return 'low'
+    if (qty <= pontoDePedido(item)) return 'critical' // Ponto de Pedido
+    return 'normal'
+  }
+
+  // Os filtros são aplicados AQUI (no cliente) e não na consulta ao banco.
+  // Motivo: a consulta filtrava por pharmacy_items.current_stock /
+  // reorder_status, que são os valores GLOBAIS do cadastro — mas a tela mostra
+  // o saldo POR LOCAL (item_stocks). Filtrar no servidor escondia/mostrava
+  // itens com base num número diferente do exibido. Além disso, o loadItems só
+  // rodava ao trocar de local, então mexer no filtro não refazia a busca — por
+  // isso "os filtros não filtravam".
   const filteredItems = sortedItems
     .filter(item =>
       searchTerm === '' ||
       item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.code?.toLowerCase().includes(searchTerm.toLowerCase())
     )
+    .filter(item => !filters.categories?.length || filters.categories.includes(item.category))
+    .filter(item => !filters.status?.length || filters.status.includes(statusLocal(item)))
+    .filter(item => filters.minStock === undefined || getLocalQty(item) >= filters.minStock)
+    .filter(item => filters.maxStock === undefined || getLocalQty(item) <= filters.maxStock)
 
   if (loading) {
     return (

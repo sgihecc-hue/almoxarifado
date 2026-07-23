@@ -193,7 +193,9 @@ export interface FilterOptions {
   minConsumption?: number
   maxConsumption?: number
   categories: string[]
-  status: ('normal' | 'low' | 'critical')[]
+  // 'out' = Sem Estoque (saldo 0 no local). 'critical' hoje é usado como
+  // "Ponto de Pedido" na tela de farmácia.
+  status: ('normal' | 'low' | 'critical' | 'out')[]
   suppliers?: string[]
   expiryDateRange?: {
     start?: Date
@@ -330,10 +332,14 @@ class ItemsService {
           query = query.in('category', filters.categories)
         }
         if (filters.status?.length > 0) {
-          const statusMap = {
+          // 'out' (Sem Estoque) não tem equivalente em reorder_status — é uma
+          // condição de saldo. As telas que oferecem esse filtro (farmácia)
+          // filtram no cliente, sobre o saldo do local; aqui ele é ignorado
+          // para não excluir itens indevidamente.
+          const statusMap: Record<string, string | undefined> = {
             'low': 'reorder_point',
             'normal': 'normal',
-            'critical': 'critical'
+            'critical': 'critical',
           }
           const mappedStatus = filters.status.map(s => statusMap[s]).filter(Boolean)
           if (mappedStatus.length > 0) {

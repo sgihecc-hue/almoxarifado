@@ -136,49 +136,30 @@ export function AdvancedFilters({
                   {/* Stock Status */}
                   <div>
                     <Label className="text-xs">Status do Estoque</Label>
+                    {/* Rótulos iguais aos badges da coluna Status da tabela,
+                        pra não haver dúvida do que cada opção seleciona. */}
                     <div className="grid grid-cols-1 gap-2 mt-1.5">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={filters.status?.includes('normal')}
-                          onChange={(e) => {
-                            const newStatus = e.target.checked
-                              ? [...(filters.status || []), 'normal']
-                              : (filters.status || []).filter(s => s !== 'normal')
-                            handleFilterChange({ status: newStatus as ('normal' | 'low' | 'critical')[] })
-                          }}
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                        />
-                        Normal
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={filters.status?.includes('low')}
-                          onChange={(e) => {
-                            const newStatus = e.target.checked
-                              ? [...(filters.status || []), 'low']
-                              : (filters.status || []).filter(s => s !== 'low')
-                            handleFilterChange({ status: newStatus as ('normal' | 'low' | 'critical')[] })
-                          }}
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                        />
-                        Estoque Baixo
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={filters.status?.includes('critical')}
-                          onChange={(e) => {
-                            const newStatus = e.target.checked
-                              ? [...(filters.status || []), 'critical']
-                              : (filters.status || []).filter(s => s !== 'critical')
-                            handleFilterChange({ status: newStatus as ('normal' | 'low' | 'critical')[] })
-                          }}
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                        />
-                        Crítico
-                      </label>
+                      {([
+                        { key: 'out', label: 'Sem Estoque' },
+                        { key: 'low', label: 'Estoque Baixo' },
+                        { key: 'critical', label: 'Ponto de Pedido' },
+                        { key: 'normal', label: 'Normal' },
+                      ] as const).map(({ key, label }) => (
+                        <label key={key} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={filters.status?.includes(key) ?? false}
+                            onChange={(e) => {
+                              const newStatus = e.target.checked
+                                ? [...(filters.status || []), key]
+                                : (filters.status || []).filter((s) => s !== key)
+                              handleFilterChange({ status: newStatus as FilterOptions['status'] })
+                            }}
+                            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          />
+                          {label}
+                        </label>
+                      ))}
                     </div>
                   </div>
                 </div>
