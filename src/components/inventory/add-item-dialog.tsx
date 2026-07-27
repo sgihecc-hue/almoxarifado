@@ -48,6 +48,9 @@ const itemSchema = z.object({
   // preenchido, é o que a tela usa na coluna "Consumo" e no ponto de pedido;
   // vazio mantém o cálculo pelo histórico.
   avg_monthly_consumption: optionalNumber,
+  // Almox: prazo de reposição (dias) e consumo diário informado (fallback).
+  lead_time_days: optionalNumber,
+  avg_daily_consumption: optionalNumber,
   // Farmacia (so usados quando type='pharmacy')
   // medication_classes: classificação múltipla. O service grava o array e
   // sincroniza medication_class (single) com a primeira pra back-compat.
@@ -161,6 +164,8 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
         padronizado: type === 'pharmacy' ? !!data.padronizado : undefined,
         avg_monthly_consumption: type === 'pharmacy'
           ? data.avg_monthly_consumption : undefined,
+        lead_time_days: type === 'warehouse' ? data.lead_time_days : undefined,
+        avg_daily_consumption: type === 'warehouse' ? data.avg_daily_consumption : undefined,
       }, type)
 
       reset()
@@ -370,6 +375,41 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
                   cálculo do ponto de pedido. Deixe vazio para calcular pelo histórico.
                 </p>
               </div>
+            )}
+
+            {type === 'warehouse' && (
+              <>
+                <div>
+                  <Label htmlFor="lead_time_days">Prazo de Reposição (dias)</Label>
+                  <Input
+                    id="lead_time_days"
+                    type="number"
+                    min="0"
+                    {...register('lead_time_days', { valueAsNumber: true })}
+                    className="mt-1"
+                    placeholder="Ex: 30"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Dias que o fornecedor leva pra entregar. Necessário para o
+                    ponto de ressuprimento.
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="avg_daily_consumption">Consumo Diário (opcional)</Label>
+                  <Input
+                    id="avg_daily_consumption"
+                    type="number"
+                    min="0"
+                    {...register('avg_daily_consumption', { valueAsNumber: true })}
+                    className="mt-1"
+                    placeholder="Ex: 376"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Un/dia. Usado só enquanto o item não tem saídas registradas;
+                    depois o sistema calcula pela média dos últimos 30 dias.
+                  </p>
+                </div>
+              </>
             )}
           </div>
 

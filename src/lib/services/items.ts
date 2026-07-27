@@ -77,6 +77,9 @@ export interface Item {
   // Consumo médio mensal informado no cadastro (un/mês). Null/undefined =>
   // a tela cai no cálculo por consumption_history.
   avg_monthly_consumption?: number | null
+  // Almox: consumo médio diário informado (un/dia), fallback quando não há
+  // saídas nos últimos 30 dias. Ponto de ressuprimento usa isto + lead_time.
+  avg_daily_consumption?: number | null
   allowed_department_ids?: string[]
 }
 
@@ -139,6 +142,9 @@ interface CreateItemData {
   is_mav?: boolean
   // Consumo médio mensal informado (un/mês) — só farmácia.
   avg_monthly_consumption?: number | null
+  // Almox: prazo de reposição (dias) e consumo diário informado (fallback).
+  lead_time_days?: number
+  avg_daily_consumption?: number | null
 }
 
 interface PaginationOptions {
@@ -178,6 +184,7 @@ interface UpdateItemData {
   is_mav?: boolean
   padronizado?: boolean
   avg_monthly_consumption?: number | null
+  avg_daily_consumption?: number | null
 }
 
 export interface ImportItemData {
@@ -1071,6 +1078,16 @@ class ItemsService {
         !Number.isNaN(data.avg_monthly_consumption)
       ) {
         insertData.avg_monthly_consumption = data.avg_monthly_consumption
+      }
+
+      // Almox: prazo de reposição + consumo diário informado (fallback).
+      if (table === 'warehouse_items') {
+        if (data.lead_time_days !== undefined && data.lead_time_days !== null && !Number.isNaN(data.lead_time_days)) {
+          insertData.lead_time_days = data.lead_time_days
+        }
+        if (data.avg_daily_consumption !== undefined && data.avg_daily_consumption !== null && !Number.isNaN(data.avg_daily_consumption)) {
+          insertData.avg_daily_consumption = data.avg_daily_consumption
+        }
       }
 
       if (data.reference_price !== undefined && data.reference_price !== null) {
