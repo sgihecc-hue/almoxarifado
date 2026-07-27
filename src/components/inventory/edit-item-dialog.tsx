@@ -41,6 +41,15 @@ const schema = z.object({
     (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? 0 : Number(v)),
     z.number().min(0, 'Estoque deve ser maior ou igual a 0'),
   ),
+  // Almox: prazo de reposição (dias) e consumo diário informado (fallback).
+  lead_time_days: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? null : Number(v)),
+    z.number().min(0).nullable(),
+  ).optional(),
+  avg_daily_consumption: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? null : Number(v)),
+    z.number().min(0).nullable(),
+  ).optional(),
   batch_number: z.string().optional(),
   expiry_date: z.string().optional(),
   last_purchase_price: optionalNumber,
@@ -90,6 +99,8 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       category: item.category,
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
+      lead_time_days: (item as any).lead_time_days ?? null,
+      avg_daily_consumption: (item as any).avg_daily_consumption ?? null,
       current_stock: item.current_stock ?? 0,
       batch_number: (item as any).batch_number || '',
       expiry_date: item.expiry_date || '',
@@ -109,6 +120,8 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       category: item.category,
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
+      lead_time_days: (item as any).lead_time_days ?? null,
+      avg_daily_consumption: (item as any).avg_daily_consumption ?? null,
       current_stock: item.current_stock ?? 0,
       batch_number: (item as any).batch_number || '',
       expiry_date: item.expiry_date || '',
@@ -159,6 +172,12 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
         category: data.category as ItemCategory,
         unit: data.unit as UnitType,
         min_stock: data.min_stock,
+        ...(type === 'warehouse'
+          ? {
+              lead_time_days: data.lead_time_days ?? null,
+              avg_daily_consumption: data.avg_daily_consumption ?? null,
+            }
+          : {}),
         current_stock: data.current_stock,
         batch_number: data.batch_number || null,
         expiry_date: data.expiry_date || null,
@@ -332,6 +351,38 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
                 className="mt-1"
               />
             </div>
+            {type === 'warehouse' && (
+              <>
+                <div>
+                  <Label htmlFor="lead_time_days">Prazo de Reposição (dias)</Label>
+                  <Input
+                    id="lead_time_days"
+                    type="number"
+                    min="0"
+                    {...register('lead_time_days', { valueAsNumber: true })}
+                    className="mt-1"
+                    placeholder="Ex: 30"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Dias de entrega do fornecedor. Necessário para o ponto de ressuprimento.
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="avg_daily_consumption">Consumo Diário (opcional)</Label>
+                  <Input
+                    id="avg_daily_consumption"
+                    type="number"
+                    min="0"
+                    {...register('avg_daily_consumption', { valueAsNumber: true })}
+                    className="mt-1"
+                    placeholder="Ex: 376"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Un/dia. Só usado enquanto não há saídas; depois o sistema calcula pelos últimos 30 dias.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">

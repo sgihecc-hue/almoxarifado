@@ -49,6 +49,9 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
   // Saldo local (item_id -> quantity NESTE location) quando ha locationId.
   // Vazio => usa o current_stock global do cadastro.
   const [localQtyById, setLocalQtyById] = useState<Map<string, number>>(new Map())
+  // Consumo/dia CALCULADO das saídas dos últimos 30 dias (RPC
+  // warehouse_consumo_diario). item_id -> unidades/dia.
+  const [consumoDiaById, setConsumoDiaById] = useState<Map<string, number>>(new Map())
 
   const handleEditItem = (item: Item) => {
     setSelectedItem(item)
@@ -65,12 +68,44 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
     return localQtyById.get(item.id) ?? 0
   }
 
+  // Consumo/dia do item: o CALCULADO (saídas dos últimos 30 dias) tem
+  // prioridade; se não houver saída registrada, cai no valor informado à mão
+  // no cadastro (avg_daily_consumption). null = não dá pra calcular.
+  const consumoDia = (item: Item): number | null => {
+    const calc = consumoDiaById.get(item.id)
+    if (calc != null && calc > 0) return calc
+    const manual = (item as any).avg_daily_consumption
+    if (manual != null && !Number.isNaN(Number(manual)) && Number(manual) > 0) return Number(manual)
+    return null
+  }
+
+  // Ponto de Ressuprimento = (consumo/dia × prazo de reposição) + estoque
+  // mínimo. Sem consumo ou sem prazo de reposição não há como calcular => null
+  // (a tela mostra "—" e orienta a preencher).
+  const pontoRessuprimento = (item: Item): number | null => {
+    const cd = consumoDia(item)
+    const lead = item.lead_time_days
+    if (cd == null || lead == null || lead <= 0) return null
+    return Math.ceil(cd * lead + (item.min_stock || 0))
+  }
+
   const loadItems = async () => {
     try {
       setLoading(true)
       setError(null)
       const data = await itemsService.getByType('warehouse', filters)
       setItems(data)
+
+      // Consumo/dia calculado das saídas reais (últimos 30 dias).
+      const { data: consumo, error: consumoErr } = await supabase.rpc('warehouse_consumo_diario')
+      if (consumoErr) {
+        console.error('warehouse_consumo_diario:', consumoErr)
+        setConsumoDiaById(new Map())
+      } else {
+        setConsumoDiaById(new Map(
+          (consumo ?? []).map((r: any) => [r.item_id as string, Number(r.consumo_dia)])
+        ))
+      }
 
       // Se estamos num satelite (SAT_T), carrega saldo por location de item_stocks.
       if (locationId) {
@@ -344,8 +379,8 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
                   Valor Referencial
                 </th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
-                  Consumo Médio
+                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600" title="Média das saídas dos últimos 30 dias (ou valor informado no cadastro)">
+                  Consumo/dia
                 </th>
                 <th 
                   className="px-4 py-3 text-right text-sm font-medium text-gray-600 cursor-pointer hover:bg-gray-100"
@@ -369,8 +404,8 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                     )}
                   </div>
                 </th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
-                  Ponto de Suprimento
+                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600" title="(consumo/dia × prazo de reposição) + estoque mínimo">
+                  Ponto de Ressuprimento
                 </th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">
                   Status
@@ -382,15 +417,8 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredItems.map((item) => {
-                const history = Array.isArray(item.consumption_history) ? item.consumption_history : []
-                const avgConsumption = history.length
-                  ? history.reduce((acc, curr) => acc + (curr?.quantity || 0), 0) / history.length
-                  : 0
-
-                const supplyPoint = Math.ceil(
-                  (avgConsumption / 30) * (item.lead_time_days || 7) * 1.5
-                )
-                
+                const cd = consumoDia(item)              // un/dia (calc ou manual) ou null
+                const supplyPoint = pontoRessuprimento(item) // número ou null
                 return (
                   <tr key={item.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm text-gray-600">{item.code}</td>
@@ -414,7 +442,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                         : '-'}
                     </td>
                     <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {Math.round(avgConsumption)} {item.unit}/mês
+                      {cd != null ? `${cd} ${item.unit}/dia` : '—'}
                     </td>
                     <td className="px-4 py-3 text-sm text-right font-medium">
                       {getLocalQty(item)} {item.unit}
@@ -423,16 +451,22 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                       {item.min_stock} {item.unit}
                     </td>
                     <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {supplyPoint} {item.unit}
+                      {supplyPoint != null
+                        ? `${supplyPoint} ${item.unit}`
+                        : (
+                          <span className="text-gray-400" title="Informe o prazo de reposição e garanta que há consumo (saídas ou valor manual)">
+                            —
+                          </span>
+                        )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-center">
                         {(() => {
                           const q = getLocalQty(item)
-                          if (q === 0)                return <span className="px-2 py-1 text-xs font-medium rounded-full bg-red-50 text-red-600 border border-red-200">Sem Estoque</span>
-                          if (q <= item.min_stock)    return <span className="px-2 py-1 text-xs font-medium rounded-full bg-yellow-50 text-yellow-600 border border-yellow-200">Estoque Baixo</span>
-                          if (q <= supplyPoint)       return <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-50 text-blue-600 border border-blue-200">Ponto de Pedido</span>
-                          return                              <span className="px-2 py-1 text-xs font-medium rounded-full bg-green-50 text-green-600 border border-green-200">Normal</span>
+                          if (q === 0)                             return <span className="px-2 py-1 text-xs font-medium rounded-full bg-red-50 text-red-600 border border-red-200">Sem Estoque</span>
+                          if (q <= item.min_stock)                 return <span className="px-2 py-1 text-xs font-medium rounded-full bg-yellow-50 text-yellow-600 border border-yellow-200">Estoque Baixo</span>
+                          if (supplyPoint != null && q <= supplyPoint) return <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-50 text-blue-600 border border-blue-200">Ponto de Pedido</span>
+                          return                                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-green-50 text-green-600 border border-green-200">Normal</span>
                         })()}
                       </div>
                     </td>

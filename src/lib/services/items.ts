@@ -74,6 +74,9 @@ export interface Item {
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
+  // Almox: consumo médio diário informado (un/dia), fallback quando não há
+  // saídas nos últimos 30 dias. O ponto de ressuprimento usa isto + lead_time.
+  avg_daily_consumption?: number | null
   allowed_department_ids?: string[]
 }
 
@@ -134,6 +137,9 @@ interface CreateItemData {
     | 'comprimidos' | 'injetaveis' | 'solucoes_orais' | 'topicos' | 'aerosol'
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
+  // Almox: prazo de reposição (dias) e consumo diário informado (fallback).
+  lead_time_days?: number
+  avg_daily_consumption?: number | null
 }
 
 interface PaginationOptions {
@@ -172,6 +178,8 @@ interface UpdateItemData {
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
+  // Almox: consumo diário informado (fallback do ponto de ressuprimento).
+  avg_daily_consumption?: number | null
 }
 
 export interface ImportItemData {
@@ -1052,6 +1060,16 @@ class ItemsService {
 
       if (data.reference_price !== undefined && data.reference_price !== null) {
         insertData.reference_price = data.reference_price
+      }
+
+      // Almox: prazo de reposição + consumo diário informado (fallback).
+      if (table === 'warehouse_items') {
+        if (data.lead_time_days !== undefined && data.lead_time_days !== null && !Number.isNaN(data.lead_time_days)) {
+          insertData.lead_time_days = data.lead_time_days
+        }
+        if (data.avg_daily_consumption !== undefined && data.avg_daily_consumption !== null && !Number.isNaN(data.avg_daily_consumption)) {
+          insertData.avg_daily_consumption = data.avg_daily_consumption
+        }
       }
 
       if (data.expiry_date !== undefined && data.expiry_date !== null && data.expiry_date.trim() !== '') {
