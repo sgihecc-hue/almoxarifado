@@ -442,7 +442,10 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                         : '-'}
                     </td>
                     <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {cd != null ? `${cd} ${item.unit}/dia` : '—'}
+                      {/* Número inteiro + unidade (igual às colunas de
+                          quantidade). O "/dia" já está no cabeçalho da coluna,
+                          então não repete em cada linha. */}
+                      {cd != null ? `${Math.round(cd)} ${item.unit}` : '—'}
                     </td>
                     <td className="px-4 py-3 text-sm text-right font-medium">
                       {getLocalQty(item)} {item.unit}
