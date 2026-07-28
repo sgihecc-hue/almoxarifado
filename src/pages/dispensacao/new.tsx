@@ -217,10 +217,15 @@ export function NewDispensation() {
 
   async function loadLots(itemId: string): Promise<LotRow[]> {
     if (lotsByItem[itemId]) return lotsByItem[itemId]
+    // Só lotes DO LOCAL onde a dispensação está sendo feita (activeStockId).
+    // Sem o filtro de local, a Satélite 1 via lotes que estão no CAF — cada
+    // estoque só pode dispensar dos SEUS próprios lotes. Mesma regra do
+    // atendimento de solicitação (FA4: lote por local).
     const { data, error: err } = await supabase
       .from('expiry_tracking')
       .select('id, batch_number, expiry_date, current_quantity')
       .eq('item_id', itemId)
+      .eq('location_id', activeStockId)
       .gt('current_quantity', 0)
       .order('expiry_date', { ascending: true, nullsFirst: false })
     if (err) console.error(err)
