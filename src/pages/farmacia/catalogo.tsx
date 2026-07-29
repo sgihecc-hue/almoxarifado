@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTheme } from '@/contexts/theme'
 import { useAuth } from '@/contexts/auth'
-import { Search, Plus, Loader2, AlertCircle, Edit, PowerOff, Power, BookOpen } from 'lucide-react'
+import { Search, Plus, Loader2, AlertCircle, Edit, PowerOff, Power, Pill } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
 import { itemsService } from '@/lib/services/items'
@@ -115,7 +115,7 @@ export function PharmacyCatalogo() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2 flex-wrap" style={{ color: txt }}>
-            <BookOpen className="w-6 h-6" /> Catálogo de Medicamentos
+            <Pill className="w-6 h-6" /> Medicamentos
           </h1>
           <p className="text-sm mt-1" style={{ color: txtSec }}>
             Cadastro de itens da farmácia. O estoque é gerenciado nas telas de cada local.
