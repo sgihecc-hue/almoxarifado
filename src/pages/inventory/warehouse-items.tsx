@@ -79,13 +79,19 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
     return null
   }
 
+  // Prazo de reposição PADRÃO (dias): o usuário definiu que é 30 dias para
+  // todos os materiais. Cada item pode ter um prazo próprio (lead_time_days)
+  // que, se preenchido, tem prioridade; senão usa este padrão.
+  const PRAZO_REPOSICAO_PADRAO = 30
+
   // Ponto de Ressuprimento = (consumo/dia × prazo de reposição) + estoque
-  // mínimo. Sem consumo ou sem prazo de reposição não há como calcular => null
-  // (a tela mostra "—" e orienta a preencher).
-  const pontoRessuprimento = (item: Item): number | null => {
-    const cd = consumoDia(item)
-    const lead = item.lead_time_days
-    if (cd == null || lead == null || lead <= 0) return null
+  // mínimo. Sempre retorna um número (nada de "—"): sem consumo conhecido, o
+  // consumo entra como 0 e o ponto cai no estoque mínimo.
+  const pontoRessuprimento = (item: Item): number => {
+    const cd = consumoDia(item) ?? 0
+    const lead = (item.lead_time_days && item.lead_time_days > 0)
+      ? item.lead_time_days
+      : PRAZO_REPOSICAO_PADRAO
     return Math.ceil(cd * lead + (item.min_stock || 0))
   }
 
@@ -454,13 +460,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                       {item.min_stock} {item.unit}
                     </td>
                     <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {supplyPoint != null
-                        ? `${supplyPoint} ${item.unit}`
-                        : (
-                          <span className="text-gray-400" title="Informe o prazo de reposição e garanta que há consumo (saídas ou valor manual)">
-                            —
-                          </span>
-                        )}
+                      {supplyPoint} {item.unit}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-center">
@@ -468,7 +468,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                           const q = getLocalQty(item)
                           if (q === 0)                             return <span className="px-2 py-1 text-xs font-medium rounded-full bg-red-50 text-red-600 border border-red-200">Sem Estoque</span>
                           if (q <= item.min_stock)                 return <span className="px-2 py-1 text-xs font-medium rounded-full bg-yellow-50 text-yellow-600 border border-yellow-200">Estoque Baixo</span>
-                          if (supplyPoint != null && q <= supplyPoint) return <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-50 text-blue-600 border border-blue-200">Ponto de Pedido</span>
+                          if (supplyPoint > 0 && q <= supplyPoint) return <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-50 text-blue-600 border border-blue-200">Ponto de Pedido</span>
                           return                                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-green-50 text-green-600 border border-green-200">Normal</span>
                         })()}
                       </div>
