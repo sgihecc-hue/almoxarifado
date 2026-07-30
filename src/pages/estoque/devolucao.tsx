@@ -36,6 +36,9 @@ interface ItemRow {
   price: number | null
 }
 interface ReturnLine {
+  // Identidade da LINHA (não do item): o mesmo medicamento pode aparecer em
+  // várias linhas, uma por lote. Por isso os handlers usam uid, não item_id.
+  uid: string
   item_id: string
   item_name: string
   unit: string
@@ -230,24 +233,26 @@ export function DevolucaoInterna() {
       .slice(0, 15)
   }, [items, search])
 
+  // NÃO bloqueia item repetido: o mesmo medicamento pode entrar em várias
+  // linhas, uma por lote (devolução de lotes diferentes do mesmo produto).
   const addItem = (i: ItemRow) => {
-    if (lines.some((l) => l.item_id === i.id)) return
     setLines((prev) => [
       ...prev,
       {
+        uid: crypto.randomUUID(),
         item_id: i.id, item_name: i.name, unit: i.unit, quantity: 1, unit_cost: i.price ?? null,
         batch_number: '', expiry_date: '',
       },
     ])
     setSearch('')
   }
-  const updateQty = (id: string, q: number) =>
-    setLines((prev) => prev.map((l) => (l.item_id === id ? { ...l, quantity: Math.max(1, q) } : l)))
-  const setBatch = (id: string, v: string) =>
-    setLines((prev) => prev.map((l) => (l.item_id === id ? { ...l, batch_number: v } : l)))
-  const setValidade = (id: string, v: string) =>
-    setLines((prev) => prev.map((l) => (l.item_id === id ? { ...l, expiry_date: v } : l)))
-  const removeLine = (id: string) => setLines((prev) => prev.filter((l) => l.item_id !== id))
+  const updateQty = (uid: string, q: number) =>
+    setLines((prev) => prev.map((l) => (l.uid === uid ? { ...l, quantity: Math.max(1, q) } : l)))
+  const setBatch = (uid: string, v: string) =>
+    setLines((prev) => prev.map((l) => (l.uid === uid ? { ...l, batch_number: v } : l)))
+  const setValidade = (uid: string, v: string) =>
+    setLines((prev) => prev.map((l) => (l.uid === uid ? { ...l, expiry_date: v } : l)))
+  const removeLine = (uid: string) => setLines((prev) => prev.filter((l) => l.uid !== uid))
 
   // Obrigatorios: estoque destino, setor de origem, motivo, itens com qtd,
   // LOTE (digitado) e VALIDADE em cada linha. Prontuario e paciente sao
@@ -310,12 +315,17 @@ export function DevolucaoInterna() {
       if (isPharmacy) {
         for (const l of lines) {
           const batch = l.batch_number.trim()
-          // 1) Procura lote existente (case-insensitive na comparacao)
+          // 1) Procura lote existente NO LOCAL DE DESTINO. O lote é por local
+          //    (FA4): devolvendo pro Satélite 1, o lote tem que ser o do
+          //    Satélite 1 — não o mesmo número que exista no CAF. Sem esse
+          //    filtro, o saldo ia pro satélite mas o lote era somado/criado no
+          //    CAF (inconsistente).
           const { data: existentes, error: eFind } = await supabase
             .from('expiry_tracking')
             .select('id, current_quantity')
             .eq('item_id', l.item_id)
             .eq('batch_number', batch)
+            .eq('location_id', targetLocationId)
             .limit(1)
           if (eFind) throw new Error(`Erro ao verificar lote de ${l.item_name}: ${eFind.message}`)
 
@@ -342,6 +352,7 @@ export function DevolucaoInterna() {
                 expiry_date: l.expiry_date,
                 initial_quantity: l.quantity,
                 current_quantity: l.quantity,
+                location_id: targetLocationId, // lote no MESMO local do saldo
                 created_by: user.id,
               })
               .select('id')
@@ -638,18 +649,30 @@ export function DevolucaoInterna() {
                   {filtered.length === 0 ? (
                     <p className="p-3 text-sm text-center" style={{ color: txtMut }}>Nenhum item encontrado</p>
                   ) : (
-                    filtered.map((i) => (
-                      <button
-                        key={i.id}
-                        onClick={() => addItem(i)}
-                        className="w-full text-left p-3 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors block"
-                      >
-                        <p className="text-sm font-medium" style={{ color: txt }}>{i.name}</p>
-                        <p className="text-xs" style={{ color: txtMut }}>
-                          {i.code || 'sem codigo'} • {i.unit}
-                        </p>
-                      </button>
-                    ))
+                    filtered.map((i) => {
+                      // Quantas linhas (lotes) este item já tem. Clicar de novo
+                      // adiciona outra linha pra devolver de outro lote.
+                      const qtdLinhas = lines.filter((l) => l.item_id === i.id).length
+                      return (
+                        <button
+                          key={i.id}
+                          onClick={() => addItem(i)}
+                          className="w-full text-left p-3 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors block"
+                        >
+                          <p className="text-sm font-medium" style={{ color: txt }}>
+                            {i.name}
+                            {qtdLinhas > 0 && (
+                              <span className="ml-1 text-xs text-blue-500">
+                                ({qtdLinhas} {qtdLinhas === 1 ? 'lote' : 'lotes'} — clique p/ outro)
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs" style={{ color: txtMut }}>
+                            {i.code || 'sem codigo'} • {i.unit}
+                          </p>
+                        </button>
+                      )
+                    })
                   )}
                 </div>
               )}
@@ -680,7 +703,7 @@ export function DevolucaoInterna() {
                 </thead>
                 <tbody>
                   {lines.map((l) => (
-                    <tr key={l.item_id} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
+                    <tr key={l.uid} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
                       <td className="p-2 text-sm" style={{ color: txt }}>
                         {l.item_name}{' '}
                         <span style={{ color: txtMut }}>({l.unit})</span>
@@ -690,7 +713,7 @@ export function DevolucaoInterna() {
                           type="number"
                           min={1}
                           value={l.quantity}
-                          onChange={(e) => updateQty(l.item_id, parseInt(e.target.value) || 1)}
+                          onChange={(e) => updateQty(l.uid, parseInt(e.target.value) || 1)}
                           onWheel={(e) => e.currentTarget.blur()}
                           style={{ ...inputStyle, padding: '4px 8px', textAlign: 'right' }}
                         />
@@ -698,12 +721,14 @@ export function DevolucaoInterna() {
                       <td className="p-2">
                         {/* Lote DIGITADO livre — a enfermagem devolve o lote
                             que veio da dispensacao. Ao salvar, o sistema
-                            procura esse lote no expiry_tracking: se existe,
-                            soma quantidade; se nao, cria novo. */}
+                            procura esse lote no expiry_tracking (no local de
+                            destino): se existe, soma quantidade; se nao, cria
+                            novo. O mesmo item pode ter várias linhas, uma por
+                            lote. */}
                         <input
                           type="text"
                           value={l.batch_number}
-                          onChange={(e) => setBatch(l.item_id, e.target.value)}
+                          onChange={(e) => setBatch(l.uid, e.target.value)}
                           placeholder="Ex: L010203"
                           style={{
                             ...inputStyle,
@@ -717,7 +742,7 @@ export function DevolucaoInterna() {
                         <input
                           type="date"
                           value={l.expiry_date}
-                          onChange={(e) => setValidade(l.item_id, e.target.value)}
+                          onChange={(e) => setValidade(l.uid, e.target.value)}
                           style={{
                             ...inputStyle,
                             padding: '4px 8px',
@@ -730,7 +755,7 @@ export function DevolucaoInterna() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => removeLine(l.item_id)}
+                          onClick={() => removeLine(l.uid)}
                           className="text-red-600 hover:bg-red-50 h-8 px-2"
                         >
                           <Trash2 className="w-4 h-4" />
