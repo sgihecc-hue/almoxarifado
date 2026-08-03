@@ -20,9 +20,19 @@ interface MovRow {
   item_id: string
   item_name: string
   medication_class: string | null
+  tipo: string
   quantidade: number
-  dispensacoes: number
+  ocorrencias: number
 }
+
+// Rótulos amigáveis dos tipos de saída (movement_type do stock_movements).
+const TIPO_LABEL: Record<string, string> = {
+  PRESCRICAO: 'Dispensação',
+  SOLICITACAO: 'Solicitação (atendimento)',
+  SAIDA_AVULSA: 'Quebra / Avulsa',
+  AJUSTE: 'Ajuste',
+}
+const tipoLabel = (t: string) => TIPO_LABEL[t] ?? t
 
 type Modo = 'dia' | 'semana' | 'mes' | 'personalizado'
 
@@ -90,8 +100,6 @@ export function MovimentacaoDiaria() {
     return { inicio: ini, fim: fim }
   }, [modo, dia, mesAno, ini, fim])
 
-  const isSat = !!activeStock && activeStock.code !== 'CAF' && activeStock.itemType === 'pharmacy'
-
   async function gerar() {
     if (!activeStock) { setError('Selecione um estoque no topo.'); return }
     setLoading(true); setError(''); setRows(null)
@@ -115,9 +123,10 @@ export function MovimentacaoDiaria() {
     if (!rows || rows.length === 0) return
     const dados = rows.map((r) => ({
       Data: fmtBR(r.dia),
+      Tipo: tipoLabel(r.tipo),
       Medicamento: r.item_name,
       Classe: r.medication_class ? (MEDICATION_CLASS_LABEL[r.medication_class as MedicationClass] ?? r.medication_class) : '—',
-      'Nº dispensações': r.dispensacoes,
+      'Nº saídas': r.ocorrencias,
       Quantidade: r.quantidade,
     }))
     const ws = XLSX.utils.json_to_sheet(dados)
@@ -139,18 +148,11 @@ export function MovimentacaoDiaria() {
         <div>
           <h1 className="text-2xl font-bold" style={{ color: txt }}>Movimentação Diária</h1>
           <p className="text-sm" style={{ color: txtSec }}>
-            Medicamentos que saíram por dispensação, por dia
+            Todas as saídas do estoque, por dia (dispensações, quebras/avulsas, solicitações)
             {activeStock && <> — <strong>{activeStock.name}</strong></>}
           </p>
         </div>
       </div>
-
-      {!isSat && (
-        <div className="p-4 rounded-xl flex items-center gap-2 text-sm" style={{ background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.35)', color: mode === 'dark' ? '#fcd34d' : '#92400e' }}>
-          <AlertCircle size={16} />
-          A dispensação ocorre nas farmácias satélites (Satélite 1 e 2). Escolha um satélite no seletor do topo para ver a movimentação.
-        </div>
-      )}
 
       {/* Filtros */}
       <div className="p-5" style={glass}>
@@ -240,23 +242,25 @@ export function MovimentacaoDiaria() {
               <thead>
                 <tr style={{ background: mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)', color: txtMut }}>
                   <th className="text-left px-4 py-2 text-xs font-medium">Data</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium">Tipo</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Medicamento</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Classe</th>
-                  <th className="text-right px-4 py-2 text-xs font-medium">Nº disp.</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium">Nº saídas</th>
                   <th className="text-right px-4 py-2 text-xs font-medium">Quantidade</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><td colSpan={5} className="text-center py-8 text-sm" style={{ color: txtMut }}>Nenhuma saída no período.</td></tr>
+                  <tr><td colSpan={6} className="text-center py-8 text-sm" style={{ color: txtMut }}>Nenhuma saída no período.</td></tr>
                 ) : rows.map((r, i) => (
-                  <tr key={`${r.dia}-${r.item_id}-${i}`} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
+                  <tr key={`${r.dia}-${r.item_id}-${r.tipo}-${i}`} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txt }}>{fmtBR(r.dia)}</td>
+                    <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{tipoLabel(r.tipo)}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txt }}>{r.item_name}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txtSec }}>
                       {r.medication_class ? (MEDICATION_CLASS_LABEL[r.medication_class as MedicationClass] ?? r.medication_class) : '—'}
                     </td>
-                    <td className="px-4 py-2 text-sm text-right" style={{ color: txtSec }}>{r.dispensacoes}</td>
+                    <td className="px-4 py-2 text-sm text-right" style={{ color: txtSec }}>{r.ocorrencias}</td>
                     <td className="px-4 py-2 text-sm text-right font-semibold" style={{ color: txt }}>{Number(r.quantidade).toLocaleString('pt-BR')}</td>
                   </tr>
                 ))}
