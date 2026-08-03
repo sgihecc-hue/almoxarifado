@@ -18,6 +18,8 @@ import { itemsService } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import type { Item, ItemCategory, UnitType } from '@/lib/services/items'
+import { MEDICATION_CLASS_LABEL, CONTROLLED_SUBCLASSES } from '@/lib/types/farmacia'
+import type { MedicationClass } from '@/lib/types/farmacia'
 
 // Transforma NaN/vazio em undefined para campos numéricos opcionais
 const optionalNumber = z.preprocess(
@@ -54,6 +56,8 @@ const schema = z.object({
   expiry_date: z.string().optional(),
   last_purchase_price: optionalNumber,
   reference_price: optionalNumber,
+  // Farmácia: subclasse da Portaria 344/98 (só quando "controlados" marcado).
+  controlled_subclass: z.enum(['A1', 'A2', 'A3', 'B1', 'B2', 'C1', 'C2', 'C3', 'C4']).optional(),
   // Nova entrada (opcional)
   entry_quantity: optionalNumber,
   acquisition_type: z.preprocess(
@@ -89,6 +93,20 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
   const [scanningBarcode, setScanningBarcode] = useState(false)
   const barcodeInputRef = useRef<HTMLInputElement>(null)
 
+  // Classes do medicamento (farmácia): lê do array medication_classes; se
+  // vazio, cai no medication_class (single) por compatibilidade.
+  const classesDoItem = (it: Item): MedicationClass[] => {
+    const arr = (it as any).medication_classes as MedicationClass[] | null | undefined
+    if (Array.isArray(arr) && arr.length > 0) return arr
+    const single = (it as any).medication_class as MedicationClass | null | undefined
+    return single ? [single] : []
+  }
+  const [selectedClasses, setSelectedClasses] = useState<MedicationClass[]>(() => classesDoItem(item))
+  const hasControlados = selectedClasses.includes('controlados')
+  function toggleClass(c: MedicationClass) {
+    setSelectedClasses((prev) => prev.includes(c) ? prev.filter((k) => k !== c) : [...prev, c])
+  }
+
   const { register, handleSubmit, formState: { errors }, reset, watch, setValue } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -106,6 +124,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       expiry_date: item.expiry_date || '',
       last_purchase_price: (item as any).last_purchase_price ?? undefined,
       reference_price: (item as any).reference_price ?? undefined,
+      controlled_subclass: (item as any).controlled_subclass ?? undefined,
       entry_quantity: 0,
     },
   })
@@ -127,6 +146,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       expiry_date: item.expiry_date || '',
       last_purchase_price: (item as any).last_purchase_price ?? undefined,
       reference_price: (item as any).reference_price ?? undefined,
+      controlled_subclass: (item as any).controlled_subclass ?? undefined,
       entry_quantity: 0,
       acquisition_type: undefined,
       invoice_number: '',
@@ -137,6 +157,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       supplier_cnpj: '',
       supplier_name: '',
     })
+    setSelectedClasses(classesDoItem(item))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id])
 
@@ -177,7 +198,13 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
               lead_time_days: data.lead_time_days ?? null,
               avg_daily_consumption: data.avg_daily_consumption ?? null,
             }
-          : {}),
+          : {
+              // Farmácia: classes do medicamento (default uso_geral se nada
+              // marcado, pra não deixar o item sem classe). O service sincroniza
+              // medication_class (single) com a primeira do array.
+              medication_classes: selectedClasses.length > 0 ? selectedClasses : ['uso_geral'],
+              controlled_subclass: hasControlados ? (data.controlled_subclass ?? null) : null,
+            }),
         current_stock: data.current_stock,
         batch_number: data.batch_number || null,
         expiry_date: data.expiry_date || null,
@@ -327,6 +354,58 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
               className="w-full mt-1 rounded-md border border-input px-3 py-2 min-h-[60px] bg-white"
             />
           </div>
+
+          {type === 'pharmacy' && (
+            <div className="rounded-lg border border-gray-200 p-4 space-y-4 bg-white">
+              <div>
+                <Label>Classes do medicamento (uma ou mais)</Label>
+                <p className="text-xs text-gray-500 mt-0.5 mb-2">
+                  Clique para marcar/desmarcar. Itens controlados ou antimicrobianos
+                  exigem aprovação farmacêutica na dispensação.
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-1">
+                  {(Object.entries(MEDICATION_CLASS_LABEL) as Array<[MedicationClass, string]>).map(([k, label]) => {
+                    const selected = selectedClasses.includes(k)
+                    return (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => toggleClass(k)}
+                        className={`px-2 py-2 text-xs rounded-lg border text-center leading-tight transition-colors flex items-center justify-center gap-1 min-h-[60px] ${
+                          selected
+                            ? 'bg-blue-100 border-blue-500 text-blue-900 font-semibold'
+                            : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <span className={`inline-block w-3 h-3 rounded-sm border ${selected ? 'bg-blue-600 border-blue-600' : 'border-gray-400'}`}>
+                          {selected && <span className="text-white text-[10px] leading-3 block text-center">✓</span>}
+                        </span>
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {hasControlados && (
+                <div>
+                  <Label>Lista (Portaria 344/98) *</Label>
+                  <select
+                    {...register('controlled_subclass')}
+                    className="w-full mt-1 h-9 rounded-md border border-input px-3 py-1 bg-white"
+                  >
+                    <option value="">Selecione a lista</option>
+                    {CONTROLLED_SUBCLASSES.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    A1/A2/A3=entorpecentes · B1/B2=psicotrópicos · C1=outros · C2=retinoicos · C3=imunossupressores · C4=antirretrovirais
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
