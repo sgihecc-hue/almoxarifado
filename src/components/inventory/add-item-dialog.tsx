@@ -455,7 +455,7 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
 
                 {hasControlados && (
                   <div>
-                    <Label>Lista (Portaria 344/98) *</Label>
+                    <Label>Lista (Portaria 344/98) — opcional</Label>
                     <select
                       {...register('controlled_subclass')}
                       className="w-full mt-1 h-9 rounded-md border border-input px-3 py-1 bg-white"
