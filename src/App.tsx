@@ -80,6 +80,7 @@ import { Talidomida } from '@/pages/farmacia/talidomida'
 import { Perdas } from '@/pages/farmacia/perdas'
 import { NotificacaoReceita } from '@/pages/farmacia/notificacao-receita'
 import { BMPO } from '@/pages/farmacia/bmpo'
+import { MovimentacaoDiaria } from '@/pages/farmacia/movimentacao-diaria'
 import { ConsentGate } from '@/components/lgpd/consent-gate'
 import { useModule } from '@/contexts/module'
 import { ModuleLayout } from '@/components/module-layout-wrapper'
@@ -543,6 +544,13 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <BMPO />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/farmacia/movimentacao-diaria" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <MovimentacaoDiaria />
                   </MainLayout>
                 </ProtectedRoute>
               } />
