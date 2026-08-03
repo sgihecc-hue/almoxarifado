@@ -191,6 +191,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       module: 'farmacia',
       items: [
         { name: 'Dispensações', icon: Syringe, href: '/dispensacao', show: (f) => isSat && f.canManageRequests },
+        { name: 'Movimentação Diária', icon: CalendarClock, href: '/farmacia/movimentacao-diaria', show: (f) => isSat && f.canManageRequests },
         { name: 'Histórico', icon: History, href: '/dispensacao/historico', show: (f) => isSat && f.canManageRequests },
       ],
     },
