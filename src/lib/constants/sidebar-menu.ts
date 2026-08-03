@@ -191,7 +191,6 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       module: 'farmacia',
       items: [
         { name: 'Dispensações', icon: Syringe, href: '/dispensacao', show: (f) => isSat && f.canManageRequests },
-        { name: 'Movimentação Diária', icon: CalendarClock, href: '/farmacia/movimentacao-diaria', show: (f) => isSat && f.canManageRequests },
         { name: 'Histórico', icon: History, href: '/dispensacao/historico', show: (f) => isSat && f.canManageRequests },
       ],
     },
@@ -239,6 +238,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Multi-Estoque', icon: BarChart3, href: '/reports/farmacia-multi-estoque', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Validade', icon: CalendarClock, href: '/reports/stock-expiry?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Movimentações', icon: BarChart3, href: '/reports/movimentacoes?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Relatório de dispensações por dia. Aparece em qualquer estoque; a
+        // própria tela orienta a escolher um satélite (é onde há dispensação).
+        { name: 'Movimentação Diária', icon: CalendarClock, href: '/farmacia/movimentacao-diaria', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
       ],
     },
     {
