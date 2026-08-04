@@ -88,8 +88,12 @@ import { ModuleLayout } from '@/components/module-layout-wrapper'
 const queryClient = new QueryClient()
 
 function DashboardOrSelector() {
-  const { activeModule, isModuleUser } = useModule()
+  const { activeModule, isModuleUser, isPharmacyStockUser, activeStock } = useModule()
+  // Gestor/admin: escolhem primeiro o módulo (Farmácia/Almoxarifado).
   if (isModuleUser && !activeModule) return <ModuleSelector />
+  // Farmacêutico / atendente de farmácia: entram direto na escolha do estoque
+  // (CAF/Satélites), sem card de Almoxarifado.
+  if (isPharmacyStockUser && !activeStock) return <ModuleSelector pharmacyOnly />
   return <Dashboard />
 }
 

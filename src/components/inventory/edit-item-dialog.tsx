@@ -63,6 +63,8 @@ const schema = z.object({
   reference_price: optionalNumber,
   // Farmácia: subclasse da Portaria 344/98 (só quando "controlados" marcado).
   controlled_subclass: z.enum(['A1', 'A2', 'A3', 'B1', 'B2', 'C1', 'C2', 'C3', 'C4']).optional(),
+  // Farmácia: item faz parte da padronização da farmácia.
+  padronizado: z.boolean().optional(),
   // Nova entrada (opcional)
   entry_quantity: optionalNumber,
   acquisition_type: z.preprocess(
@@ -131,6 +133,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       last_purchase_price: (item as any).last_purchase_price ?? undefined,
       reference_price: (item as any).reference_price ?? undefined,
       controlled_subclass: (item as any).controlled_subclass ?? undefined,
+      padronizado: (item as any).padronizado ?? false,
       entry_quantity: 0,
     },
   })
@@ -154,6 +157,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       last_purchase_price: (item as any).last_purchase_price ?? undefined,
       reference_price: (item as any).reference_price ?? undefined,
       controlled_subclass: (item as any).controlled_subclass ?? undefined,
+      padronizado: (item as any).padronizado ?? false,
       entry_quantity: 0,
       acquisition_type: undefined,
       invoice_number: '',
@@ -207,6 +211,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
               // service sincroniza medication_class (single) com a 1ª do array.
               medication_classes: selectedClasses.length > 0 ? selectedClasses : ['uso_geral'],
               controlled_subclass: hasControlados ? (data.controlled_subclass ?? null) : null,
+              padronizado: !!data.padronizado,
             }
           : {
               lead_time_days: data.lead_time_days ?? null,
@@ -411,6 +416,20 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
                   </p>
                 </div>
               )}
+
+              <label className="flex items-start gap-2 cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  {...register('padronizado')}
+                  className="w-4 h-4 mt-0.5 flex-shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-gray-900">Medicamento padronizado</div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Marque se este item faz parte da padronização da farmácia.
+                  </p>
+                </div>
+              </label>
             </div>
           )}
 

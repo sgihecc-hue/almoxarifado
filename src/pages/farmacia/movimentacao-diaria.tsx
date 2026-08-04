@@ -133,9 +133,9 @@ export function MovimentacaoDiaria() {
       Tipo: tipoLabel(r.tipo),
       Medicamento: r.item_name,
       Classe: r.medication_class ? (MEDICATION_CLASS_LABEL[r.medication_class as MedicationClass] ?? r.medication_class) : '—',
-      'Saldo antes': r.saldo_antes,
+      'Estoque anterior': r.saldo_antes,
       Movimentado: r.movimentado,
-      'Saldo depois': r.saldo_depois,
+      'Estoque atual': r.saldo_depois,
     }))
     const ws = XLSX.utils.json_to_sheet(dados)
     const wb = XLSX.utils.book_new()
@@ -181,7 +181,7 @@ export function MovimentacaoDiaria() {
       <table>
         <thead><tr>
           <th>Data/Hora</th><th>Tipo</th><th>Medicamento</th>
-          <th style="text-align:right">Antes</th><th style="text-align:right">Movim.</th><th style="text-align:right">Depois</th>
+          <th style="text-align:right">Estoque anterior</th><th style="text-align:right">Movim.</th><th style="text-align:right">Estoque atual</th>
         </tr></thead>
         <tbody>${linhas}</tbody>
         <tfoot><tr><td colspan="4">Total movimentado</td><td style="text-align:right">${totalQtd}</td><td></td></tr></tfoot>
@@ -305,9 +305,9 @@ export function MovimentacaoDiaria() {
                   <th className="text-left px-4 py-2 text-xs font-medium">Tipo</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Medicamento</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Classe</th>
-                  <th className="text-right px-4 py-2 text-xs font-medium">Antes</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium">Estoque anterior</th>
                   <th className="text-right px-4 py-2 text-xs font-medium">Movim.</th>
-                  <th className="text-right px-4 py-2 text-xs font-medium">Depois</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium">Estoque atual</th>
                 </tr>
               </thead>
               <tbody>
