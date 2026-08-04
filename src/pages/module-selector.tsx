@@ -6,7 +6,7 @@ import { useTheme } from '@/contexts/theme'
 import { Pill, Package2, ArrowRight, ArrowLeft, Building2, Warehouse } from 'lucide-react'
 import { PHARMACY_STOCKS, type PharmacyStock } from '@/lib/constants/stock-locations'
 
-export function ModuleSelector() {
+export function ModuleSelector({ pharmacyOnly = false }: { pharmacyOnly?: boolean } = {}) {
   const navigate = useNavigate()
   const { user } = useAuth()
   const { setActiveModule, setActiveStock } = useModule()
@@ -19,8 +19,9 @@ export function ModuleSelector() {
   const mutedColor = mode === 'dark' ? '#98b0a4' : '#64748b'
   const borderCol = mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'
 
-  // 'modules' = escolher Farmácia/Almoxarifado; 'pharmacy' = escolher o estoque
-  const [view, setView] = useState<'modules' | 'pharmacy'>('modules')
+  // 'modules' = escolher Farmácia/Almoxarifado; 'pharmacy' = escolher o estoque.
+  // pharmacyOnly (farmacêutico / atendente-farmácia): já começa no estoque.
+  const [view, setView] = useState<'modules' | 'pharmacy'>(pharmacyOnly ? 'pharmacy' : 'modules')
 
   function selectAlmoxarifado() {
     setActiveModule('almoxarifado')
@@ -131,15 +132,17 @@ export function ModuleSelector() {
         <p style={{ fontSize: 15, color: mutedColor }}>Escolha o estoque de farmácia que vai operar</p>
       </div>
 
-      <button
-        onClick={() => setView('modules')}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 20,
-          background: 'transparent', border: 'none', cursor: 'pointer', color: mutedColor, fontSize: 14, fontWeight: 600,
-        }}
-      >
-        <ArrowLeft className="w-4 h-4" /> Voltar aos módulos
-      </button>
+      {!pharmacyOnly && (
+        <button
+          onClick={() => setView('modules')}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 20,
+            background: 'transparent', border: 'none', cursor: 'pointer', color: mutedColor, fontSize: 14, fontWeight: 600,
+          }}
+        >
+          <ArrowLeft className="w-4 h-4" /> Voltar aos módulos
+        </button>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 20 }}>
         {PHARMACY_STOCKS.map((stock) => {

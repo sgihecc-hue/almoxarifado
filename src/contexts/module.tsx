@@ -10,6 +10,10 @@ interface ModuleContextType {
   activeModule: ModuleType
   setActiveModule: (m: ModuleType) => void
   isModuleUser: boolean
+  // Usuário operacional de farmácia (farmacêutico ou atendente de farmácia):
+  // entra direto na escolha do estoque (CAF/Satélites), sem passar pela escolha
+  // Farmácia/Almoxarifado. Gestor/admin NÃO entram aqui (usam os dois módulos).
+  isPharmacyStockUser: boolean
   // Estoque de farmácia atualmente selecionado (CAF / Satélites)
   activeStock: PharmacyStock | null
   setActiveStock: (s: PharmacyStock | null) => void
@@ -39,6 +43,8 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   // almox; CAF/Satélites => farmácia). Ele continua escolhendo entre as 4
   // farmácias pelo seletor de estoque (activeStock), que é outra coisa.
   const isAtendente = user?.role === 'atendente'
+  // Farmacêutico é sempre usuário de farmácia (mesma nav do atendente-farmácia).
+  const isPharmacist = user?.role === 'pharmacist'
   const [atendenteModule, setAtendenteModule] = useState<ModuleType>(null)
 
   useEffect(() => {
@@ -130,11 +136,20 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   }, [isModuleUser])
 
   // Módulo efetivo: gestor/admin usam o que escolheram; atendente usa o
-  // derivado do setor; solicitante fica sem módulo (menu único, sem escolha).
-  const effectiveModule: ModuleType = isAtendente ? atendenteModule : activeModule
+  // derivado do setor; farmacêutico é sempre farmácia; solicitante fica sem
+  // módulo (menu único, sem escolha).
+  const effectiveModule: ModuleType = isAtendente
+    ? atendenteModule
+    : isPharmacist
+      ? 'farmacia'
+      : activeModule
+
+  // Usuário operacional de farmácia: farmacêutico, ou atendente cujo setor é
+  // farmácia. É quem entra direto na escolha do estoque (sem card de almox).
+  const isPharmacyStockUser = isPharmacist || (isAtendente && atendenteModule === 'farmacia')
 
   return (
-    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, activeStock, setActiveStock }}>
+    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, isPharmacyStockUser, activeStock, setActiveStock }}>
       {children}
     </ModuleContext.Provider>
   )
