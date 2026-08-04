@@ -4,7 +4,7 @@
 // Filtros: período (dia/semana/mês/personalizado) + classe.
 // =====================================================================
 import { useMemo, useState } from 'react'
-import { CalendarRange, Play, Download, Loader2, AlertCircle } from 'lucide-react'
+import { CalendarRange, Play, Download, Printer, Loader2, AlertCircle } from 'lucide-react'
 import { saveAs } from 'file-saver'
 import * as XLSX from 'xlsx'
 import { Button } from '@/components/ui/button'
@@ -17,12 +17,14 @@ import type { MedicationClass } from '@/lib/types/farmacia'
 
 interface MovRow {
   dia: string
+  momento: string
   item_id: string
   item_name: string
   medication_class: string | null
   tipo: string
-  quantidade: number
-  ocorrencias: number
+  saldo_antes: number
+  movimentado: number
+  saldo_depois: number
 }
 
 // Rótulos amigáveis dos tipos de saída (movement_type do stock_movements).
@@ -56,6 +58,11 @@ function semanaDe(iso: string): { inicio: string; fim: string } {
 }
 function fmtBR(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR')
+}
+function escapeHtml(s: string): string {
+  return (s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
+  ))
 }
 
 export function MovimentacaoDiaria() {
@@ -122,12 +129,13 @@ export function MovimentacaoDiaria() {
   function exportar() {
     if (!rows || rows.length === 0) return
     const dados = rows.map((r) => ({
-      Data: fmtBR(r.dia),
+      'Data/Hora': fmtMomento(r.momento),
       Tipo: tipoLabel(r.tipo),
       Medicamento: r.item_name,
       Classe: r.medication_class ? (MEDICATION_CLASS_LABEL[r.medication_class as MedicationClass] ?? r.medication_class) : '—',
-      'Nº saídas': r.ocorrencias,
-      Quantidade: r.quantidade,
+      'Saldo antes': r.saldo_antes,
+      Movimentado: r.movimentado,
+      'Saldo depois': r.saldo_depois,
     }))
     const ws = XLSX.utils.json_to_sheet(dados)
     const wb = XLSX.utils.book_new()
@@ -137,7 +145,56 @@ export function MovimentacaoDiaria() {
       `movimentacao_${activeStock?.code}_${periodo.inicio}_a_${periodo.fim}.xlsx`)
   }
 
-  const totalQtd = (rows ?? []).reduce((s, r) => s + Number(r.quantidade || 0), 0)
+  const totalQtd = (rows ?? []).reduce((s, r) => s + Number(r.movimentado || 0), 0)
+
+  // dd/mm HH:MM do momento do movimento
+  const fmtMomento = (iso: string) => {
+    try { return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) }
+    catch { return fmtBR((iso || '').slice(0, 10)) }
+  }
+
+  // Impressão: abre uma janela limpa só com o relatório e chama print().
+  function imprimir() {
+    if (!rows || rows.length === 0) return
+    const linhas = rows.map((r) => `
+      <tr>
+        <td>${fmtMomento(r.momento)}</td>
+        <td>${tipoLabel(r.tipo)}</td>
+        <td>${escapeHtml(r.item_name)}</td>
+        <td style="text-align:right">${r.saldo_antes}</td>
+        <td style="text-align:right">${r.movimentado}</td>
+        <td style="text-align:right">${r.saldo_depois}</td>
+      </tr>`).join('')
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Movimentação Diária</title>
+      <style>
+        body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:24px}
+        h1{font-size:18px;margin:0 0 4px}
+        .sub{font-size:12px;color:#555;margin:0 0 16px}
+        table{width:100%;border-collapse:collapse;font-size:12px}
+        th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}
+        th{background:#f0f0f0}
+        tfoot td{font-weight:bold}
+        @media print{ button{display:none} }
+      </style></head><body>
+      <h1>Movimentação Diária — ${escapeHtml(activeStock?.name ?? '')}</h1>
+      <p class="sub">Período: ${fmtBR(periodo.inicio)} a ${fmtBR(periodo.fim)}${classe ? ' · Classe: ' + escapeHtml(MEDICATION_CLASS_LABEL[classe as MedicationClass] ?? classe) : ''} · Emitido em ${new Date().toLocaleString('pt-BR')}</p>
+      <table>
+        <thead><tr>
+          <th>Data/Hora</th><th>Tipo</th><th>Medicamento</th>
+          <th style="text-align:right">Antes</th><th style="text-align:right">Movim.</th><th style="text-align:right">Depois</th>
+        </tr></thead>
+        <tbody>${linhas}</tbody>
+        <tfoot><tr><td colspan="4">Total movimentado</td><td style="text-align:right">${totalQtd}</td><td></td></tr></tfoot>
+      </table>
+      <button onclick="window.print()" style="margin-top:16px;padding:8px 16px">Imprimir</button>
+      </body></html>`
+    const w = window.open('', '_blank')
+    if (!w) { setError('Não foi possível abrir a janela de impressão (pop-up bloqueado).'); return }
+    w.document.write(html)
+    w.document.close()
+    w.focus()
+    setTimeout(() => w.print(), 300)
+  }
 
   return (
     <div className="space-y-6">
@@ -213,6 +270,9 @@ export function MovimentacaoDiaria() {
               {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
               Gerar
             </Button>
+            <Button variant="outline" onClick={imprimir} disabled={!rows || rows.length === 0}>
+              <Printer className="w-4 h-4 mr-2" /> Imprimir
+            </Button>
             <Button variant="outline" onClick={exportar} disabled={!rows || rows.length === 0}>
               <Download className="w-4 h-4 mr-2" /> Exportar XLSX
             </Button>
@@ -238,30 +298,32 @@ export function MovimentacaoDiaria() {
             </span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px]">
+            <table className="w-full min-w-[820px]">
               <thead>
                 <tr style={{ background: mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)', color: txtMut }}>
-                  <th className="text-left px-4 py-2 text-xs font-medium">Data</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium">Data/Hora</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Tipo</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Medicamento</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Classe</th>
-                  <th className="text-right px-4 py-2 text-xs font-medium">Nº saídas</th>
-                  <th className="text-right px-4 py-2 text-xs font-medium">Quantidade</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium">Antes</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium">Movim.</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium">Depois</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><td colSpan={6} className="text-center py-8 text-sm" style={{ color: txtMut }}>Nenhuma saída no período.</td></tr>
+                  <tr><td colSpan={7} className="text-center py-8 text-sm" style={{ color: txtMut }}>Nenhuma saída no período.</td></tr>
                 ) : rows.map((r, i) => (
-                  <tr key={`${r.dia}-${r.item_id}-${r.tipo}-${i}`} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
-                    <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txt }}>{fmtBR(r.dia)}</td>
+                  <tr key={`${r.item_id}-${r.momento}-${i}`} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
+                    <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txt }}>{fmtMomento(r.momento)}</td>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{tipoLabel(r.tipo)}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txt }}>{r.item_name}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txtSec }}>
                       {r.medication_class ? (MEDICATION_CLASS_LABEL[r.medication_class as MedicationClass] ?? r.medication_class) : '—'}
                     </td>
-                    <td className="px-4 py-2 text-sm text-right" style={{ color: txtSec }}>{r.ocorrencias}</td>
-                    <td className="px-4 py-2 text-sm text-right font-semibold" style={{ color: txt }}>{Number(r.quantidade).toLocaleString('pt-BR')}</td>
+                    <td className="px-4 py-2 text-sm text-right" style={{ color: txtSec }}>{Number(r.saldo_antes).toLocaleString('pt-BR')}</td>
+                    <td className="px-4 py-2 text-sm text-right font-semibold" style={{ color: txt }}>{Number(r.movimentado).toLocaleString('pt-BR')}</td>
+                    <td className="px-4 py-2 text-sm text-right" style={{ color: txtSec }}>{Number(r.saldo_depois).toLocaleString('pt-BR')}</td>
                   </tr>
                 ))}
               </tbody>
