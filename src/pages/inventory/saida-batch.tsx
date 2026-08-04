@@ -11,6 +11,7 @@ import { getErrorMessage } from '@/lib/utils/error-messages'
 import { suppliersService } from '@/lib/services/farmacia-cadastros'
 import { departmentsService } from '@/lib/services/departments'
 import { externalUnitsService } from '@/lib/services/external-units'
+import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
 interface SaidaBatchProps {
   type: 'pharmacy' | 'warehouse'
 }
@@ -76,6 +77,10 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
     ALMOX: 'Almoxarifado',
   }
   const locationLabel = LOC_LABELS[locationCode] ?? locationCode
+  // ID do local ativo — resolvido do catálogo fixo (síncrono, sem race). Os
+  // lotes têm que ser SÓ deste estoque: sem isso, a saída de um satélite lista
+  // lotes do CAF e das outras farmácias (estoques não isolados).
+  const locationId = PHARMACY_STOCKS.find((s) => s.code === locationCode)?.id ?? null
 
   const [reason, setReason] = useState<string>('quebra')
   const [reasonDetail, setReasonDetail] = useState('')
@@ -134,12 +139,14 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
 
   async function loadLots(itemId: string): Promise<LotRow[]> {
     if (lotsByItem[itemId]) return lotsByItem[itemId]
-    const { data } = await supabase
+    let query = supabase
       .from('expiry_tracking')
       .select('id, batch_number, expiry_date, current_quantity')
       .eq('item_id', itemId)
       .gt('current_quantity', 0)
-      .order('expiry_date', { ascending: true, nullsFirst: false })
+    // Isola por estoque: só os lotes DESTE local (CAF/Satélite ativo).
+    if (locationId) query = query.eq('location_id', locationId)
+    const { data } = await query.order('expiry_date', { ascending: true, nullsFirst: false })
     const lots = (data || []) as LotRow[]
     setLotsByItem((p) => ({ ...p, [itemId]: lots }))
     return lots
