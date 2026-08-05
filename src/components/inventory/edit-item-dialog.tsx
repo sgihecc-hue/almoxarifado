@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Loader2, FileText, Pencil, Barcode } from 'lucide-react'
+import { Loader2, FileText, Pencil, Barcode, Layers, Plus, Trash2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -20,6 +20,21 @@ import { getErrorMessage } from '@/lib/utils/error-messages'
 import type { Item, ItemCategory, UnitType } from '@/lib/services/items'
 import { MEDICATION_CLASS_LABEL, CONTROLLED_SUBCLASSES } from '@/lib/types/farmacia'
 import type { MedicationClass } from '@/lib/types/farmacia'
+import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
+
+// Estoques de farmácia que guardam lotes de medicamento (o Satélite Térreo é
+// material/almoxarifado, então não entra na edição de lotes de remédio).
+const LOT_LOCATIONS = PHARMACY_STOCKS.filter((s) => s.itemType === 'pharmacy')
+
+interface LotRow {
+  _key: string
+  id?: string
+  batch_number: string
+  expiry_date: string
+  quantity: number
+  location_id: string
+  deleted?: boolean
+}
 
 // Transforma NaN/vazio em undefined para campos numéricos opcionais
 const optionalNumber = z.preprocess(
@@ -113,6 +128,59 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
   function toggleClass(c: MedicationClass) {
     setSelectedClasses((prev) => prev.includes(c) ? prev.filter((k) => k !== c) : [...prev, c])
   }
+
+  // Lotes do medicamento (expiry_tracking) — editáveis nesta tela (só farmácia).
+  const [lots, setLots] = useState<LotRow[]>([])
+  const [loadingLots, setLoadingLots] = useState(false)
+  const [lotsDirty, setLotsDirty] = useState(false)
+
+  useEffect(() => {
+    if (!open || type !== 'pharmacy') { setLots([]); setLotsDirty(false); return }
+    let alive = true
+    ;(async () => {
+      setLoadingLots(true)
+      const { data } = await supabase
+        .from('expiry_tracking')
+        .select('id, batch_number, expiry_date, current_quantity, location_id')
+        .eq('item_id', item.id)
+        .order('expiry_date', { ascending: true, nullsFirst: false })
+      if (!alive) return
+      setLots((data || []).map((r: any) => ({
+        _key: r.id,
+        id: r.id,
+        batch_number: r.batch_number || '',
+        expiry_date: r.expiry_date || '',
+        quantity: r.current_quantity ?? 0,
+        location_id: r.location_id || LOT_LOCATIONS[0].id,
+      })))
+      setLotsDirty(false)
+      setLoadingLots(false)
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.id, open, type])
+
+  const newKey = () => Math.random().toString(36).slice(2)
+  function updateLot(key: string, patch: Partial<LotRow>) {
+    setLots((prev) => prev.map((l) => (l._key === key ? { ...l, ...patch } : l)))
+    setLotsDirty(true)
+  }
+  function addLot() {
+    setLots((prev) => [...prev, {
+      _key: newKey(), batch_number: '', expiry_date: '', quantity: 0, location_id: LOT_LOCATIONS[0].id,
+    }])
+    setLotsDirty(true)
+  }
+  function removeLot(key: string) {
+    // Se já existe no banco, marca deleted (o RPC apaga); se é novo, some da lista.
+    setLots((prev) => prev.flatMap((l) => {
+      if (l._key !== key) return [l]
+      return l.id ? [{ ...l, deleted: true }] : []
+    }))
+    setLotsDirty(true)
+  }
+  const lotsVisiveis = lots.filter((l) => !l.deleted)
+  const totalLotes = lotsVisiveis.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
 
   const { register, handleSubmit, formState: { errors }, reset, watch, setValue } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -224,6 +292,27 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
         reference_price: data.reference_price ?? null,
       }
       await itemsService.update(item.id, updatePayload, type)
+
+      // 1b) Farmácia: se mexeu nos lotes, grava via RPC (edita/adiciona/remove
+      // lotes e recalcula o saldo por local + current_stock). O RPC vira a
+      // fonte da verdade do estoque quando há lote.
+      if (type === 'pharmacy' && lotsDirty) {
+        const semLocal = lots.find((l) => !l.deleted && !l.location_id)
+        if (semLocal) throw new Error('Selecione o estoque de cada lote.')
+        const payload = lots.map((l) => ({
+          id: l.id ?? null,
+          batch_number: l.batch_number?.trim() || null,
+          expiry_date: l.expiry_date || null,
+          quantity: Number(l.quantity) || 0,
+          location_id: l.location_id,
+          deleted: !!l.deleted,
+        }))
+        const { error: rpcErr } = await supabase.rpc('farmacia_editar_lotes', {
+          p_item_id: item.id,
+          p_lots: payload,
+        })
+        if (rpcErr) throw rpcErr
+      }
 
       // 2) Se preencheu Nova Entrada, registra e soma estoque
       if (hasEntry) {
@@ -430,6 +519,84 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
                   </p>
                 </div>
               </label>
+            </div>
+          )}
+
+          {/* Lotes do medicamento (farmácia) — editar/adicionar/remover */}
+          {type === 'pharmacy' && (
+            <div className="rounded-lg border border-indigo-200 overflow-hidden">
+              <div className="flex items-center justify-between gap-2 px-4 py-3 bg-indigo-50 border-b border-indigo-200">
+                <div className="flex items-center gap-2 text-sm font-semibold text-indigo-900">
+                  <Layers className="w-4 h-4" /> Lotes do medicamento
+                </div>
+                <span className="text-xs text-indigo-700">Total: <strong>{totalLotes}</strong></span>
+              </div>
+              <div className="p-4 space-y-3 bg-white">
+                <p className="text-xs text-gray-500">
+                  Edite lote, validade, estoque e quantidade. O saldo do medicamento é recalculado pela soma dos lotes ao salvar.
+                </p>
+                {loadingLots ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400 py-2"><Loader2 className="w-4 h-4 animate-spin" /> Carregando lotes...</div>
+                ) : lotsVisiveis.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-2">Nenhum lote cadastrado. Use "Adicionar lote".</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-xs text-gray-400 uppercase border-b">
+                          <th className="text-left py-1 pr-2">Lote</th>
+                          <th className="text-left py-1 px-2">Validade</th>
+                          <th className="text-left py-1 px-2">Estoque</th>
+                          <th className="text-right py-1 px-2 w-20">Qtd</th>
+                          <th className="w-8"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lotsVisiveis.map((l) => (
+                          <tr key={l._key} className="border-b last:border-0">
+                            <td className="py-1 pr-2">
+                              <Input value={l.batch_number} onChange={(e) => updateLot(l._key, { batch_number: e.target.value })} className="h-8 text-xs" placeholder="Lote" />
+                            </td>
+                            <td className="py-1 px-2">
+                              <Input type="date" value={l.expiry_date} onChange={(e) => updateLot(l._key, { expiry_date: e.target.value })} className="h-8 text-xs w-36" />
+                            </td>
+                            <td className="py-1 px-2">
+                              <select
+                                value={l.location_id}
+                                onChange={(e) => updateLot(l._key, { location_id: e.target.value })}
+                                className="h-8 rounded-md border border-input bg-white px-2 text-xs"
+                              >
+                                {LOT_LOCATIONS.map((loc) => (
+                                  <option key={loc.id} value={loc.id}>{loc.label}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="py-1 px-2">
+                              <Input
+                                type="number" min={0}
+                                value={l.quantity === 0 ? '' : l.quantity}
+                                placeholder="0"
+                                onFocus={(e) => e.target.select()}
+                                onChange={(e) => updateLot(l._key, { quantity: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+                                onWheel={(e) => e.currentTarget.blur()}
+                                className="h-8 text-xs text-right w-20"
+                              />
+                            </td>
+                            <td className="py-1 text-center">
+                              <button type="button" onClick={() => removeLot(l._key)} className="text-red-500 hover:text-red-600 p-1" title="Remover lote">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <Button type="button" variant="outline" size="sm" onClick={addLot} className="text-indigo-700 border-indigo-300">
+                  <Plus className="w-4 h-4 mr-1" /> Adicionar lote
+                </Button>
+              </div>
             </div>
           )}
 
