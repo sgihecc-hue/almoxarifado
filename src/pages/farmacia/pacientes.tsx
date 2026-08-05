@@ -98,7 +98,7 @@ export function Pacientes() {
 
   function openEdit(p: Patient) {
     setEditing(p)
-    setFName(p.full_name); setFBirth(p.birth_date); setFRecord(p.medical_record_number)
+    setFName(p.full_name); setFBirth(p.birth_date || ''); setFRecord(p.medical_record_number)
     setFMother(p.mother_name || '')
     setFormError(''); setShowForm(true)
   }
@@ -108,13 +108,13 @@ export function Pacientes() {
     try {
       if (editing) {
         await patientsService.update(editing.id, {
-          full_name: fName, birth_date: fBirth,
+          full_name: fName, birth_date: fBirth || null,
           medical_record_number: fRecord, mother_name: fMother,
         })
       } else {
         // Sempre cria com admissao (regra de negocio).
         await patientsService.create({
-          full_name: fName, birth_date: fBirth,
+          full_name: fName, birth_date: fBirth || null,
           medical_record_number: fRecord, mother_name: fMother,
           already_admitted: true, admission_date: fAdmitDate,
         })
@@ -281,7 +281,7 @@ export function Pacientes() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label style={lbl}>Nascimento *</label>
+                <label style={lbl}>Nascimento</label>
                 <input type="date" value={fBirth} onChange={(e) => setFBirth(e.target.value)} style={input} />
               </div>
               <div>
