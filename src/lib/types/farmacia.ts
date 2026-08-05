@@ -28,7 +28,7 @@ export interface Prescriber {
 export interface Patient {
   id: string
   full_name: string
-  birth_date: string  // YYYY-MM-DD
+  birth_date: string | null  // YYYY-MM-DD (opcional)
   medical_record_number: string
   mother_name: string | null
   is_active: boolean

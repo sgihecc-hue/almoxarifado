@@ -231,21 +231,21 @@ class PatientsService {
    */
   async create(input: {
     full_name: string
-    birth_date: string
+    birth_date?: string | null
     medical_record_number: string
     mother_name?: string
     already_admitted?: boolean
     admission_date?: string
   }): Promise<Patient> {
     if (!input.full_name.trim()) throw new Error('Nome é obrigatório.')
-    if (!input.birth_date) throw new Error('Data de nascimento é obrigatória.')
     if (!input.medical_record_number.trim()) throw new Error('Prontuário é obrigatório.')
+    // Data de nascimento é opcional (nem sempre disponível na internação).
 
     const { data, error } = await supabase
       .from('patients')
       .insert({
         full_name: input.full_name.trim(),
-        birth_date: input.birth_date,
+        birth_date: input.birth_date || null,
         medical_record_number: input.medical_record_number.trim(),
         mother_name: input.mother_name?.trim() || null,
       })
@@ -269,7 +269,7 @@ class PatientsService {
     return data as Patient
   }
 
-  async update(id: string, input: Partial<{ full_name: string; birth_date: string; medical_record_number: string; mother_name: string; is_active: boolean }>): Promise<Patient> {
+  async update(id: string, input: Partial<{ full_name: string; birth_date: string | null; medical_record_number: string; mother_name: string; is_active: boolean }>): Promise<Patient> {
     const patch: any = { ...input, updated_at: new Date().toISOString() }
     const { data, error } = await supabase
       .from('patients').update(patch).eq('id', id).select('*').single()
