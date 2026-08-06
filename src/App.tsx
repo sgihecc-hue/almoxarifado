@@ -14,6 +14,7 @@ import { MyRequests } from '@/pages/my-requests'
 import { PharmacyItems } from '@/pages/inventory/pharmacy-items'
 import { StockLocationItems } from '@/pages/inventory/stock-location-items'
 import { WarehouseItems } from '@/pages/inventory/warehouse-items'
+import { EtiquetasAlmox } from '@/pages/almox/etiquetas'
 import { NfEntry } from '@/pages/inventory/nf-entry'
 import { NfEntryWarehouse } from '@/pages/inventory/nf-entry-warehouse'
 import { SaidaBatch } from '@/pages/inventory/saida-batch'
@@ -156,6 +157,13 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <WarehouseItems />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/almox/etiquetas" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <EtiquetasAlmox />
                   </MainLayout>
                 </ProtectedRoute>
               } />
