@@ -14,6 +14,7 @@ import { RequestTypeStep } from './components/request-type'
 import { RequestDetails, type RequestDetails as RequestDetailsType } from './components/request-details'
 import { RequestItems, type RequestItem } from './components/request-items'
 import { RequestReview } from './components/request-review'
+import { InventoryNoticeAlmox } from '@/components/inventory-notice-almox'
 import { requestService } from '@/lib/services/requests'
 import { requestDraftsService } from '@/lib/services/request-drafts'
 import { useTheme } from '@/contexts/theme'
@@ -311,6 +312,9 @@ export function NewRequest() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">
+      {/* Aviso do Inventário Rotativo do Almoxarifado — só p/ pedido de almox */}
+      <InventoryNoticeAlmox active={requestType === 'warehouse'} />
+
       {/* Pending Draft Banner - aguarda decisao do usuario */}
       {pendingDraft && draftSavedAt && !draftDismissed && (
         <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
