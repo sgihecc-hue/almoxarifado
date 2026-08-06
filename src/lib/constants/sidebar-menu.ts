@@ -29,6 +29,7 @@ import {
   BookOpen,
   Shield,
   PackageCheck,
+  Barcode,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { PharmacyStock } from './stock-locations'
@@ -135,6 +136,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       module: 'almoxarifado',
       items: [
         { name: 'Almoxarifado', icon: Package2, href: '/inventory/warehouse', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Etiquetas (código de barras)', icon: Barcode, href: '/almox/etiquetas', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
       ],
     },
     // --- OPERAÇÕES: separado por modulo. Farmacia NAO ve "Quebras e
