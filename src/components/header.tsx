@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { useTheme } from '@/contexts/theme'
 import { useModule } from '@/contexts/module'
-import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
 import {
   User,
   LogOut,
@@ -37,7 +36,7 @@ export function Header({ toggleSidebar, isSidebarOpen }: HeaderProps) {
   const navigate = useNavigate()
   const { user, signOut } = useAuth()
   const { mode, toggle, colors } = useTheme()
-  const { activeModule, activeStock, setActiveStock } = useModule()
+  const { activeModule, activeStock, setActiveStock, allowedStocks } = useModule()
   const [searchQuery, setSearchQuery] = useState('')
 
   const isFarmacia = activeModule === 'farmacia'
@@ -102,7 +101,7 @@ export function Header({ toggleSidebar, isSidebarOpen }: HeaderProps) {
             <DropdownMenuContent align="start">
               <DropdownMenuLabel>Estoque de farmácia</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {PHARMACY_STOCKS.map((s) => (
+              {allowedStocks.map((s) => (
                 <DropdownMenuItem
                   key={s.id}
                   onClick={() => { setActiveStock(s); navigate(`/inventory/stock/${s.id}`) }}

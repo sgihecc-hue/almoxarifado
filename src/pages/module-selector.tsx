@@ -5,13 +5,13 @@ import { useModule } from '@/contexts/module'
 import { useTheme } from '@/contexts/theme'
 import { supabase } from '@/lib/supabase'
 import { Pill, Package2, ArrowRight, ArrowLeft, Building2, Warehouse } from 'lucide-react'
-import { PHARMACY_STOCKS, moduloDoSetor, type PharmacyStock } from '@/lib/constants/stock-locations'
+import { moduloDoSetor, type PharmacyStock } from '@/lib/constants/stock-locations'
 
 export function ModuleSelector({ pharmacyOnly = false }: { pharmacyOnly?: boolean } = {}) {
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useAuth()
-  const { setActiveModule, setActiveStock } = useModule()
+  const { setActiveModule, setActiveStock, allowedStocks } = useModule()
   const { mode } = useTheme()
 
   const firstName = user?.full_name?.split(' ')[0] || 'Usuário'
@@ -199,7 +199,7 @@ export function ModuleSelector({ pharmacyOnly = false }: { pharmacyOnly?: boolea
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 20 }}>
-        {PHARMACY_STOCKS.map((stock) => {
+        {allowedStocks.map((stock) => {
           const isCaf = stock.code === 'CAF'
           const Icon = isCaf ? Building2 : Warehouse
           return (
