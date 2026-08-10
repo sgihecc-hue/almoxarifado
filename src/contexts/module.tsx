@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, type ReactNode } from '
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { supabase } from '@/lib/supabase'
-import { pharmacyStockById, type PharmacyStock } from '@/lib/constants/stock-locations'
+import { pharmacyStockById, PHARMACY_STOCKS, departmentBelongsToStock, type PharmacyStock } from '@/lib/constants/stock-locations'
 
 export type ModuleType = 'farmacia' | 'almoxarifado' | null
 
@@ -14,6 +14,9 @@ interface ModuleContextType {
   // entra direto na escolha do estoque (CAF/Satélites), sem passar pela escolha
   // Farmácia/Almoxarifado. Gestor/admin NÃO entram aqui (usam os dois módulos).
   isPharmacyStockUser: boolean
+  // Estoques de farmácia que ESTE usuário pode operar. Operador lotado numa
+  // satélite só vê as 3 satélites (sem CAF). Os demais veem todos.
+  allowedStocks: PharmacyStock[]
   // Estoque de farmácia atualmente selecionado (CAF / Satélites)
   activeStock: PharmacyStock | null
   setActiveStock: (s: PharmacyStock | null) => void
@@ -46,9 +49,13 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   // Farmacêutico é sempre usuário de farmácia (mesma nav do atendente-farmácia).
   const isPharmacist = user?.role === 'pharmacist'
   const [atendenteModule, setAtendenteModule] = useState<ModuleType>(null)
+  // Nome do setor do usuário (usado pra derivar módulo do atendente e pra
+  // restringir os estoques de quem é lotado numa satélite).
+  const [deptName, setDeptName] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!isAtendente || !user?.department_id) { setAtendenteModule(null); return }
+    const isPharmacyOp = isAtendente || isPharmacist
+    if (!isPharmacyOp || !user?.department_id) { setAtendenteModule(null); setDeptName(null); return }
     let cancelled = false
     ;(async () => {
       const { data } = await supabase
@@ -58,10 +65,22 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
         .maybeSingle()
       if (cancelled) return
       const nome = (data as { name?: string } | null)?.name || ''
-      setAtendenteModule(nome.trim().toLowerCase() === 'almoxarifado' ? 'almoxarifado' : 'farmacia')
+      setDeptName(nome)
+      setAtendenteModule(isAtendente
+        ? (nome.trim().toLowerCase() === 'almoxarifado' ? 'almoxarifado' : 'farmacia')
+        : null)
     })()
     return () => { cancelled = true }
-  }, [isAtendente, user?.department_id])
+  }, [isAtendente, isPharmacist, user?.department_id])
+
+  // Operador de farmácia lotado numa SATÉLITE só enxerga as 3 satélites (sem
+  // CAF). Gestor/admin e quem é lotado no CAF continuam vendo tudo. Como hoje
+  // ninguém é lotado em satélite, essa regra só afeta quem for cadastrado assim.
+  const satelliteOnly = (isAtendente || isPharmacist) && !!deptName &&
+    PHARMACY_STOCKS.some((s) => s.code !== 'CAF' && departmentBelongsToStock(deptName, s))
+  const allowedStocks = satelliteOnly
+    ? PHARMACY_STOCKS.filter((s) => s.code !== 'CAF')
+    : PHARMACY_STOCKS
 
   const [activeModule, setActiveModuleState] = useState<ModuleType>(() => {
     if (!isModuleUser) return null
@@ -148,8 +167,17 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   // farmácia. É quem entra direto na escolha do estoque (sem card de almox).
   const isPharmacyStockUser = isPharmacist || (isAtendente && atendenteModule === 'farmacia')
 
+  // Segurança: se o usuário é restrito às satélites mas o estoque ativo é o
+  // CAF (ex.: restou no localStorage), zera pra ele voltar ao seletor.
+  useEffect(() => {
+    if (satelliteOnly && activeStock?.code === 'CAF') {
+      setActiveStockState(null)
+      localStorage.removeItem(STOCK_KEY)
+    }
+  }, [satelliteOnly, activeStock])
+
   return (
-    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, isPharmacyStockUser, activeStock, setActiveStock }}>
+    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, isPharmacyStockUser, allowedStocks, activeStock, setActiveStock }}>
       {children}
     </ModuleContext.Provider>
   )
