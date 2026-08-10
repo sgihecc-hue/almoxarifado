@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import {
@@ -110,8 +110,37 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPharmacy, item])
 
+  // Serializa o salvamento: onChange + onBlur podiam disparar dois saveLots ao
+  // mesmo tempo e, como cada um faz delete+insert em request_item_lots, isso
+  // DUPLICAVA as linhas (o mesmo lote aparecendo N vezes). Agora só um roda por
+  // vez e sempre grava o estado mais recente que ficou pendente.
+  const savingLotsRef = useRef(false)
+  const pendingLotsRef = useRef<Array<{
+    expiry_tracking_id: string; quantity: number
+    manual?: boolean; batch_number?: string; expiry_date?: string
+  }> | null>(null)
+  const saveLots = (novos: Array<{
+    expiry_tracking_id: string; quantity: number
+    manual?: boolean; batch_number?: string; expiry_date?: string
+  }>) => {
+    pendingLotsRef.current = novos
+    if (savingLotsRef.current) return
+    savingLotsRef.current = true
+    ;(async () => {
+      try {
+        while (pendingLotsRef.current) {
+          const atual = pendingLotsRef.current
+          pendingLotsRef.current = null
+          await doSaveLots(atual)
+        }
+      } finally {
+        savingLotsRef.current = false
+      }
+    })()
+  }
+
   // Grava os lotes do item (substitui as linhas anteriores).
-  const saveLots = async (novos: Array<{
+  const doSaveLots = async (novos: Array<{
     expiry_tracking_id: string; quantity: number
     manual?: boolean; batch_number?: string; expiry_date?: string
   }>) => {
