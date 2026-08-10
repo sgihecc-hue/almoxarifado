@@ -188,7 +188,9 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
       lead_time_days: (item as any).lead_time_days ?? null,
-      avg_daily_consumption: (item as any).avg_daily_consumption ?? null,
+      // Guardado como média diária; exibimos em Un/SEMANA (×7).
+      avg_daily_consumption: (item as any).avg_daily_consumption != null
+        ? Number((item as any).avg_daily_consumption) * 7 : null,
       current_stock: item.current_stock ?? 0,
       batch_number: (item as any).batch_number || '',
       expiry_date: item.expiry_date || '',
@@ -211,7 +213,9 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
       lead_time_days: (item as any).lead_time_days ?? null,
-      avg_daily_consumption: (item as any).avg_daily_consumption ?? null,
+      // Guardado como média diária; exibimos em Un/SEMANA (×7).
+      avg_daily_consumption: (item as any).avg_daily_consumption != null
+        ? Number((item as any).avg_daily_consumption) * 7 : null,
       current_stock: item.current_stock ?? 0,
       batch_number: (item as any).batch_number || '',
       expiry_date: item.expiry_date || '',
@@ -268,7 +272,9 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
         ...(type === 'warehouse'
           ? {
               lead_time_days: data.lead_time_days ?? null,
-              avg_daily_consumption: data.avg_daily_consumption ?? null,
+              // Digitado em Un/SEMANA; guardamos como média diária (÷7).
+              avg_daily_consumption: (data.avg_daily_consumption != null && !Number.isNaN(data.avg_daily_consumption))
+                ? data.avg_daily_consumption / 7 : null,
             }
           : {
               // Farmácia: classes do medicamento (default uso_geral se nada
@@ -633,17 +639,17 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
                   </p>
                 </div>
                 <div>
-                  <Label htmlFor="avg_daily_consumption">Consumo Diário (opcional)</Label>
+                  <Label htmlFor="avg_daily_consumption">Consumo Semanal (opcional)</Label>
                   <Input
                     id="avg_daily_consumption"
                     type="number"
                     min="0"
                     {...register('avg_daily_consumption', { valueAsNumber: true })}
                     className="mt-1"
-                    placeholder="Ex: 376"
+                    placeholder="Ex: 40"
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Un/dia. Só usado enquanto não há saídas; depois o sistema calcula pelos últimos 30 dias.
+                    Un/semana. Só usado enquanto não há saídas; depois o sistema calcula pelos últimos 30 dias.
                   </p>
                 </div>
               </>
