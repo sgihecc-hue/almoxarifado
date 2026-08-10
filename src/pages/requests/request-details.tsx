@@ -220,6 +220,14 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     }
   }
 
+  // Saldo exibido na coluna "Estoque": para farmácia, é o saldo do CAF (soma
+  // dos lotes do CAF já carregados) — o local que atende a solicitação. Antes
+  // mostrava item.item.current_stock (saldo GLOBAL do item), que passou a
+  // refletir o Satélite 2 depois do inventário, confundindo quem atende na CAF.
+  const estoqueLocal = isPharmacy
+    ? lots.reduce((s, l) => s + (l.current_quantity || 0), 0)
+    : (item.item.current_stock ?? 0)
+
   return (
     <tr className={`border-b border-gray-100 ${checked ? 'bg-green-50' : 'hover:bg-gray-50'} transition-colors`}>
       <td className="py-3 px-2">
@@ -230,8 +238,8 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       <td className="text-center py-3 px-2 font-medium">{item.quantity}</td>
       {canSeeStock && (
         <td className="text-center py-3 px-2">
-          <span className={`font-medium ${(item.item.current_stock || 0) < item.quantity ? 'text-red-600' : 'text-green-600'}`}>
-            {item.item.current_stock ?? 0}
+          <span className={`font-medium ${estoqueLocal < item.quantity ? 'text-red-600' : 'text-green-600'}`}>
+            {estoqueLocal}
           </span>
         </td>
       )}
