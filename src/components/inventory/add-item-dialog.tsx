@@ -165,7 +165,12 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
         avg_monthly_consumption: type === 'pharmacy'
           ? data.avg_monthly_consumption : undefined,
         lead_time_days: type === 'warehouse' ? data.lead_time_days : undefined,
-        avg_daily_consumption: type === 'warehouse' ? data.avg_daily_consumption : undefined,
+        // Digitado como Un/SEMANA; guardamos como média diária (÷7) para o
+        // Ponto de Ressuprimento, que trabalha com prazo em dias.
+        avg_daily_consumption: type === 'warehouse'
+          ? (data.avg_daily_consumption != null && !Number.isNaN(data.avg_daily_consumption)
+              ? data.avg_daily_consumption / 7 : undefined)
+          : undefined,
       }, type)
 
       reset()
@@ -395,17 +400,17 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
                   </p>
                 </div>
                 <div>
-                  <Label htmlFor="avg_daily_consumption">Consumo Diário (opcional)</Label>
+                  <Label htmlFor="avg_daily_consumption">Consumo Semanal (opcional)</Label>
                   <Input
                     id="avg_daily_consumption"
                     type="number"
                     min="0"
                     {...register('avg_daily_consumption', { valueAsNumber: true })}
                     className="mt-1"
-                    placeholder="Ex: 376"
+                    placeholder="Ex: 40"
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Un/dia. Usado só enquanto o item não tem saídas registradas;
+                    Un/semana. Usado só enquanto o item não tem saídas registradas;
                     depois o sistema calcula pela média dos últimos 30 dias.
                   </p>
                 </div>

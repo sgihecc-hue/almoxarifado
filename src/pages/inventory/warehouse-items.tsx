@@ -385,8 +385,8 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">
                   Valor Referencial
                 </th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600" title="Média das saídas dos últimos 30 dias (ou valor informado no cadastro)">
-                  Consumo/dia
+                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600" title="Média semanal das saídas dos últimos 30 dias (ou valor informado no cadastro)">
+                  Consumo/semana
                 </th>
                 <th 
                   className="px-4 py-3 text-right text-sm font-medium text-gray-600 cursor-pointer hover:bg-gray-100"
@@ -410,7 +410,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                     )}
                   </div>
                 </th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600" title="(consumo/dia × prazo de reposição) + estoque mínimo">
+                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600" title="(consumo médio por dia × prazo de reposição em dias) + estoque mínimo">
                   Ponto de Ressuprimento
                 </th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">
@@ -448,10 +448,10 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                         : '-'}
                     </td>
                     <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {/* Número inteiro + unidade (igual às colunas de
-                          quantidade). O "/dia" já está no cabeçalho da coluna,
-                          então não repete em cada linha. */}
-                      {cd != null ? `${Math.round(cd)} ${item.unit}` : '—'}
+                      {/* Consumo SEMANAL = média diária × 7. Número inteiro +
+                          unidade (igual às colunas de quantidade). O "/semana"
+                          já está no cabeçalho da coluna. */}
+                      {cd != null ? `${Math.round(cd * 7)} ${item.unit}` : '—'}
                     </td>
                     <td className="px-4 py-3 text-sm text-right font-medium">
                       {getLocalQty(item)} {item.unit}
