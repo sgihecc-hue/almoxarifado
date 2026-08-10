@@ -146,6 +146,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       title: 'Operações',
       module: 'farmacia',
       items: [
+        { name: 'Saídas', icon: PackageMinus, href: '/farmacia/saidas', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Devoluções', icon: Undo2, href: '/estoque/devolucao', show: () => true },
         { name: 'Empréstimos', icon: Handshake, href: '/estoque/emprestimos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Vencimentos', icon: CalendarX, href: '/estoque/vencimentos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },

@@ -29,12 +29,17 @@ interface LotRow {
   current_quantity: number
 }
 interface LineItem {
+  _key: string
   item_id: string
   name: string
   code: string
   unit: string
   quantity: number
   expiry_tracking_id: string | null
+  // Lote digitado manualmente (ex.: lote que já não existe mais no sistema).
+  manual?: boolean
+  batch_number?: string
+  expiry_date?: string
 }
 
 // Motivos de saída avulsa (quebras, vencimentos, transferência interna,
@@ -152,18 +157,32 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
     return lots
   }
 
+  const newKey = () => Math.random().toString(36).slice(2)
+
   async function addLine(item: ItemRow) {
-    if (lines.some((l) => l.item_id === item.id)) { setSearch(''); setResults([]); return }
+    // Mesmo item pode entrar várias vezes — uma linha por lote (multi-lote).
     let fefo: LotRow | undefined
     if (type === 'pharmacy') {
       const lots = await loadLots(item.id)
       fefo = lots[0]
     }
     setLines((prev) => [...prev, {
+      _key: newKey(),
       item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
       quantity: 1, expiry_tracking_id: fefo?.id ?? null,
     }])
     setSearch(''); setResults([])
+  }
+  // Adiciona outra linha do MESMO item (para dar saída de mais de um lote).
+  function addAnotherLot(idx: number) {
+    setLines((prev) => {
+      const base = prev[idx]
+      const novo: LineItem = {
+        _key: newKey(), item_id: base.item_id, name: base.name, code: base.code,
+        unit: base.unit, quantity: 1, expiry_tracking_id: null,
+      }
+      const arr = [...prev]; arr.splice(idx + 1, 0, novo); return arr
+    })
   }
   function updateLine(idx: number, patch: Partial<LineItem>) {
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)))
@@ -174,8 +193,9 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
 
   const totalQty = lines.reduce((s, l) => s + (l.quantity || 0), 0)
   // Farmacia: lote OBRIGATORIO em cada linha (rastreio de baixa por lote).
-  // Almox: mantem opcional — muito material sem lote (canetas, papel, etc).
-  const linhasSemLote = type === 'pharmacy' && lines.some((l) => !l.expiry_tracking_id)
+  // Vale um lote SELECIONADO ou um lote DIGITADO (batch_number). Almox: opcional.
+  const linhasSemLote = type === 'pharmacy'
+    && lines.some((l) => !l.expiry_tracking_id && !(l.manual && (l.batch_number || '').trim()))
   const canSubmit =
     reason &&
     lines.length > 0 &&
@@ -209,7 +229,9 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
         p_items: lines.map((l) => ({
           item_id: l.item_id,
           quantity: l.quantity,
-          expiry_tracking_id: l.expiry_tracking_id,
+          expiry_tracking_id: l.manual ? null : l.expiry_tracking_id,
+          batch_number: l.manual ? (l.batch_number || '').trim() : null,
+          expiry_date: l.manual ? (l.expiry_date || null) : null,
         })),
       })
       if (rpcError) throw rpcError
@@ -307,13 +329,13 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
               ) : results.length === 0 ? (
                 <div className="px-4 py-3 text-sm text-gray-400">Nenhum item encontrado.</div>
               ) : results.map((i) => {
-                const already = lines.some((l) => l.item_id === i.id)
+                const jaTem = lines.some((l) => l.item_id === i.id)
                 return (
-                  <button key={i.id} onClick={() => addLine(i)} disabled={already}
-                    className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 disabled:opacity-50 flex items-center justify-between">
+                  <button key={i.id} onClick={() => addLine(i)}
+                    className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-900 flex items-center gap-1">
                       <Plus className="w-3.5 h-3.5" /> {i.name}
-                      {already && <span className="text-xs text-gray-400 ml-1">(já na lista)</span>}
+                      {jaTem && <span className="text-xs text-gray-400 ml-1">(já na lista — adiciona outro lote)</span>}
                     </span>
                     <span className="text-xs text-gray-400">{i.code || 'sem código'} · {i.unit}</span>
                   </button>
@@ -340,7 +362,7 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
                 {lines.map((l, idx) => {
                   const lots = lotsByItem[l.item_id] || []
                   return (
-                    <tr key={l.item_id} className="border-b last:border-0">
+                    <tr key={l._key} className="border-b last:border-0">
                       <td className="py-2 pr-2">
                         <p className="font-medium text-gray-900">{l.name}</p>
                         <p className="text-xs text-gray-400">{l.code || 'sem código'} · {l.unit}</p>
@@ -359,23 +381,51 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
                       </td>
                       {type === 'pharmacy' && (
                         <td className="py-2 px-2">
-                          <select
-                            value={l.expiry_tracking_id ?? ''}
-                            onChange={(e) => updateLine(idx, { expiry_tracking_id: e.target.value || null })}
-                            className={`w-full h-9 rounded-md border px-2 py-1 bg-white text-xs ${
-                              l.expiry_tracking_id ? 'border-input' : 'border-red-300'
-                            }`}
-                          >
-                            <option value="">— Selecione o lote —</option>
-                            {lots.map((lo, li) => (
-                              <option key={lo.id} value={lo.id}>
-                                {li === 0 ? '★ ' : ''}Lote {lo.batch_number} · Val {fmt(lo.expiry_date)} · {lo.current_quantity} un
-                              </option>
-                            ))}
-                          </select>
+                          {l.manual ? (
+                            <div className="flex items-center gap-1">
+                              <Input
+                                value={l.batch_number || ''}
+                                onChange={(e) => updateLine(idx, { batch_number: e.target.value })}
+                                placeholder="Lote (digite)"
+                                className={`w-28 h-9 text-xs ${(l.batch_number || '').trim() ? '' : 'border-red-300'}`}
+                              />
+                              <input
+                                type="date"
+                                value={l.expiry_date || ''}
+                                onChange={(e) => updateLine(idx, { expiry_date: e.target.value })}
+                                title="Validade (opcional)"
+                                className="w-32 h-9 rounded-md border border-input px-1 py-1 text-xs bg-white"
+                              />
+                              <button type="button" onClick={() => updateLine(idx, { manual: false, batch_number: '', expiry_date: '' })}
+                                className="text-xs text-gray-500 underline whitespace-nowrap">lista</button>
+                            </div>
+                          ) : (
+                            <select
+                              value={l.expiry_tracking_id ?? ''}
+                              onChange={(e) => {
+                                if (e.target.value === '__manual__') { updateLine(idx, { manual: true, expiry_tracking_id: null, batch_number: '', expiry_date: '' }); return }
+                                updateLine(idx, { expiry_tracking_id: e.target.value || null })
+                              }}
+                              className={`w-full h-9 rounded-md border px-2 py-1 bg-white text-xs ${
+                                l.expiry_tracking_id ? 'border-input' : 'border-red-300'
+                              }`}
+                            >
+                              <option value="">— Selecione o lote —</option>
+                              {lots.map((lo, li) => (
+                                <option key={lo.id} value={lo.id}>
+                                  {li === 0 ? '★ ' : ''}Lote {lo.batch_number} · Val {fmt(lo.expiry_date)} · {lo.current_quantity} un
+                                </option>
+                              ))}
+                              <option value="__manual__">➕ Digitar lote…</option>
+                            </select>
+                          )}
                         </td>
                       )}
-                      <td className="py-2 text-right">
+                      <td className="py-2 text-right whitespace-nowrap">
+                        {type === 'pharmacy' && (
+                          <button onClick={() => addAnotherLot(idx)} title="Adicionar outro lote deste item"
+                            className="text-cyan-700 hover:text-cyan-800 p-1"><Plus className="w-4 h-4" /></button>
+                        )}
                         <button onClick={() => removeLine(idx)} className="text-red-500 hover:text-red-600 p-1"><Trash2 className="w-4 h-4" /></button>
                       </td>
                     </tr>
