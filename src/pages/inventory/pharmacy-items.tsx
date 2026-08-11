@@ -36,6 +36,13 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   const { user } = useAuth()
   const { activeStock } = useModule()
   const navigate = useNavigate()
+  // Local efetivo para filtrar os lotes: a prop da rota /inventory/stock/:id,
+  // OU o estoque ativo do contexto quando a tela é aberta pela rota /inventory
+  // (sem prop). Sem esse fallback, a rota sem prop listava os lotes de TODOS os
+  // locais — e o dropdown de lote mostrava os lotes/saldos da CAF mesmo o
+  // usuário estando num satélite (bug reportado). O activeStock.id é o mesmo
+  // uuid de stock_locations usado em expiry_tracking.location_id.
+  const effectiveLocationId = locationId ?? activeStock?.id
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -88,7 +95,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     // Recarrega ao trocar de estoque: os lotes são filtrados por local.
     loadItems()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId])
+  }, [effectiveLocationId])
 
   async function loadItems() {
     try {
@@ -163,7 +170,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
         .gt('current_quantity', 0)
         .order('expiry_date', { ascending: true, nullsFirst: false })
         .limit(5000)
-      if (locationId) query = query.eq('location_id', locationId)
+      if (effectiveLocationId) query = query.eq('location_id', effectiveLocationId)
       const { data, error } = await query
       if (error) throw error
       for (const row of (data || []) as Array<LotRow & { item_id: string }>) {
