@@ -26,7 +26,10 @@ const CLASS_BADGE_STYLE: Record<MedicationClass, string> = {
 export function PharmacyCatalogo() {
   const { mode } = useTheme()
   const { user } = useAuth()
-  const canEdit = user?.role === 'administrador' || user?.role === 'gestor'
+  // Operador de farmácia pode cadastrar/editar/reativar medicamento no catálogo.
+  // Antes era só admin/gestor — o pessoal da farmácia (atendente) precisava
+  // cadastrar item novo pra dar saída e não conseguia.
+  const canEdit = ['administrador', 'gestor', 'atendente', 'pharmacist'].includes(user?.role ?? '')
 
   const txt = mode === 'dark' ? '#fff' : '#0d2e1c'
   const txtSec = mode === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(13,46,28,0.65)'
