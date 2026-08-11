@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
+import { useModule } from '@/contexts/module'
 import {
   ArrowLeft, MessageSquare, AlertCircle, Loader2,
   Download, Printer, CheckCircle2
@@ -28,6 +29,9 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   canSeeStock: boolean
   requestType?: 'pharmacy' | 'warehouse'
 }) {
+  // Estoque de quem está ATENDENDO (CAF ou satélite). O isolamento dos lotes
+  // depende disto — nunca mais fixar no CAF.
+  const { activeStock } = useModule()
   const [suppliedQty, setSuppliedQty] = useState<number | ''>(item.supplied_quantity ?? '')
   // FA3: um item pode sair de VÁRIOS lotes. As linhas ficam em
   // request_item_lots (lote + quantidade). O campo antigo
@@ -47,21 +51,19 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   const carregarOpcoesLotes = async () => {
     const pharmacyItemId = (item as any).pharmacy_item_id ?? item.item?.id
     if (!pharmacyItemId) return
-    // FA4: só lotes DO LOCAL que atende a solicitação (CAF). Antes vinham
-    // os lotes do item em QUALQUER estoque — por isso o satélite mostrava
-    // lote do CAF. O filtro de local resolve isso.
+    // FA4: só lotes DO LOCAL que ATENDE a solicitação — que é o estoque ativo
+    // (CAF ou satélite). Antes estava FIXO no CAF, então quem atendia num
+    // satélite via os lotes/saldo do CAF. Agora cada estoque mostra só o seu.
     // NÃO filtramos por saldo > 0: com o FA5 o item pode sair sem saldo
     // (existe no físico, não foi lançado) e mesmo assim precisa ter o lote
     // atribuído. O saldo aparece ao lado de cada lote pra ficar explícito.
-    const { data: caf } = await supabase
-      .from('stock_locations').select('id').eq('code', 'CAF').maybeSingle()
+    const locId = activeStock?.id
     let q = supabase
       .from('expiry_tracking')
       .select('id, batch_number, expiry_date, current_quantity')
       .eq('item_id', pharmacyItemId)
       .order('expiry_date', { ascending: true, nullsFirst: false }) // FEFO
-    const cafId = (caf as { id?: string } | null)?.id
-    if (cafId) q = q.eq('location_id', cafId)
+    if (locId) q = q.eq('location_id', locId)
     const { data, error } = await q
     if (error) { console.error('lots', error); return }
     setLots((data || []) as LotOption[])
@@ -95,7 +97,7 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     if (!isPharmacy) return
     reloadLots()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPharmacy, item])
+  }, [isPharmacy, item, activeStock?.id])
 
   // Serializa o salvamento: onChange + onBlur podiam disparar dois saveLots ao
   // mesmo tempo e, como cada um faz delete+insert em request_item_lots, isso
@@ -249,10 +251,9 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     }
   }
 
-  // Saldo exibido na coluna "Estoque": para farmácia, é o saldo do CAF (soma
-  // dos lotes do CAF já carregados) — o local que atende a solicitação. Antes
-  // mostrava item.item.current_stock (saldo GLOBAL do item), que passou a
-  // refletir o Satélite 2 depois do inventário, confundindo quem atende na CAF.
+  // Saldo exibido na coluna "Estoque": para farmácia, é o saldo do ESTOQUE
+  // ATIVO (soma dos lotes já carregados desse local — CAF ou satélite, quem
+  // está atendendo). Nunca o saldo global do item nem o CAF fixo.
   const estoqueLocal = isPharmacy
     ? lots.reduce((s, l) => s + (l.current_quantity || 0), 0)
     : (item.item.current_stock ?? 0)
