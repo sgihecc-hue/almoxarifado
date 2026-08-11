@@ -58,6 +58,11 @@ const schema = z.object({
     (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? 0 : Number(v)),
     z.number().min(0, 'Estoque deve ser maior ou igual a 0'),
   ),
+  // Consumo médio mensal informado (un/mês). Vazio => volta a calcular pelo histórico.
+  avg_monthly_consumption: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? null : Number(v)),
+    z.number().min(0).nullable(),
+  ).optional(),
   // Almox: prazo de reposição (dias) e consumo diário informado (fallback).
   lead_time_days: z.preprocess(
     (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? null : Number(v)),
@@ -187,6 +192,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       category: item.category,
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
+      avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
       lead_time_days: (item as any).lead_time_days ?? null,
       // Guardado como média diária; exibimos em Un/SEMANA (×7).
       avg_daily_consumption: (item as any).avg_daily_consumption != null
@@ -212,6 +218,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       category: item.category,
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
+      avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
       lead_time_days: (item as any).lead_time_days ?? null,
       // Guardado como média diária; exibimos em Un/SEMANA (×7).
       avg_daily_consumption: (item as any).avg_daily_consumption != null
@@ -269,20 +276,20 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
         category: data.category as ItemCategory,
         unit: data.unit as UnitType,
         min_stock: data.min_stock,
-        ...(type === 'warehouse'
+        ...(type === 'pharmacy'
           ? {
+              avg_monthly_consumption: data.avg_monthly_consumption ?? null,
+              // Classes do medicamento (default uso_geral se nada marcado). O
+              // service sincroniza medication_class (single) com a 1ª do array.
+              medication_classes: selectedClasses.length > 0 ? selectedClasses : ['uso_geral'],
+              controlled_subclass: hasControlados ? (data.controlled_subclass ?? null) : null,
+              padronizado: !!data.padronizado,
+            }
+          : {
               lead_time_days: data.lead_time_days ?? null,
               // Digitado em Un/SEMANA; guardamos como média diária (÷7).
               avg_daily_consumption: (data.avg_daily_consumption != null && !Number.isNaN(data.avg_daily_consumption))
                 ? data.avg_daily_consumption / 7 : null,
-            }
-          : {
-              // Farmácia: classes do medicamento (default uso_geral se nada
-              // marcado, pra não deixar o item sem classe). O service sincroniza
-              // medication_class (single) com a primeira do array.
-              medication_classes: selectedClasses.length > 0 ? selectedClasses : ['uso_geral'],
-              controlled_subclass: hasControlados ? (data.controlled_subclass ?? null) : null,
-              padronizado: !!data.padronizado,
             }),
         current_stock: data.current_stock,
         batch_number: data.batch_number || null,
@@ -622,6 +629,22 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
                 className="mt-1"
               />
             </div>
+            {type === 'pharmacy' && (
+              <div>
+                <Label htmlFor="avg_monthly_consumption">Consumo Médio Mensal</Label>
+                <Input
+                  id="avg_monthly_consumption"
+                  type="number"
+                  min="0"
+                  {...register('avg_monthly_consumption', { valueAsNumber: true })}
+                  className="mt-1"
+                  placeholder="Ex: 120"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Un/mês. Vazio = calcular pelo histórico.
+                </p>
+              </div>
+            )}
             {type === 'warehouse' && (
               <>
                 <div>

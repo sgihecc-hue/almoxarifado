@@ -44,6 +44,10 @@ const itemSchema = z.object({
   max_stock: optionalNumber,
   last_purchase_price: optionalNumber,
   reference_price: optionalNumber,
+  // Consumo médio mensal informado pela farmácia (unidades/mês). Quando
+  // preenchido, é o que a tela usa na coluna "Consumo" e no ponto de pedido;
+  // vazio mantém o cálculo pelo histórico.
+  avg_monthly_consumption: optionalNumber,
   // Almox: prazo de reposição (dias) e consumo diário informado (fallback).
   lead_time_days: optionalNumber,
   avg_daily_consumption: optionalNumber,
@@ -158,6 +162,8 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
           ? data.controlled_subclass : null,
         presentation: type === 'pharmacy' ? data.presentation : undefined,
         padronizado: type === 'pharmacy' ? !!data.padronizado : undefined,
+        avg_monthly_consumption: type === 'pharmacy'
+          ? data.avg_monthly_consumption : undefined,
         lead_time_days: type === 'warehouse' ? data.lead_time_days : undefined,
         // Digitado como Un/SEMANA; guardamos como média diária (÷7) para o
         // Ponto de Ressuprimento, que trabalha com prazo em dias.
@@ -357,6 +363,24 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
                 placeholder="0"
               />
             </div>
+
+            {type === 'pharmacy' && (
+              <div>
+                <Label htmlFor="avg_monthly_consumption">Consumo Médio Mensal</Label>
+                <Input
+                  id="avg_monthly_consumption"
+                  type="number"
+                  min="0"
+                  {...register('avg_monthly_consumption', { valueAsNumber: true })}
+                  className="mt-1"
+                  placeholder="Ex: 120"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Quantidade consumida por mês. Usada na coluna “Consumo” e no
+                  cálculo do ponto de pedido. Deixe vazio para calcular pelo histórico.
+                </p>
+              </div>
+            )}
 
             {type === 'warehouse' && (
               <>

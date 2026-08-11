@@ -74,8 +74,11 @@ export interface Item {
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
+  // Consumo médio mensal informado no cadastro (un/mês). Null/undefined =>
+  // a tela cai no cálculo por consumption_history.
+  avg_monthly_consumption?: number | null
   // Almox: consumo médio diário informado (un/dia), fallback quando não há
-  // saídas nos últimos 30 dias. O ponto de ressuprimento usa isto + lead_time.
+  // saídas nos últimos 30 dias. Ponto de ressuprimento usa isto + lead_time.
   avg_daily_consumption?: number | null
   allowed_department_ids?: string[]
 }
@@ -137,6 +140,8 @@ interface CreateItemData {
     | 'comprimidos' | 'injetaveis' | 'solucoes_orais' | 'topicos' | 'aerosol'
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
+  // Consumo médio mensal informado (un/mês) — só farmácia.
+  avg_monthly_consumption?: number | null
   // Almox: prazo de reposição (dias) e consumo diário informado (fallback).
   lead_time_days?: number
   avg_daily_consumption?: number | null
@@ -178,7 +183,7 @@ interface UpdateItemData {
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
-  // Almox: consumo diário informado (fallback do ponto de ressuprimento).
+  avg_monthly_consumption?: number | null
   avg_daily_consumption?: number | null
 }
 
@@ -201,7 +206,9 @@ export interface FilterOptions {
   minConsumption?: number
   maxConsumption?: number
   categories: string[]
-  status: ('normal' | 'low' | 'critical')[]
+  // 'out' = Sem Estoque (saldo 0 no local). 'critical' hoje é usado como
+  // "Ponto de Pedido" na tela de farmácia.
+  status: ('normal' | 'low' | 'critical' | 'out')[]
   suppliers?: string[]
   expiryDateRange?: {
     start?: Date
@@ -338,10 +345,14 @@ class ItemsService {
           query = query.in('category', filters.categories)
         }
         if (filters.status?.length > 0) {
-          const statusMap = {
+          // 'out' (Sem Estoque) não tem equivalente em reorder_status — é uma
+          // condição de saldo. As telas que oferecem esse filtro (farmácia)
+          // filtram no cliente, sobre o saldo do local; aqui ele é ignorado
+          // para não excluir itens indevidamente.
+          const statusMap: Record<string, string | undefined> = {
             'low': 'reorder_point',
             'normal': 'normal',
-            'critical': 'critical'
+            'critical': 'critical',
           }
           const mappedStatus = filters.status.map(s => statusMap[s]).filter(Boolean)
           if (mappedStatus.length > 0) {
@@ -1058,8 +1069,15 @@ class ItemsService {
         insertData.last_purchase_price = data.last_purchase_price
       }
 
-      if (data.reference_price !== undefined && data.reference_price !== null) {
-        insertData.reference_price = data.reference_price
+      // Consumo médio mensal informado (só farmácia). NaN vem de input vazio
+      // com valueAsNumber, então filtramos.
+      if (
+        table === 'pharmacy_items' &&
+        data.avg_monthly_consumption !== undefined &&
+        data.avg_monthly_consumption !== null &&
+        !Number.isNaN(data.avg_monthly_consumption)
+      ) {
+        insertData.avg_monthly_consumption = data.avg_monthly_consumption
       }
 
       // Almox: prazo de reposição + consumo diário informado (fallback).
@@ -1070,6 +1088,10 @@ class ItemsService {
         if (data.avg_daily_consumption !== undefined && data.avg_daily_consumption !== null && !Number.isNaN(data.avg_daily_consumption)) {
           insertData.avg_daily_consumption = data.avg_daily_consumption
         }
+      }
+
+      if (data.reference_price !== undefined && data.reference_price !== null) {
+        insertData.reference_price = data.reference_price
       }
 
       if (data.expiry_date !== undefined && data.expiry_date !== null && data.expiry_date.trim() !== '') {
