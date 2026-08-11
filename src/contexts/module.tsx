@@ -39,8 +39,8 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const location = useLocation()
 
-  // Só gestor/administrador ESCOLHEM entre Farmácia e Almoxarifado.
-  const isModuleUser = user?.role === 'administrador' || user?.role === 'gestor'
+  const isAdmin = user?.role === 'administrador'
+  const isGestor = user?.role === 'gestor'
 
   // Atendente não escolhe o módulo — ele vem do SETOR dele (Almoxarifado =>
   // almox; CAF/Satélites => farmácia). Ele continua escolhendo entre as 4
@@ -54,8 +54,10 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   const [deptName, setDeptName] = useState<string | null>(null)
 
   useEffect(() => {
-    const isPharmacyOp = isAtendente || isPharmacist
-    if (!isPharmacyOp || !user?.department_id) { setAtendenteModule(null); setDeptName(null); return }
+    // Também carregamos o setor do GESTOR — pra saber se ele é gestor de
+    // farmácia (entra só na farmácia) ou de almox/geral (vê os dois módulos).
+    const needsDept = isAtendente || isPharmacist || isGestor
+    if (!needsDept || !user?.department_id) { setAtendenteModule(null); setDeptName(null); return }
     let cancelled = false
     ;(async () => {
       const { data } = await supabase
@@ -71,7 +73,16 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
         : null)
     })()
     return () => { cancelled = true }
-  }, [isAtendente, isPharmacist, user?.department_id])
+  }, [isAtendente, isPharmacist, isGestor, user?.department_id])
+
+  // Gestor lotado numa farmácia (CAF ou satélite) opera SÓ a farmácia: não vê
+  // o card de Almoxarifado nem a tela de escolha de módulo — cai direto no
+  // seletor de estoque. Gestor de almox/geral e admin seguem com os dois módulos.
+  const isPharmacyGestor = isGestor && !!deptName &&
+    PHARMACY_STOCKS.some((s) => departmentBelongsToStock(deptName, s))
+
+  // Escolhem entre Farmácia e Almoxarifado: admin e gestor NÃO-farmácia.
+  const isModuleUser = isAdmin || (isGestor && !isPharmacyGestor)
 
   // Operador de farmácia lotado numa SATÉLITE só enxerga as 3 satélites (sem
   // CAF). Gestor/admin e quem é lotado no CAF continuam vendo tudo. Como hoje
@@ -159,13 +170,14 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   // módulo (menu único, sem escolha).
   const effectiveModule: ModuleType = isAtendente
     ? atendenteModule
-    : isPharmacist
+    : (isPharmacist || isPharmacyGestor)
       ? 'farmacia'
       : activeModule
 
-  // Usuário operacional de farmácia: farmacêutico, ou atendente cujo setor é
-  // farmácia. É quem entra direto na escolha do estoque (sem card de almox).
-  const isPharmacyStockUser = isPharmacist || (isAtendente && atendenteModule === 'farmacia')
+  // Usuário operacional de farmácia: farmacêutico, gestor de farmácia, ou
+  // atendente cujo setor é farmácia. É quem entra direto na escolha do estoque
+  // (sem card de almox).
+  const isPharmacyStockUser = isPharmacist || isPharmacyGestor || (isAtendente && atendenteModule === 'farmacia')
 
   // Segurança: se o usuário é restrito às satélites mas o estoque ativo é o
   // CAF (ex.: restou no localStorage), zera pra ele voltar ao seletor.

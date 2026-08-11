@@ -78,7 +78,6 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     setShowEditItemDialog(true)
   }
 
-  const isAdmin = user?.role === 'administrador'
   const canEdit = user?.role === 'administrador' || user?.role === 'gestor'
 
   // Saldo do item NO ESTOQUE ATIVO (CAF/SAT_1/SAT_2/SAT_T).
@@ -620,7 +619,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                           <Button variant="ghost" size="sm" onClick={() => navigate(`/inventory/pharmacy/${item.id}`)} title="Ver detalhes" className="h-8 px-2">
                             <Eye className="w-4 h-4" />
                           </Button>
-                          {isAdmin && (
+                          {canEdit && (
                             <Button variant="outline" size="sm" onClick={() => handleDelete(item)} title="Excluir" className="text-red-600 border-red-200 hover:bg-red-50 h-8 px-2">
                               <Trash2 className="w-4 h-4" />
                             </Button>
