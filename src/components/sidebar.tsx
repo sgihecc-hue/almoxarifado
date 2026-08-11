@@ -20,7 +20,11 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
   const isAdmin = user?.role === 'administrador'
   const isManager = user?.role === 'gestor'
-  const isAtendente = user?.role === 'atendente'
+  // Farmacêutico opera a farmácia com a MESMA navegação de um atendente-farmácia
+  // (Dispensações, Solicitações, Estoque, Saídas, catálogo, relatórios). Por isso
+  // entra junto do atendente nos flags de visibilidade. As seções de almox não
+  // aparecem pra ele porque o módulo efetivo dele é sempre 'farmacia'.
+  const isPharmacyOperator = user?.role === 'atendente' || user?.role === 'pharmacist'
 
   const [deptCode, setDeptCode] = useState<string | null>(null)
   useEffect(() => {
@@ -39,9 +43,11 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   }, [user?.department_id])
 
   const isEnfermagem = !!deptCode && deptCode.startsWith('ENF') && !isAdmin
-  const canManageRequests = !isEnfermagem && (isAdmin || isManager || isAtendente)
+  const canManageRequests = !isEnfermagem && (isAdmin || isManager || isPharmacyOperator)
 
-  const flags: VisibilityFlags = { isAdmin, isManager, isAtendente, isEnfermagem, canManageRequests }
+  // isAtendente nos flags = "operador de farmácia" (atendente OU farmacêutico):
+  // todos os itens de menu gated por f.isAtendente valem também pro farmacêutico.
+  const flags: VisibilityFlags = { isAdmin, isManager, isAtendente: isPharmacyOperator, isEnfermagem, canManageRequests }
 
   // Contador de solicitacoes pendentes para o setor que o user atende
   // (destination_department). Aparece como badge ao lado de "Solicitações".
