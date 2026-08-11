@@ -61,8 +61,6 @@ export interface VisibilityFlags {
 export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | null }): SidebarSection[] {
   // Estoque de farmácia é escolhido no topo; a sidebar mostra só o estoque atual.
   const stock = ctx?.pharmacyStock ?? null
-  // Dispensação só ocorre nas farmácias satélites — não no CAF.
-  const isSat = !!stock && stock.code !== 'CAF'
   // Cadastros (medicamentos, fornecedores, prescritores...) são centralizados:
   // só aparecem no CAF. Satélite opera com o cadastro feito lá.
   const isCaf = !!stock && stock.code === 'CAF'
@@ -185,16 +183,17 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Nova Saída Direta', icon: ListChecks, href: '/saida-direta/new', show: (f) => f.canManageRequests },
       ],
     },
-    // --- DISPENSAÇÃO (só satélites de farmácia).
+    // --- DISPENSAÇÃO (todas as farmácias, incluindo a CAF).
     //     "Nova Dispensação" removido do menu — a entrada e por
     //     "Dispensações" (botao "+ Nova" la dentro). Ter duas portas
     //     confundia e podia gerar dispensacoes em fluxos diferentes.
+    //     Antes era so satelite (isSat); a CAF tambem atende, entao liberado.
     {
       title: 'Dispensação',
       module: 'farmacia',
       items: [
-        { name: 'Dispensações', icon: Syringe, href: '/dispensacao', show: (f) => isSat && f.canManageRequests },
-        { name: 'Histórico', icon: History, href: '/dispensacao/historico', show: (f) => isSat && f.canManageRequests },
+        { name: 'Dispensações', icon: Syringe, href: '/dispensacao', show: (f) => f.canManageRequests },
+        { name: 'Histórico', icon: History, href: '/dispensacao/historico', show: (f) => f.canManageRequests },
       ],
     },
     // --- CADASTROS (farmácia) ---
