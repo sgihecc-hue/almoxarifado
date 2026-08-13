@@ -42,11 +42,8 @@ interface LineItem {
   expiry_date?: string
 }
 
-// Motivos de saída avulsa (quebras, vencimentos, transferência interna,
-// devolução ao fornecedor, defeitos). Doação / Permuta / Empréstimo /
-// Consignado / Troca de validade são fluxos separados em NOVA MOVIMENTAÇÃO
-// (formulário próprio + pendência de aprovação).
-const REASONS = [
+// Motivos de saída disponíveis em TODOS os estoques (CAF + satélites).
+const BASE_REASONS = [
   { value: 'quebra', label: 'Quebra / Avaria' },
   { value: 'vencimento', label: 'Vencimento' },
   { value: 'transferencia', label: 'Transferência (para um destino)' },
@@ -54,6 +51,17 @@ const REASONS = [
   { value: 'defeito_fabricacao', label: 'Defeito de fabricação' },
   { value: 'embalagem_violada', label: 'Embalagem violada' },
   { value: 'outro', label: 'Outro' },
+] as const
+
+// Motivos que SÓ existem na CAF (saídas para fora do hospital: empréstimo,
+// permuta, consignado, troca de validade, doação). Nos satélites esses fluxos
+// não existem — o satélite só devolve/transfere para a CAF.
+const CAF_ONLY_REASONS = [
+  { value: 'emprestimo', label: 'Empréstimo' },
+  { value: 'permuta', label: 'Permuta' },
+  { value: 'consignado', label: 'Consignado' },
+  { value: 'troca_validade', label: 'Troca por validade' },
+  { value: 'doacao', label: 'Doação' },
 ] as const
 
 // Motivos que exigem informar um destino (quem recebe).
@@ -86,6 +94,11 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
   // lotes têm que ser SÓ deste estoque: sem isso, a saída de um satélite lista
   // lotes do CAF e das outras farmácias (estoques não isolados).
   const locationId = PHARMACY_STOCKS.find((s) => s.code === locationCode)?.id ?? null
+  // Só a CAF tem os motivos "para fora" (empréstimo/permuta/consignado/troca
+  // de validade/doação) e o destino de fornecedores/hospitais. Satélite só
+  // transfere/devolve para a CAF.
+  const isCaf = locationCode === 'CAF'
+  const REASONS = isCaf ? [...BASE_REASONS, ...CAF_ONLY_REASONS] : BASE_REASONS
 
   const [reason, setReason] = useState<string>('quebra')
   const [reasonDetail, setReasonDetail] = useState('')
@@ -287,28 +300,40 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
             <select id="destino" value={destino} onChange={(e) => setDestino(e.target.value)}
               className="mt-1 w-full h-9 rounded-md border border-input px-3 py-1 bg-white text-sm">
               <option value="">— Selecione o destino —</option>
-              {destinos.fornecedores.length > 0 && (
-                <optgroup label="Fornecedores">
-                  {destinos.fornecedores.map((d) => <option key={'f'+d.nome} value={`${d.tipo}|${d.nome}`}>{d.nome}</option>)}
-                </optgroup>
-              )}
-              {destinos.externas.length > 0 && (
-                <optgroup label="Hospitais parceiros (unidades externas)">
-                  {destinos.externas.map((d) => <option key={'e'+d.nome} value={`${d.tipo}|${d.nome}`}>{d.nome}</option>)}
-                </optgroup>
-              )}
-              {destinos.setores.length > 0 && (
-                <optgroup label="Setores (internos)">
-                  {destinos.setores.map((d) => <option key={'s'+d.nome} value={`${d.tipo}|${d.nome}`}>{d.nome}</option>)}
+              {isCaf ? (
+                <>
+                  {destinos.fornecedores.length > 0 && (
+                    <optgroup label="Fornecedores">
+                      {destinos.fornecedores.map((d) => <option key={'f'+d.nome} value={`${d.tipo}|${d.nome}`}>{d.nome}</option>)}
+                    </optgroup>
+                  )}
+                  {destinos.externas.length > 0 && (
+                    <optgroup label="Hospitais parceiros (unidades externas)">
+                      {destinos.externas.map((d) => <option key={'e'+d.nome} value={`${d.tipo}|${d.nome}`}>{d.nome}</option>)}
+                    </optgroup>
+                  )}
+                  {destinos.setores.length > 0 && (
+                    <optgroup label="Setores (internos)">
+                      {destinos.setores.map((d) => <option key={'s'+d.nome} value={`${d.tipo}|${d.nome}`}>{d.nome}</option>)}
+                    </optgroup>
+                  )}
+                </>
+              ) : (
+                // Satélite: o único destino é a CAF (transferência interna que
+                // credita o estoque da CAF). Sem fornecedores/hospitais/setores.
+                <optgroup label="Estoque interno">
+                  <option value="estoque_interno|CAF">CAF — Central de Abastecimento</option>
                 </optgroup>
               )}
             </select>
-            <p className="text-xs text-gray-400 mt-1">
-              Não está na lista?{' '}
-              <a href="/farmacia/unidades-externas" target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">Cadastrar unidade externa</a>
-              {' · '}
-              <a href="/farmacia/fornecedores" target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">Cadastrar fornecedor</a>
-            </p>
+            {isCaf && (
+              <p className="text-xs text-gray-400 mt-1">
+                Não está na lista?{' '}
+                <a href="/farmacia/unidades-externas" target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">Cadastrar unidade externa</a>
+                {' · '}
+                <a href="/farmacia/fornecedores" target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">Cadastrar fornecedor</a>
+              </p>
+            )}
           </div>
         </div>
       </div>

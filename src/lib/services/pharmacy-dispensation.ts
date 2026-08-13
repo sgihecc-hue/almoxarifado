@@ -20,6 +20,9 @@ class PharmacyDispensationService {
     dateFrom?: string
     dateTo?: string
     search?: string
+    // Isolamento por estoque: quando informado, lista SÓ as dispensações
+    // feitas a partir deste local (pharmacy_dispensations.source_location_id).
+    locationId?: string
   }): Promise<PharmacyDispensation[]> {
     try {
       let query = supabase
@@ -45,6 +48,9 @@ class PharmacyDispensationService {
       }
       if (filters?.dateTo) {
         query = query.lte('created_at', `${filters.dateTo}T23:59:59`)
+      }
+      if (filters?.locationId) {
+        query = query.eq('source_location_id', filters.locationId)
       }
 
       const { data, error } = await query
