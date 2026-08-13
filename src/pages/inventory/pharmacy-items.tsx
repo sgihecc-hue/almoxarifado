@@ -67,6 +67,8 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   // Saldos por local (CAF, SAT_1, SAT_2, SAT_T) carregados em uma chamada.
   // Map<itemId, Map<locationCode, quantity>>
   const [stocksByItem, setStocksByItem] = useState<Map<string, Record<string, number>>>(new Map())
+  // Local/prateleira por item x local. Map<itemId, Record<locationCode, shelf>>
+  const [shelfByItem, setShelfByItem] = useState<Map<string, Record<string, string>>>(new Map())
   // Lotes ativos por item, ordenados por validade (FEFO).
   const [lotsByItem, setLotsByItem] = useState<Map<string, LotRow[]>>(new Map())
   // Índice do lote selecionado por item (default 0 = FEFO). Quando o usuário
@@ -79,6 +81,46 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   }
 
   const canEdit = user?.role === 'administrador' || user?.role === 'gestor'
+  // Operadores da farmácia podem editar o Local/prateleira do item no estoque
+  // ativo (atendente e farmacêutico, além de gestor/admin). Igual à RLS de
+  // UPDATE de item_stocks.
+  const canEditLocal = ['administrador', 'admin', 'gestor', 'atendente', 'pharmacist'].includes(user?.role ?? '')
+
+  // Local/prateleira do item NO ESTOQUE ATIVO.
+  const getShelf = (item: Item): string => {
+    if (!activeStock) return ''
+    return shelfByItem.get(item.id)?.[activeStock.code] ?? ''
+  }
+
+  // Grava o Local do item no estoque ativo (upsert em item_stocks — mexe só no
+  // shelf_location, nunca na quantidade). Atualiza o estado local na hora.
+  async function salvarShelf(item: Item, valor: string) {
+    if (!activeStock) return
+    const novo = valor.trim()
+    const atual = getShelf(item)
+    if (novo === atual) return
+    // Otimista: reflete já na tela.
+    setShelfByItem((prev) => {
+      const next = new Map(prev)
+      const sb = { ...(next.get(item.id) ?? {}) }
+      if (novo) sb[activeStock.code] = novo
+      else delete sb[activeStock.code]
+      next.set(item.id, sb)
+      return next
+    })
+    const { error } = await supabase
+      .from('item_stocks')
+      .upsert(
+        {
+          item_id: item.id,
+          item_type: 'pharmacy',
+          location_id: activeStock.id,
+          shelf_location: novo || null,
+        },
+        { onConflict: 'item_id,item_type,location_id' }
+      )
+    if (error) console.error('salvarShelf', error)
+  }
 
   // Saldo do item NO ESTOQUE ATIVO (CAF/SAT_1/SAT_2/SAT_T).
   // Cada satelite tem o seu proprio saldo em item_stocks; a coluna
@@ -137,13 +179,20 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
         })
       )
 
+      const shelves = new Map<string, Record<string, string>>()
       for (const { code, rows } of perLocation) {
         for (const r of rows as ItemStockWithLocation[]) {
           const bucket = result.get(r.item_id) ?? {}
           bucket[code] = r.quantity
           result.set(r.item_id, bucket)
+          if (r.shelf_location) {
+            const sb = shelves.get(r.item_id) ?? {}
+            sb[code] = r.shelf_location
+            shelves.set(r.item_id, sb)
+          }
         }
       }
+      setShelfByItem(shelves)
       return result
     } catch (e) {
       console.error('loadAllPharmacyStocks failed (continuando sem saldos por local):', e)
@@ -457,6 +506,9 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                 <th className="px-2 py-2 text-center text-xs font-medium text-gray-600 whitespace-nowrap">
                   Unidade
                 </th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-600 whitespace-nowrap" title="Localização física (prateleira/seção) neste estoque">
+                  Local
+                </th>
                 <th className="px-2 py-2 text-left text-xs font-medium text-gray-600 whitespace-nowrap">
                   Lote
                 </th>
@@ -522,6 +574,24 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                     <td className="px-2 py-2 text-sm font-medium text-gray-900">{item.name}</td>
                     <td className="px-2 py-2 text-xs text-gray-600 whitespace-nowrap">{item.category}</td>
                     <td className="px-2 py-2 text-xs text-center text-gray-700 font-medium">{item.unit}</td>
+                    <td className="px-2 py-2 text-xs whitespace-nowrap">
+                      {!activeStock ? (
+                        <span className="text-gray-300">—</span>
+                      ) : canEditLocal ? (
+                        <input
+                          key={`${item.id}-${activeStock.code}-${getShelf(item)}`}
+                          type="text"
+                          defaultValue={getShelf(item)}
+                          placeholder="—"
+                          title="Local/prateleira neste estoque"
+                          className="w-24 px-1.5 py-0.5 text-xs border border-transparent rounded hover:border-gray-200 focus:border-blue-400 focus:bg-white focus:outline-none bg-transparent"
+                          onBlur={(e) => salvarShelf(item, e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                        />
+                      ) : (
+                        <span className="text-gray-600">{getShelf(item) || '—'}</span>
+                      )}
+                    </td>
                     {(() => {
                       // Lote selecionado (default FEFO = índice 0). Se houver
                       // múltiplos lotes, exibe um dropdown que permite trocar; a

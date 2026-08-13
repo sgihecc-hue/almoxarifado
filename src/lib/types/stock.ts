@@ -33,6 +33,8 @@ export interface ItemStock {
   min_qty: number
   max_qty: number
   updated_at: string
+  /** Local/prateleira do item DENTRO deste estoque. Texto livre editável. */
+  shelf_location?: string | null
 }
 
 /** Saldo com dados do local. Util para listagens. */
