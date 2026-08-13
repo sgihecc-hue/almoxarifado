@@ -76,13 +76,17 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   const reloadLots = async () => {
     await carregarOpcoesLotes()
 
-    // Lotes já informados neste item
+    // Lotes já informados neste item. Traz o SNAPSHOT de lote/validade gravado
+    // no atendimento — assim quem confirma o recebimento (setor solicitante,
+    // cujo activeStock é o satélite de destino) enxerga lote/validade mesmo
+    // sem ter esses lotes nas suas opções (que são do estoque de quem atende).
     const { data: ril } = await supabase
       .from('request_item_lots')
-      .select('expiry_tracking_id, quantity')
+      .select('expiry_tracking_id, quantity, batch_number, expiry_date')
       .eq('request_item_id', item.id)
     const existentes = (ril || []).map((r: any) => ({
       expiry_tracking_id: r.expiry_tracking_id, quantity: r.quantity,
+      batch_number: r.batch_number ?? undefined, expiry_date: r.expiry_date ?? undefined,
     }))
     // Compatibilidade: se não há linhas novas mas existe o lote antigo, mostra ele.
     const legado = (item as any).expiry_tracking_id
@@ -411,7 +415,8 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
               <div className="text-xs space-y-0.5">
                 {itemLots.length === 0 ? <span>—</span> : itemLots.map((l, i) => {
                   const lo = lots.find((x) => x.id === l.expiry_tracking_id)
-                  return <div key={i}>{lo ? `${lo.batch_number} · ${l.quantity}` : `${l.quantity}`}</div>
+                  const batch = l.batch_number ?? lo?.batch_number
+                  return <div key={i}>{batch ? `${batch} · ${l.quantity}` : `${l.quantity}`}</div>
                 })}
               </div>
             )}
@@ -419,10 +424,11 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
           <td className="text-center py-3 px-2 text-xs">
             {itemLots.length === 0 ? '—' : itemLots.map((l, i) => {
               const lo = lots.find((x) => x.id === l.expiry_tracking_id)
+              const val = l.expiry_date ?? lo?.expiry_date
               return (
                 <div key={i}>
-                  {lo?.expiry_date
-                    ? new Date(lo.expiry_date + 'T00:00:00').toLocaleDateString('pt-BR')
+                  {val
+                    ? new Date(val + 'T00:00:00').toLocaleDateString('pt-BR')
                     : '—'}
                 </div>
               )
