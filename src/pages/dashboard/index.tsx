@@ -35,7 +35,7 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
   // vem prop, então usamos o módulo selecionado no seletor do topo (contexto).
   // Sem isso, o dashboard de "/" mostrava validades de farmácia mesmo com o
   // Almoxarifado selecionado.
-  const { activeModule: ctxModule } = useModule()
+  const { activeModule: ctxModule, activeStock } = useModule()
   const activeModule = moduleProp ?? ctxModule ?? undefined
 
   if (!user) {
@@ -69,12 +69,21 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
   async function loadExpiring() {
     setLoadingExpiry(true)
     try {
+      // Isolamento por estoque: se há um estoque ativo (CAF/satélite), mostra
+      // só os vencimentos DELE. Sem estoque ativo (admin na visão geral do
+      // módulo), mostra o módulo inteiro.
+      let expiryQuery = supabase
+        .from('v_itens_a_vencer')
+        .select('*')
+        .eq('item_type', expiryItemType)
+        .order('expiry_date')
+      if (activeStock?.id) expiryQuery = expiryQuery.eq('location_id', activeStock.id)
       const [alertRes, resolutionsRes] = await Promise.all([
         // Só itens do módulo atual. A view v_itens_a_vencer junta os dois
         // módulos; sem este filtro, material do almoxarifado aparecia no card
         // da farmácia. Na farmácia (ou default) => 'pharmacy'; no almox =>
         // 'warehouse'. Para a farmácia o efeito é o mesmo da produção.
-        supabase.from('v_itens_a_vencer').select('*').eq('item_type', expiryItemType).order('expiry_date'),
+        expiryQuery,
         supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
       ])
       const resolved = new Set<string>(
@@ -97,9 +106,9 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
       return
     }
     loadExpiring()
-    // Recarrega ao trocar de módulo (expiryItemType muda warehouse/pharmacy)
+    // Recarrega ao trocar de módulo ou de estoque ativo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canManageRequests, expiryItemType])
+  }, [canManageRequests, expiryItemType, activeStock?.id])
 
   async function handleResolve(trackingId: string, colorBand: string) {
     if (!canResolveExpiry || !user?.id) return

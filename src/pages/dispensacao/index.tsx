@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '@/contexts/theme'
+import { useModule } from '@/contexts/module'
 import { Plus, Search, Calendar, RefreshCw, XCircle, CheckCircle2, Clock, User, Building2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { format } from 'date-fns'
@@ -10,6 +11,8 @@ import type { PharmacyDispensation } from '@/lib/types/dispensation'
 export function DispensationList() {
   const navigate = useNavigate()
   const { mode } = useTheme()
+  // Isolamento por estoque: cada estoque vê SÓ as suas dispensações.
+  const { activeStock } = useModule()
   const [dispensations, setDispensations] = useState<PharmacyDispensation[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -46,6 +49,7 @@ export function DispensationList() {
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
         search: search || undefined,
+        locationId: activeStock?.id,
       })
       setDispensations(data)
     } catch (error) {
@@ -58,7 +62,7 @@ export function DispensationList() {
   useEffect(() => {
     const timer = setTimeout(() => loadData(), 300)
     return () => clearTimeout(timer)
-  }, [search, dateFrom, dateTo])
+  }, [search, dateFrom, dateTo, activeStock?.id])
 
   return (
     <div className="space-y-6">
