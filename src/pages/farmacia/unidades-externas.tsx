@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Building2, Plus, Loader2, Pencil, Power, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Building2, Plus, Loader2, Pencil, Power, AlertCircle, CheckCircle2, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -19,6 +19,15 @@ export function UnidadesExternas() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+
+  // Busca client-side por nome ou CNPJ (dígitos).
+  const filtered = units.filter((u) => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    const digits = q.replace(/\D/g, '')
+    return u.name.toLowerCase().includes(q) || (digits.length > 0 && (u.cnpj || '').includes(digits))
+  })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -91,11 +100,23 @@ export function UnidadesExternas() {
         </Button>
       </div>
 
+      <div className="relative">
+        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar por nome ou CNPJ..."
+          className="pl-9"
+        />
+      </div>
+
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
         {loading ? (
           <div className="p-10 text-center text-gray-400"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></div>
-        ) : units.length === 0 ? (
-          <div className="p-10 text-center text-gray-400">Nenhuma unidade externa cadastrada.</div>
+        ) : filtered.length === 0 ? (
+          <div className="p-10 text-center text-gray-400">
+            {search.trim() ? 'Nenhuma unidade encontrada para a busca.' : 'Nenhuma unidade externa cadastrada.'}
+          </div>
         ) : (
           <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -108,7 +129,7 @@ export function UnidadesExternas() {
               </tr>
             </thead>
             <tbody>
-              {units.map((u) => (
+              {filtered.map((u) => (
                 <tr key={u.id} className="border-b last:border-0 hover:bg-gray-50">
                   <td className="px-4 py-3 font-medium text-gray-900">{u.name}</td>
                   <td className="px-4 py-3 text-gray-500">{u.cnpj || '—'}</td>
