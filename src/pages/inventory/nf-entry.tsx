@@ -76,7 +76,8 @@ export function NfEntry({ type }: NfEntryProps) {
   const [entryType, setEntryType] = useState<EntryType>('Compra')
   const isCompra = entryType === 'Compra'
   const [invoiceNumber, setInvoiceNumber] = useState('')
-  const [invoiceDate, setInvoiceDate] = useState(today)
+  const [invoiceDate, setInvoiceDate] = useState(today)     // emissão da NF
+  const [deliveryDate, setDeliveryDate] = useState(today)   // chegada no hospital
   const [afmNumber, setAfmNumber] = useState('')
   const [supplierCnpj, setSupplierCnpj] = useState('')
   const [supplierName, setSupplierName] = useState('')
@@ -196,6 +197,7 @@ export function NfEntry({ type }: NfEntryProps) {
         p_item_type: type,
         p_invoice_number: invoiceNumber.trim() || null,
         p_invoice_date: invoiceDate || null,
+        p_delivery_date: deliveryDate || null,
         p_afm_number: afmNumber.trim() || null,
         p_supplier_cnpj: supplierCnpj.trim() || null,
         p_supplier_name: supplierName.trim(),
@@ -258,8 +260,12 @@ export function NfEntry({ type }: NfEntryProps) {
             <Input id="nf" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Ex: NF-123456" className="mt-1" />
           </div>
           <div>
-            <Label htmlFor="data">Data {isCompra ? '*' : ''}</Label>
+            <Label htmlFor="data">Data de Emissão da NF {isCompra ? '*' : ''}</Label>
             <Input id="data" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="mt-1" />
+          </div>
+          <div>
+            <Label htmlFor="entrega">Data de Entrega</Label>
+            <Input id="entrega" type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} className="mt-1" title="Dia em que o item chegou no hospital" />
           </div>
           <div>
             <Label htmlFor="afm">Número da AFM {isCompra ? '*' : '(opcional)'}</Label>
