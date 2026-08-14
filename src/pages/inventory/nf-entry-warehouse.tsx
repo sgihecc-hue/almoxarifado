@@ -18,12 +18,15 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft, FileText, Building2, Search, Plus, Trash2, Loader2, Package, CheckCircle2, AlertCircle,
+  PackagePlus, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CurrencyInput } from '@/components/ui/currency-input'
 import { supabase } from '@/lib/supabase'
+import { itemsService } from '@/lib/services/items'
+import type { ItemCategory, UnitType } from '@/lib/services/items'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 
 interface ItemRow {
@@ -51,6 +54,26 @@ const LOC_LABELS: Record<string, string> = {
   ALMOX: 'Almoxarifado',
   SAT_T: 'Satélite Térreo',
 }
+
+// Unidades e categorias do cadastro rapido de item inedito. Espelham as
+// opcoes do cadastro completo (Novo Item da tela de materiais), mas ficam
+// LOCAIS de proposito: nada nesta tela pode depender de componente
+// compartilhado com a farmacia (ver cabecalho do arquivo).
+const UNIT_OPTIONS = [
+  'Un', 'Pc', 'Cx', 'Fr', 'Amp', 'Tb', 'Rl', 'Lt', 'Kg', 'Gl',
+  'ml', 'g', 'Pr', 'Cj', 'Sc', 'Rm', 'Ct', 'FL',
+] as const
+
+const WAREHOUSE_CATEGORIES = [
+  'MATERIAL HOSPITALAR',
+  'MATERIAL DE EXPEDIENTE',
+  'MATERIAL DE HIGIENIZAÇÃO',
+  'HIGIENIZAÇÃO E LIMPEZA',
+  'EPI',
+  'OUTROS',
+] as const
+
+const EMPTY_NEW_ITEM = { code: '', name: '', unit: 'Un', category: 'MATERIAL HOSPITALAR' }
 
 function formatCNPJ(value: string) {
   const n = value.replace(/\D/g, '').slice(0, 14)
@@ -86,6 +109,12 @@ export function NfEntryWarehouse() {
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
+  // Cadastro rapido de item inedito (item que nunca existiu no catalogo).
+  const [showNewItem, setShowNewItem] = useState(false)
+  const [newItem, setNewItem] = useState({ ...EMPTY_NEW_ITEM })
+  const [creatingItem, setCreatingItem] = useState(false)
+  const [newItemError, setNewItemError] = useState<string | null>(null)
+
   useEffect(() => {
     const t = setTimeout(async () => {
       const q = search.trim()
@@ -118,6 +147,75 @@ export function NfEntryWarehouse() {
   }
   function removeLine(idx: number) {
     setLines((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  // ---- Item inedito -------------------------------------------------
+  // O almoxarife recebe material que nunca esteve no catalogo e precisa
+  // dar entrada na hora. Aqui ele cadastra o minimo (codigo + descritivo
+  // + unidade + categoria) e o item ja entra na lista da NF. Os demais
+  // campos (estoque min/max, prazo de reposicao, setores) continuam na
+  // tela de cadastro completa — nao sao necessarios pra receber a carga.
+  //
+  // Grava SO em warehouse_items (catalogo do almox/SAT_T). Nao encosta em
+  // pharmacy_items nem em nada da farmacia.
+  function openNewItem() {
+    setNewItem({ ...EMPTY_NEW_ITEM, name: search.trim() })
+    setNewItemError(null)
+    setShowNewItem(true)
+    setResults([])
+  }
+
+  function closeNewItem() {
+    setShowNewItem(false)
+    setNewItemError(null)
+    setNewItem({ ...EMPTY_NEW_ITEM })
+  }
+
+  async function handleCreateItem() {
+    const code = newItem.code.trim()
+    const name = newItem.name.trim()
+    if (!code) { setNewItemError('Informe o código do item.'); return }
+    if (name.length < 3) { setNewItemError('O descritivo precisa ter ao menos 3 caracteres.'); return }
+
+    setCreatingItem(true)
+    setNewItemError(null)
+    try {
+      // current_stock 0 de proposito: o saldo entra pela propria NF logo
+      // abaixo (RPC registrar_entrada_nf), nao pelo cadastro. Se mandasse
+      // saldo aqui, a quantidade entraria duas vezes.
+      const created = await itemsService.create({
+        code,
+        name,
+        category: newItem.category as ItemCategory,
+        unit: newItem.unit as UnitType,
+        min_stock: 0,
+        max_stock: 0,
+        current_stock: 0,
+      }, 'warehouse')
+
+      addLine({
+        id: created.id,
+        code: created.code || code,
+        name: created.name || name,
+        unit: created.unit || newItem.unit,
+      })
+      closeNewItem()
+      setSearch('')
+      setToast(`Item "${name}" cadastrado e adicionado à entrada.`)
+      setTimeout(() => setToast(null), 3000)
+    } catch (e: any) {
+      console.error('Create item error:', e)
+      const raw = (e?.message || '').toString()
+      if (raw.includes('duplicate key') || raw.includes('unique constraint') || raw.includes('code_unique')) {
+        setNewItemError('Já existe um item ativo com esse código. Procure por ele na busca acima ou use outro código.')
+      } else if (raw.includes('row-level security') || raw.includes('violates row-level')) {
+        setNewItemError('Seu perfil não tem permissão para cadastrar item no catálogo. Fale com o gestor do almoxarifado.')
+      } else {
+        setNewItemError(getErrorMessage(e))
+      }
+    } finally {
+      setCreatingItem(false)
+    }
   }
 
   const totalQty = lines.reduce((s, l) => s + (l.quantity || 0), 0)
@@ -237,24 +335,117 @@ export function NfEntryWarehouse() {
             <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
               {searching ? (
                 <div className="px-4 py-3 text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Buscando...</div>
-              ) : results.length === 0 ? (
-                <div className="px-4 py-3 text-sm text-gray-400">Nenhum item encontrado.</div>
-              ) : results.map((i) => {
-                const already = lines.some((l) => l.item_id === i.id)
-                return (
-                  <button key={i.id} onClick={() => addLine(i)} disabled={already}
-                    className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 disabled:opacity-50 flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-900 flex items-center gap-1">
-                      <Plus className="w-3.5 h-3.5" /> {i.name}
-                      {already && <span className="text-xs text-gray-400 ml-1">(já na lista)</span>}
-                    </span>
-                    <span className="text-xs text-gray-400">{i.code || 'sem código'} · {i.unit}</span>
+              ) : (
+                <>
+                  {results.length === 0 ? (
+                    <div className="px-4 py-3 text-sm text-gray-400">Nenhum item encontrado.</div>
+                  ) : results.map((i) => {
+                    const already = lines.some((l) => l.item_id === i.id)
+                    return (
+                      <button key={i.id} onClick={() => addLine(i)} disabled={already}
+                        className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 disabled:opacity-50 flex items-center justify-between">
+                        <span className="text-sm font-medium text-gray-900 flex items-center gap-1">
+                          <Plus className="w-3.5 h-3.5" /> {i.name}
+                          {already && <span className="text-xs text-gray-400 ml-1">(já na lista)</span>}
+                        </span>
+                        <span className="text-xs text-gray-400">{i.code || 'sem código'} · {i.unit}</span>
+                      </button>
+                    )
+                  })}
+                  {/* Saida pro item que nunca existiu: cadastra na hora. */}
+                  <button
+                    onClick={openNewItem}
+                    className="w-full text-left px-4 py-2.5 border-t border-gray-200 bg-emerald-50/70 hover:bg-emerald-100 flex items-center gap-2 text-sm font-medium text-emerald-700"
+                  >
+                    <PackagePlus className="w-4 h-4 flex-shrink-0" />
+                    <span className="truncate">Cadastrar item novo: “{search.trim()}”</span>
                   </button>
-                )
-              })}
+                </>
+              )}
             </div>
           )}
         </div>
+
+        {showNewItem && (
+          <div className="border border-emerald-200 bg-emerald-50/40 rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-emerald-50 border-b border-emerald-200">
+              <span className="text-sm font-semibold text-emerald-800 flex items-center gap-2">
+                <PackagePlus className="w-4 h-4" /> Cadastrar item novo
+              </span>
+              <button onClick={closeNewItem} className="text-emerald-700 hover:text-emerald-900 p-1" title="Cancelar cadastro">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="ni-code">Código *</Label>
+                  <Input
+                    id="ni-code"
+                    value={newItem.code}
+                    onChange={(e) => setNewItem((p) => ({ ...p, code: e.target.value }))}
+                    placeholder="Ex: MAT-045"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="ni-cat">Categoria *</Label>
+                  <select
+                    id="ni-cat"
+                    value={newItem.category}
+                    onChange={(e) => setNewItem((p) => ({ ...p, category: e.target.value }))}
+                    className="mt-1 w-full h-9 rounded-md border border-input px-3 py-1 bg-white text-sm"
+                  >
+                    {WAREHOUSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-[1fr,180px] gap-4">
+                <div>
+                  <Label htmlFor="ni-name">Descritivo *</Label>
+                  <Input
+                    id="ni-name"
+                    value={newItem.name}
+                    onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="Nome/descrição do material"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="ni-unit">Unidade *</Label>
+                  <select
+                    id="ni-unit"
+                    value={newItem.unit}
+                    onChange={(e) => setNewItem((p) => ({ ...p, unit: e.target.value }))}
+                    className="mt-1 w-full h-9 rounded-md border border-input px-3 py-1 bg-white text-sm"
+                  >
+                    {UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {newItemError && (
+                <div className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" /> {newItemError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-gray-500">
+                  O item entra no catálogo e já é adicionado à lista abaixo. A quantidade você informa na linha da NF.
+                </p>
+                <div className="flex gap-2 flex-shrink-0">
+                  <Button variant="outline" onClick={closeNewItem} disabled={creatingItem}>Cancelar</Button>
+                  <Button onClick={handleCreateItem} disabled={creatingItem} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                    {creatingItem ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+                    Cadastrar e adicionar
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {lines.length === 0 ? (
           <p className="text-sm text-center py-6 text-gray-400">Nenhum item adicionado. Use a busca acima.</p>
