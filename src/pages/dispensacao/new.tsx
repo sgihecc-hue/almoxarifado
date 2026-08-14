@@ -177,6 +177,9 @@ export function NewDispensation() {
   // Estoque ativo (CAF ou satélite escolhido no seletor). Se null, assume CAF.
   const { activeStock } = useModule()
   const activeStockId = activeStock?.id ?? '42c3b239-c354-4b5b-a2eb-d42b7a9edc10' // fallback CAF
+  // SAT_T é estoque de MATERIAL (warehouse): busca no catálogo de material,
+  // sem lote/validade, e a baixa vai pela RPC criar_saida_material.
+  const isMaterial = activeStock?.itemType === 'warehouse'
 
   useEffect(() => {
     const t = setTimeout(async () => {
@@ -186,13 +189,21 @@ export function NewDispensation() {
       // Busca meds. current_stock aqui é o AGREGADO (soma de todos locais);
       // pra o valor CORRETO do estoque ativo, sobrescrevemos abaixo com
       // item_stocks(activeStockId).
-      const { data, error: err } = await supabase
-        .from('pharmacy_items')
-        .select('id, code, name, unit, current_stock, is_mav, medication_class')
-        .eq('is_active', true)
-        .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
-        .order('name')
-        .limit(20)
+      const { data, error: err } = isMaterial
+        ? await supabase
+            .from('warehouse_items')
+            .select('id, code, name, unit, current_stock')
+            .eq('is_active', true)
+            .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+            .order('name')
+            .limit(20)
+        : await supabase
+            .from('pharmacy_items')
+            .select('id, code, name, unit, current_stock, is_mav, medication_class')
+            .eq('is_active', true)
+            .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+            .order('name')
+            .limit(20)
       if (err) console.error(err)
       let items = (data || []) as PharmacyItemRow[]
 
@@ -203,6 +214,7 @@ export function NewDispensation() {
           .from('item_stocks')
           .select('item_id, quantity')
           .eq('location_id', activeStockId)
+          .eq('item_type', isMaterial ? 'warehouse' : 'pharmacy')
           .in('item_id', ids)
         const stockMap = new Map<string, number>()
         for (const s of stocks || []) stockMap.set(s.item_id, s.quantity)
@@ -244,7 +256,9 @@ export function NewDispensation() {
       // o lote que esta pegando fisicamente da prateleira — evita saldo sair
       // do lote errado por default silencioso. available_in_batch comeca com
       // o estoque total (0 depois quando ele escolhe o lote).
-      await loadLots(item.id)
+      // Material não tem lote — não carrega lotes e não limita a quantidade
+      // pelo saldo do lote (saldo pode ser 0 até o inventário; FA5 permite).
+      if (!isMaterial) await loadLots(item.id)
       setSelectedItems((prev) => [
         ...prev,
         {
@@ -253,7 +267,7 @@ export function NewDispensation() {
           expiry_tracking_id: null,
           batch_number: null,
           expiry_date: null,
-          available_in_batch: item.current_stock,
+          available_in_batch: isMaterial ? Number.MAX_SAFE_INTEGER : item.current_stock,
           item_stock: item.current_stock,
           quantity: 1,
         },
@@ -333,6 +347,19 @@ export function NewDispensation() {
   async function doSubmit() {
     setSubmitting(true); setError('')
     try {
+      // MATERIAL (SAT_T): baixa própria, sem lote e sem tabelas de medicamento.
+      // O trigger debita o item_stocks(SAT_T, warehouse).
+      if (isMaterial) {
+        const { error: matErr } = await supabase.rpc('criar_saida_material', {
+          p_source_location_code: activeStock?.code ?? 'SAT_T',
+          p_sector: selectedSector,
+          p_items: selectedItems.map((i) => ({ item_id: i.item_id, quantity: i.quantity })),
+          p_notes: null,
+        })
+        if (matErr) throw matErr
+        navigate('/dispensacao', { state: { successMsg: 'Dispensação de material registrada' } })
+        return
+      }
       const result = await pharmacyDispensationService.create(
         isRequisicao
           ? {
@@ -382,13 +409,13 @@ export function NewDispensation() {
   const canAdvance: boolean[] = isRequisicao
     ? [
         !!selectedSector,
-        selectedItems.length > 0 && selectedItems.every((i) => i.quantity > 0 && i.quantity <= i.available_in_batch && !!i.expiry_tracking_id),
+        selectedItems.length > 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
         true,
       ]
     : [
         !!selectedPatient,
         !!prescriptionDate && !!selectedPresc,
-        selectedItems.length > 0 && selectedItems.every((i) => i.quantity > 0 && i.quantity <= i.available_in_batch && !!i.expiry_tracking_id),
+        selectedItems.length > 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
         true,
       ]
 
@@ -442,7 +469,7 @@ export function NewDispensation() {
                   {done ? <CheckCircle2 size={16} /> : <Icon size={16} />}
                 </div>
                 <span className="text-xs font-medium hidden sm:block" style={{ color: active ? txt : txtMut }}>
-                  {s.label}
+                  {isMaterial && s.label === 'Medicamentos' ? 'Materiais' : s.label}
                 </span>
               </div>
             )
@@ -644,10 +671,12 @@ export function NewDispensation() {
       {step === STEP_MEDS && (
         <div className="p-6 space-y-4" style={card}>
           <h2 className="text-lg font-semibold" style={{ color: txt }}>
-            Etapa {STEP_MEDS + 1} — Medicamentos
+            Etapa {STEP_MEDS + 1} — {isMaterial ? 'Materiais' : 'Medicamentos'}
           </h2>
           <p className="text-xs" style={{ color: txtMut }}>
-            Busque e clique para adicionar. O lote que vence primeiro (FEFO) é escolhido automaticamente — você pode trocar abaixo.
+            {isMaterial
+              ? 'Busque e clique para adicionar o material.'
+              : 'Busque e clique para adicionar. O lote que vence primeiro (FEFO) é escolhido automaticamente — você pode trocar abaixo.'}
           </p>
 
           <div className="relative">
@@ -655,7 +684,7 @@ export function NewDispensation() {
             <input
               value={itemSearch}
               onChange={(e) => setItemSearch(e.target.value)}
-              placeholder="Buscar medicamento por nome ou código..."
+              placeholder={isMaterial ? 'Buscar material por nome ou código...' : 'Buscar medicamento por nome ou código...'}
               style={{ ...inputStyle, paddingLeft: 36 }}
             />
             {itemSearch.trim() && (
@@ -705,7 +734,7 @@ export function NewDispensation() {
 
           {selectedItems.length === 0 ? (
             <p className="text-sm text-center py-6" style={{ color: txtMut }}>
-              Nenhum medicamento adicionado. Use a busca acima.
+              {isMaterial ? 'Nenhum material adicionado. Use a busca acima.' : 'Nenhum medicamento adicionado. Use a busca acima.'}
             </p>
           ) : (
             <div className="space-y-2">
@@ -744,6 +773,8 @@ export function NewDispensation() {
                         style={{ ...inputStyle, width: 80, borderColor: over ? '#dc2626' : (inputStyle.border as string) }}
                       />
                       <span className="text-xs" style={{ color: txtMut }}>{it.unit}</span>
+                      {/* Material não tem lote — seletor só aparece p/ medicamento. */}
+                      {!isMaterial && (
                       <select
                         value={it.expiry_tracking_id ?? ''}
                         onChange={(e) => changeLot(idx, e.target.value)}
@@ -765,24 +796,29 @@ export function NewDispensation() {
                           </option>
                         ))}
                       </select>
+                      )}
                       <Button
                         variant="outline" size="sm"
                         onClick={() => removeItem(idx)}
                         className="text-red-600 border-red-200 hover:bg-red-50 h-8 px-2">
                         <Trash2 size={14} />
                       </Button>
-                      <span className="text-xs" style={{ color: over ? '#dc2626' : txtMut }}>
-                        Disponível: {it.available_in_batch}
-                      </span>
+                      {!isMaterial && (
+                        <span className="text-xs" style={{ color: over ? '#dc2626' : txtMut }}>
+                          Disponível: {it.available_in_batch}
+                        </span>
+                      )}
                     </div>
                     {/* Multi-lote: dispensar o mesmo medicamento de mais de um
                         lote — cria outra linha logo abaixo, cada uma com seu
                         lote e sua quantidade (igual ao atendimento). */}
+                    {!isMaterial && (
                     <button
                       type="button"
                       onClick={() => addAnotherLot(idx)}
                       className="text-xs text-blue-500 hover:text-blue-700"
                     >+ Adicionar lote deste medicamento</button>
+                    )}
                   </div>
                 )
               })}
