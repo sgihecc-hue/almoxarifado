@@ -64,8 +64,12 @@ export function Fornecedores() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return rows
+    // BUG anterior: quando a busca era por NOME, `q.replace(/\D/g,'')` virava ''
+    // e `cnpj.includes('')` era sempre true → a lista não filtrava nada. Agora
+    // só cruza o CNPJ quando o usuário digitou dígitos.
+    const digits = q.replace(/\D/g, '')
     return rows.filter(r =>
-      r.name.toLowerCase().includes(q) || r.cnpj.includes(q.replace(/\D/g, ''))
+      r.name.toLowerCase().includes(q) || (digits.length > 0 && r.cnpj.includes(digits))
     )
   }, [rows, search])
 
