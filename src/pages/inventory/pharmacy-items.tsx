@@ -43,6 +43,10 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   // usuário estando num satélite (bug reportado). O activeStock.id é o mesmo
   // uuid de stock_locations usado em expiry_tracking.location_id.
   const effectiveLocationId = locationId ?? activeStock?.id
+  // SAT_T é estoque de MATERIAL (warehouse), não medicamento. Quando o estoque
+  // ativo é warehouse, a tela lê o catálogo de material e o saldo de material.
+  const isWarehouseStock = activeStock?.itemType === 'warehouse'
+  const catalogItemType: 'pharmacy' | 'warehouse' = isWarehouseStock ? 'warehouse' : 'pharmacy'
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -147,7 +151,8 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
         // Sem filtros aqui de propósito: eles são aplicados no cliente, sobre o
         // saldo do LOCAL (ver filteredItems). Passá-los aqui filtraria pelo
         // estoque global do cadastro e divergiria do que a tela mostra.
-        itemsService.getByType('pharmacy'),
+        // SAT_T (warehouse) lê o catálogo de material; os demais, medicamento.
+        itemsService.getByType(catalogItemType),
         loadAllPharmacyStocks(),
         loadAllLots(),
       ])
@@ -174,7 +179,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       // Faz uma query por local. Sao 5 locais no maximo => 5 round-trips paralelos.
       const perLocation = await Promise.all(
         locations.map(async (loc) => {
-          const rows = await stockService.getStocksByLocation(loc.id, 'pharmacy')
+          const rows = await stockService.getStocksByLocation(loc.id, catalogItemType)
           return { code: loc.code, rows }
         })
       )
@@ -211,6 +216,8 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   async function loadAllLots(): Promise<Map<string, LotRow[]>> {
     try {
       const result = new Map<string, LotRow[]>()
+      // Material (SAT_T/warehouse) não tem lote/validade — sai sem lotes.
+      if (isWarehouseStock) return result
       // Paginação simples — 5000 lotes deve ser suficiente para o estoque atual.
       let query = supabase
         .from('expiry_tracking')
@@ -371,7 +378,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                 {locationName ? `Estoque — ${locationName}` : 'Itens da Farmácia'}
               </h1>
               <p className="text-xs sm:text-sm text-gray-500 mt-1">
-                Gestão avançada do estoque farmacêutico
+                {isWarehouseStock ? 'Gestão do estoque de materiais' : 'Gestão avançada do estoque farmacêutico'}
               </p>
             </div>
           </div>
