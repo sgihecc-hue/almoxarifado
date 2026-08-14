@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import { suppliersService } from '@/lib/services/farmacia-cadastros'
 import { externalUnitsService } from '@/lib/services/external-units'
+import { useAuth } from '@/contexts/auth'
 interface NfEntryProps {
   type: 'pharmacy' | 'warehouse'
 }
@@ -49,6 +50,10 @@ function formatCNPJ(value: string) {
 
 export function NfEntry({ type }: NfEntryProps) {
   const navigate = useNavigate()
+  // Usado só pra recarregar os fornecedores QUANDO a sessão estiver pronta —
+  // sem isso, se a lista carregava antes da sessão ser restaurada, a consulta
+  // caía como anônima e voltava vazia (dropdown de Fornecedor sem opções).
+  const { user } = useAuth()
   // ?loc=<CAF|SAT_1|SAT_2|SAT_T|ALMOX> — de qual estoque veio o botao. A
   // entrada eh gravada NESSE estoque. Sem query param, fallback pro central
   // (CAF pra farmacia, ALMOX pro almoxarifado) — comportamento antigo.
@@ -82,10 +87,13 @@ export function NfEntry({ type }: NfEntryProps) {
   const [origemKey, setOrigemKey] = useState<string>('') // "tipo|nome"
 
   useEffect(() => {
+    // Só busca depois que há usuário autenticado (senão a query vai como anônima
+    // e a RLS devolve vazio). Re-roda quando o user aparece.
+    if (!user) return
     (async () => {
       const [sup, ext] = await Promise.all([
-        suppliersService.list().catch(() => []),
-        externalUnitsService.list().catch(() => []),
+        suppliersService.list().catch((e) => { console.error('suppliers.list', e); return [] }),
+        externalUnitsService.list().catch((e) => { console.error('externalUnits.list', e); return [] }),
       ])
       const opts: OrigemOption[] = [
         ...sup.map((s: any) => ({ tipo: 'supplier' as const, nome: s.name, cnpj: s.cnpj })),
@@ -93,7 +101,7 @@ export function NfEntry({ type }: NfEntryProps) {
       ].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
       setOrigens(opts)
     })()
-  }, [])
+  }, [user?.id])
 
   function onOrigemChange(key: string) {
     setOrigemKey(key)
