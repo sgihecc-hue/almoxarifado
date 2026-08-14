@@ -75,6 +75,8 @@ export function NfEntry({ type }: NfEntryProps) {
   // Cabeçalho
   const [entryType, setEntryType] = useState<EntryType>('Compra')
   const isCompra = entryType === 'Compra'
+  // No Inventário não existe fornecedor — não pode ser obrigatório.
+  const isInventario = entryType === 'Inventário'
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [invoiceDate, setInvoiceDate] = useState(today)     // emissão da NF
   const [deliveryDate, setDeliveryDate] = useState(today)   // chegada no hospital
@@ -172,8 +174,10 @@ export function NfEntry({ type }: NfEntryProps) {
   // o controle de FEFO e de vencimento do estoque quebra. Se o produto
   // legitimamente nao tem lote, o operador pode digitar "S/L" ou similar.
   const canSubmit =
-    supplierName.trim() &&
-    (!isCompra || (invoiceNumber.trim() && invoiceDate && afmNumber.trim())) &&
+    // Fornecedor obrigatório em tudo, MENOS no Inventário (não tem fornecedor).
+    (isInventario || supplierName.trim()) &&
+    // Compra exige NF + data de emissão. AFM deixou de ser obrigatório.
+    (!isCompra || (invoiceNumber.trim() && invoiceDate)) &&
     lines.length > 0 &&
     lines.every((l) => l.quantity > 0 && l.batch_number.trim() && l.expiry_date)
 
@@ -187,8 +191,10 @@ export function NfEntry({ type }: NfEntryProps) {
         return
       }
       setError(isCompra
-        ? 'Para Compra, preencha NF, data, AFM, fornecedor e ao menos uma linha válida.'
-        : 'Informe a origem/fornecedor e ao menos uma linha com quantidade válida.')
+        ? 'Para Compra, preencha NF, data de emissão, fornecedor e ao menos uma linha válida.'
+        : isInventario
+          ? 'Adicione ao menos uma linha com quantidade, lote e validade.'
+          : 'Informe a origem/fornecedor e ao menos uma linha com quantidade válida.')
       return
     }
     setSubmitting(true)
@@ -268,11 +274,11 @@ export function NfEntry({ type }: NfEntryProps) {
             <Input id="entrega" type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} className="mt-1" title="Dia em que o item chegou no hospital" />
           </div>
           <div>
-            <Label htmlFor="afm">Número da AFM {isCompra ? '*' : '(opcional)'}</Label>
+            <Label htmlFor="afm">Número da AFM (opcional)</Label>
             <Input id="afm" value={afmNumber} onChange={(e) => setAfmNumber(e.target.value)} placeholder="Ex: AFM-2026-001" className="mt-1" />
           </div>
           <div>
-            <Label htmlFor="forn">{isCompra ? 'Fornecedor *' : 'Fornecedor / Origem *'}</Label>
+            <Label htmlFor="forn">{isCompra ? 'Fornecedor *' : isInventario ? 'Fornecedor / Origem (opcional)' : 'Fornecedor / Origem *'}</Label>
             <select
               id="forn"
               value={origemKey}
