@@ -61,6 +61,7 @@ import { PharmacyCatalogo } from '@/pages/farmacia/catalogo'
 import { HistoricoGlobal } from '@/pages/historico-global'
 import { Fornecedores } from '@/pages/farmacia/fornecedores'
 import { UnidadesExternas } from '@/pages/farmacia/unidades-externas'
+import { UnidadesInternas } from '@/pages/farmacia/unidades-internas'
 import { Prescritores } from '@/pages/farmacia/prescritores'
 import { Pacientes } from '@/pages/farmacia/pacientes'
 import { IntervencaoFarmaceutica } from '@/pages/farmacia/intervencao-farmaceutica'
@@ -504,6 +505,13 @@ export default function App() {
                   </MainLayout>
                 </ProtectedRoute>
               } />
+              <Route path="/farmacia/unidades-internas" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <UnidadesInternas />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
               <Route path="/farmacia/prescritores" element={
                 <ProtectedRoute>
                   <MainLayout>
@@ -735,6 +743,7 @@ export default function App() {
                 <Route path="cadastros/catalogo" element={<PharmacyCatalogo />} />
                 <Route path="cadastros/fornecedores" element={<Fornecedores />} />
                 <Route path="cadastros/unidades-externas" element={<UnidadesExternas />} />
+                <Route path="cadastros/unidades-internas" element={<UnidadesInternas />} />
                 <Route path="cadastros/prescritores" element={<Prescritores />} />
                 <Route path="cadastros/pacientes" element={<Pacientes />} />
                 <Route path="intervencao-farmaceutica" element={<IntervencaoFarmaceutica />} />

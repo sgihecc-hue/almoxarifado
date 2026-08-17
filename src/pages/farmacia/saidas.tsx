@@ -28,7 +28,7 @@ interface SaidaRow {
 const REASON_LABEL: Record<string, string> = {
   quebra: 'Quebra / Avaria', vencimento: 'Vencimento', transferencia: 'Transferência',
   devolucao_fornecedor: 'Devolução ao fornecedor', defeito_fabricacao: 'Defeito de fabricação',
-  embalagem_violada: 'Embalagem violada', outro: 'Outro',
+  embalagem_violada: 'Embalagem violada', ajuste_inventario: 'Ajuste de inventário', outro: 'Outro',
 }
 
 export function SaidasFarmacia() {

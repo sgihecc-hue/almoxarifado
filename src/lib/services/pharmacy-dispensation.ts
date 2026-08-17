@@ -33,6 +33,9 @@ class PharmacyDispensationService {
             id,
             item_id,
             quantity,
+            expiry_tracking_id,
+            batch_number,
+            expiry_date,
             item:pharmacy_items(
               id,
               name,
@@ -95,6 +98,11 @@ class PharmacyDispensationService {
           item_code: i.item?.code || '',
           item_unit: i.item?.unit || 'UN',
           quantity: i.quantity,
+          // Rastreabilidade: lote/validade gravados na baixa (podem ser nulos
+          // em dispensações antigas, anteriores ao abate por lote).
+          expiry_tracking_id: i.expiry_tracking_id ?? null,
+          batch_number: i.batch_number ?? null,
+          expiry_date: i.expiry_date ?? null,
         })),
       })) as PharmacyDispensation[]
 
@@ -129,6 +137,9 @@ class PharmacyDispensationService {
             id,
             item_id,
             quantity,
+            expiry_tracking_id,
+            batch_number,
+            expiry_date,
             item:pharmacy_items(
               id,
               name,
@@ -178,6 +189,11 @@ class PharmacyDispensationService {
           item_code: i.item?.code || '',
           item_unit: i.item?.unit || 'UN',
           quantity: i.quantity,
+          // Rastreabilidade: lote/validade gravados na baixa (podem ser nulos
+          // em dispensações antigas, anteriores ao abate por lote).
+          expiry_tracking_id: i.expiry_tracking_id ?? null,
+          batch_number: i.batch_number ?? null,
+          expiry_date: i.expiry_date ?? null,
         })),
       }
     } catch (error) {
