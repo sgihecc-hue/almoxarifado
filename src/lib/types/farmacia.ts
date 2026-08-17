@@ -95,6 +95,7 @@ export const CONTROLLED_SUBCLASSES: ControlledSubclass[] = [
 export type Presentation =
   | 'comprimidos'
   | 'injetaveis'
+  | 'ampola'
   | 'solucoes_orais'
   | 'topicos'
   | 'aerosol'
@@ -106,6 +107,7 @@ export type Presentation =
 export const PRESENTATION_LABEL: Record<Presentation, string> = {
   comprimidos: 'Comprimidos',
   injetaveis: 'Injetáveis',
+  ampola: 'Ampola',
   solucoes_orais: 'Soluções orais',
   topicos: 'Tópicos',
   aerosol: 'Aerosol',

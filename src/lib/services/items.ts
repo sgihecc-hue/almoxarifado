@@ -70,7 +70,7 @@ export interface Item {
   medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'>
   controlled_subclass?: 'A1' | 'A2' | 'A3' | 'B1' | 'B2' | 'C1' | 'C2' | 'C3' | 'C4' | null
   presentation?:
-    | 'comprimidos' | 'injetaveis' | 'solucoes_orais' | 'topicos' | 'aerosol'
+    | 'comprimidos' | 'injetaveis' | 'ampola' | 'solucoes_orais' | 'topicos' | 'aerosol'
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
@@ -137,7 +137,7 @@ interface CreateItemData {
   medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'>
   controlled_subclass?: 'A1' | 'A2' | 'A3' | 'B1' | 'B2' | 'C1' | 'C2' | 'C3' | 'C4' | null
   presentation?:
-    | 'comprimidos' | 'injetaveis' | 'solucoes_orais' | 'topicos' | 'aerosol'
+    | 'comprimidos' | 'injetaveis' | 'ampola' | 'solucoes_orais' | 'topicos' | 'aerosol'
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   // Consumo médio mensal informado (un/mês) — só farmácia.
@@ -179,7 +179,7 @@ interface UpdateItemData {
   medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'>
   controlled_subclass?: 'A1' | 'A2' | 'A3' | 'B1' | 'B2' | 'C1' | 'C2' | 'C3' | 'C4' | null
   presentation?:
-    | 'comprimidos' | 'injetaveis' | 'solucoes_orais' | 'topicos' | 'aerosol'
+    | 'comprimidos' | 'injetaveis' | 'ampola' | 'solucoes_orais' | 'topicos' | 'aerosol'
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
