@@ -11,6 +11,8 @@ export interface PharmacyDispensation {
   prescribing_doctor?: string | null
   prescription_number?: string | null
   prescription_date?: string | null
+  // Data da RM (Requisicao de Material) — opcional, so no tipo 'requisicao'.
+  rm_date?: string | null
   sector?: string
   notes?: string
   status: DispensationStatus
@@ -50,6 +52,7 @@ export interface CreateDispensationData {
   prescribing_doctor?: string | null
   prescription_number?: string | null
   prescription_date?: string | null
+  rm_date?: string | null
   sector?: string | null
   notes?: string
   patient_id?: string | null

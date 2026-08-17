@@ -1,4 +1,5 @@
 import {
+  Ambulance,
   Building2,
   ClipboardList,
   UserCircle,
@@ -194,6 +195,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       items: [
         { name: 'Dispensações', icon: Syringe, href: '/dispensacao', show: (f) => f.canManageRequests },
         { name: 'Histórico', icon: History, href: '/dispensacao/historico', show: (f) => f.canManageRequests },
+        // Carros A/B/C/D. Sem isCaf de proposito: sao os satelites que abastecem
+        // e conferem os carros, entao eles precisam enxergar a tela.
+        { name: 'Carros de Emergência', icon: Ambulance, href: '/farmacia/carros-emergencia', show: (f) => f.canManageRequests },
       ],
     },
     // --- CADASTROS (farmácia) ---

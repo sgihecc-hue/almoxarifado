@@ -153,6 +153,9 @@ export function DispensationDetails() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {infoItem('Setor solicitante', d.sector)}
+            {/* Data da RM: opcional — travessao quando nao informada. */}
+            {infoItem('Data da RM', fmtDate(d.rm_date))}
+            {d.patient_name && infoItem('Paciente', d.patient_name)}
             {d.notes && infoItem('Observacoes', d.notes)}
           </div>
         </div>

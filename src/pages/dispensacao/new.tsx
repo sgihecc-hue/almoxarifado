@@ -113,6 +113,12 @@ export function NewDispensation() {
   // Etapa Setor (req.)
   const [departments, setDepartments] = useState<Department[]>([])
   const [selectedSector, setSelectedSector] = useState<string>('')
+  // Data da RM (Requisicao de Material) — opcional: nem toda requisicao chega
+  // com a RM datada.
+  const [rmDate, setRmDate] = useState('')
+  // Paciente na requisicao — OPCIONAL: o pedido e do setor, entao pode nao
+  // haver paciente. Texto livre (nao amarra em patients).
+  const [reqPatientName, setReqPatientName] = useState('')
 
   // Prescrição (data) + prescritor
   const [prescriptionDate, setPrescriptionDate] = useState('')
@@ -365,6 +371,9 @@ export function NewDispensation() {
           ? {
               tipo: 'requisicao',
               sector: selectedSector,
+              // Ambos opcionais na requisicao: vao nulos quando em branco.
+              rm_date: rmDate || null,
+              patient_name: reqPatientName.trim() || null,
               mav_confirmado: hasMav ? true : false,
               items: selectedItems.map((i) => ({
                 item_id: i.item_id, quantity: i.quantity,
@@ -494,7 +503,7 @@ export function NewDispensation() {
         <div className="p-6 space-y-4" style={card}>
           <h2 className="text-lg font-semibold" style={{ color: txt }}>Etapa 1 — Setor solicitante</h2>
           <p className="text-xs" style={{ color: txtMut }}>
-            Selecione o setor que receberá os medicamentos. Em requisição, paciente e prescritor não se aplicam.
+            Selecione o setor que receberá os medicamentos. Em requisição, o paciente é opcional e o prescritor não se aplica.
           </p>
 
           <div>
@@ -509,6 +518,32 @@ export function NewDispensation() {
                 <option key={d.id} value={d.name}>{d.name}</option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label style={lbl}>Data da RM</label>
+            <input
+              type="date"
+              value={rmDate}
+              onChange={(e) => setRmDate(e.target.value)}
+              style={inputStyle}
+            />
+            <p className="text-xs mt-1" style={{ color: txtMut }}>
+              Data da Requisição de Material. Opcional.
+            </p>
+          </div>
+
+          <div>
+            <label style={lbl}>Paciente</label>
+            <input
+              value={reqPatientName}
+              onChange={(e) => setReqPatientName(e.target.value)}
+              placeholder="Nome do paciente (opcional)"
+              style={inputStyle}
+            />
+            <p className="text-xs mt-1" style={{ color: txtMut }}>
+              Opcional — preencha só quando a requisição for para um paciente específico.
+            </p>
           </div>
 
           <div className="flex justify-end pt-2">
