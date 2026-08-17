@@ -56,7 +56,7 @@ const itemSchema = z.object({
   // sincroniza medication_class (single) com a primeira pra back-compat.
   controlled_subclass: z.enum(['A1', 'A2', 'A3', 'B1', 'B2', 'C1', 'C2', 'C3', 'C4']).optional(),
   presentation: z.enum([
-    'comprimidos', 'injetaveis', 'solucoes_orais', 'topicos', 'aerosol',
+    'comprimidos', 'injetaveis', 'ampola', 'solucoes_orais', 'topicos', 'aerosol',
     'xarope', 'supositorio', 'gotas', 'outros',
   ]).optional(),
   padronizado: z.boolean().optional(),

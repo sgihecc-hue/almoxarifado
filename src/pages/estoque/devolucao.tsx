@@ -118,6 +118,8 @@ export function DevolucaoInterna() {
   const [prontuario, setProntuario] = useState('')
   const [motivo, setMotivo] = useState<MotivoValue>('')
   const [observacao, setObservacao] = useState('')
+  // Data da devolução (o operador pode lançar retroativo). Default: hoje.
+  const [returnDate, setReturnDate] = useState(new Date().toISOString().slice(0, 10))
   const [lines, setLines] = useState<ReturnLine[]>([])
   const [search, setSearch] = useState('')
   const [items, setItems] = useState<ItemRow[]>([])
@@ -278,6 +280,8 @@ export function DevolucaoInterna() {
         .insert({
           target_location_id: targetLocationId,
           returned_by_user_id: user.id,
+          // Data informada pelo operador (meio-dia p/ não deslocar o dia por fuso).
+          returned_at: new Date(returnDate + 'T12:00:00').toISOString(),
           // Setor de onde o medicamento esta voltando (selecionado no
           // dropdown do topo do form). Antes vinha do user.department_id
           // fixo, o que zerava quando o user era admin sem setor vinculado.
@@ -609,6 +613,17 @@ export function DevolucaoInterna() {
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
+          </div>
+
+          {/* Data da devolução */}
+          <div>
+            <label style={labelStyle}>Data da Devolução <span style={{ color: '#ef4444' }}>*</span></label>
+            <input
+              type="date"
+              value={returnDate}
+              onChange={(e) => setReturnDate(e.target.value)}
+              style={{ ...inputStyle, cursor: 'pointer' }}
+            />
           </div>
 
           {/* Observação (opcional) */}
