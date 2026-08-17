@@ -53,6 +53,14 @@ const BASE_REASONS = [
   { value: 'outro', label: 'Outro' },
 ] as const
 
+// Baixa da diferenca encontrada na contagem fisica da prateleira: o operador
+// lanca a quantidade que faltou. Saida simples, sem destino — igual quebra /
+// vencimento. Nao e recalculo automatico de saldo.
+// So na farmacia: o almoxarifado tem o proprio fluxo e nao deve ser afetado.
+const PHARMACY_ONLY_REASONS = [
+  { value: 'ajuste_inventario', label: 'Ajuste de inventário' },
+] as const
+
 // Motivos que SÓ existem na CAF (saídas para fora do hospital: empréstimo,
 // permuta, consignado, troca de validade, doação). Nos satélites esses fluxos
 // não existem — o satélite só devolve/transfere para a CAF.
@@ -98,7 +106,14 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
   // de validade/doação) e o destino de fornecedores/hospitais. Satélite só
   // transfere/devolve para a CAF.
   const isCaf = locationCode === 'CAF'
-  const REASONS = isCaf ? [...BASE_REASONS, ...CAF_ONLY_REASONS] : BASE_REASONS
+  // Ajuste de inventario so na farmacia (CAF + satelites); o almoxarifado usa
+  // esta mesma tela com type="warehouse" e nao pode ganhar motivo novo.
+  const isPharmacy = type === 'pharmacy'
+  const REASONS = [
+    ...BASE_REASONS,
+    ...(isPharmacy ? PHARMACY_ONLY_REASONS : []),
+    ...(isCaf ? CAF_ONLY_REASONS : []),
+  ]
 
   const [reason, setReason] = useState<string>('quebra')
   const [reasonDetail, setReasonDetail] = useState('')

@@ -207,6 +207,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Medicamentos', icon: Pill, href: '/farmacia/catalogo', show: (f) => isCaf && f.canManageRequests },
         { name: 'Fornecedores', icon: Building2, href: '/farmacia/fornecedores', show: (f) => isCaf && f.canManageRequests },
         { name: 'Unidades Externas', icon: Building2, href: '/farmacia/unidades-externas', show: (f) => isCaf && f.canManageRequests },
+        { name: 'Unidades Internas', icon: Building2, href: '/farmacia/unidades-internas', show: (f) => isCaf && f.canManageRequests },
         { name: 'Prescritores', icon: Stethoscope, href: '/farmacia/prescritores', show: (f) => isCaf && f.canManageRequests },
         { name: 'Pacientes', icon: UsersRound, href: '/farmacia/pacientes', show: (f) => isCaf && f.canManageRequests },
         // Gestor ajusta setor e nível (Solicitante/Atendente/Farmacêutico) dos colaboradores.

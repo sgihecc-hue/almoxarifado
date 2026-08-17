@@ -8,6 +8,13 @@ import { ptBR } from 'date-fns/locale'
 import { pharmacyDispensationService } from '@/lib/services/pharmacy-dispensation'
 import type { PharmacyDispensation } from '@/lib/types/dispensation'
 
+// Validade do lote: coluna DATE no banco: fixa meia-noite local para nao
+// deslocar o dia por fuso. Sem valor (dispensacao antiga) mostra travessao.
+function fmtDate(d: string | null | undefined) {
+  if (!d) return '—'
+  return new Date(d + 'T00:00:00').toLocaleDateString('pt-BR')
+}
+
 export function DispensationDetails() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -197,6 +204,8 @@ export function DispensationDetails() {
             <tr style={{ borderBottom: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}` }}>
               <th className="text-left px-4 py-2 text-xs font-semibold uppercase" style={{ color: txtMut }}>Codigo</th>
               <th className="text-left px-4 py-2 text-xs font-semibold uppercase" style={{ color: txtMut }}>Medicamento</th>
+              <th className="text-left px-4 py-2 text-xs font-semibold uppercase" style={{ color: txtMut }}>Lote</th>
+              <th className="text-center px-4 py-2 text-xs font-semibold uppercase" style={{ color: txtMut }}>Validade</th>
               <th className="text-center px-4 py-2 text-xs font-semibold uppercase" style={{ color: txtMut }}>Quantidade</th>
               <th className="text-center px-4 py-2 text-xs font-semibold uppercase" style={{ color: txtMut }}>Unidade</th>
             </tr>
@@ -209,6 +218,8 @@ export function DispensationDetails() {
               }}>
                 <td className="px-4 py-3 text-sm" style={{ color: txtMut }}>{item.item_code}</td>
                 <td className="px-4 py-3 text-sm font-medium" style={{ color: txt }}>{item.item_name}</td>
+                <td className="px-4 py-3 text-sm" style={{ color: txtSec }}>{item.batch_number || '—'}</td>
+                <td className="px-4 py-3 text-sm text-center" style={{ color: txtSec }}>{fmtDate(item.expiry_date)}</td>
                 <td className="px-4 py-3 text-sm text-center font-semibold" style={{ color: txt }}>{item.quantity}</td>
                 <td className="px-4 py-3 text-sm text-center" style={{ color: txtMut }}>{item.item_unit}</td>
               </tr>
