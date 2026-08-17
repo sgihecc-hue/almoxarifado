@@ -36,7 +36,7 @@ interface LineItem {
 
 // Tipos de entrada. 'Compra' exige NF/AFM; os demais não.
 // 'Inventário' = entrada por contagem/acerto de estoque (recontagem), sem NF.
-const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Consignado', 'Troca de validade', 'Inventário'] as const
+const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Permuta', 'Consignado', 'Troca de validade', 'Inventário'] as const
 type EntryType = typeof ENTRY_TYPES[number]
 
 function formatCNPJ(value: string) {
