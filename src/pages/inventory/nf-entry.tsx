@@ -100,8 +100,12 @@ export function NfEntry({ type }: NfEntryProps) {
       ])
       const opts: OrigemOption[] = [
         ...sup.map((s: any) => ({ tipo: 'supplier' as const, nome: s.name, cnpj: s.cnpj })),
-        ...ext.map((e: any) => ({ tipo: 'external_unit' as const, nome: e.nome, cnpj: e.cnpj || '' })),
-      ].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+        // A tabela external_units usa a coluna "name" (nao "nome"): mapear errado
+        // deixava nome undefined e o sort abaixo estourava, zerando a lista toda.
+        ...ext.map((e: any) => ({ tipo: 'external_unit' as const, nome: e.name, cnpj: e.cnpj || '' })),
+      ]
+        .filter((o) => !!o.nome)
+        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
       setOrigens(opts)
     })()
   }, [user?.id])
