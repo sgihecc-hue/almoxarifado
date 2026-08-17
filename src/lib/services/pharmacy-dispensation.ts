@@ -174,6 +174,8 @@ class PharmacyDispensationService {
         medical_record_number: data.medical_record_number,
         prescribing_doctor: data.prescribing_doctor,
         prescription_number: data.prescription_number,
+        prescription_date: data.prescription_date ?? null,
+        rm_date: data.rm_date ?? null,
         sector: data.sector,
         notes: data.notes,
         status: data.status,
@@ -221,6 +223,8 @@ class PharmacyDispensationService {
         p_prescribing_doctor: data.prescribing_doctor ?? null,
         p_prescription_number: data.prescription_number ?? null,
         p_prescription_date: data.prescription_date ?? null,
+        // Data da RM: opcional, gravada so quando o operador informa.
+        p_rm_date: data.rm_date ?? null,
         p_items: data.items.map((i) => ({
           item_id: i.item_id,
           quantity: i.quantity,
@@ -311,6 +315,7 @@ class PharmacyDispensationService {
         prescribing_doctor: d.prescribing_doctor,
         prescription_number: d.prescription_number,
         prescription_date: d.prescription_date,
+        rm_date: d.rm_date ?? null,
         sector: d.sector,
         notes: d.notes,
         status: d.status,
