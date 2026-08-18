@@ -202,6 +202,21 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
     },
     // --- CADASTROS (farmácia) ---
     {
+      title: 'Relatórios · Farmácia',
+      module: 'farmacia',
+      items: [
+        { name: 'Estoque', icon: Pill, href: '/reports/pharmacy-stock', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Consumo', icon: BarChart3, href: '/reports/pharmacy-consumption', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Gestão de Consumo', icon: FileText, href: '/reports/pharmacy-admin-consumption', show: (f) => f.isAdmin },
+        { name: 'Multi-Estoque', icon: BarChart3, href: '/reports/farmacia-multi-estoque', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Validade', icon: CalendarClock, href: '/reports/stock-expiry?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Movimentações', icon: BarChart3, href: '/reports/movimentacoes?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Relatório de dispensações por dia. Aparece em qualquer estoque; a
+        // própria tela orienta a escolher um satélite (é onde há dispensação).
+        { name: 'Movimentação Diária', icon: CalendarClock, href: '/farmacia/movimentacao-diaria', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+      ],
+    },
+    {
       title: 'Cadastros',
       module: 'farmacia',
       // Seção inteira só no CAF (ver isCaf).
@@ -235,21 +250,6 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
     //     aparecem sem se misturarem (mergeSectionsByTitle so funde blocos
     //     com o MESMO titulo). Antes ambos eram "Relatorios" e os itens
     //     de farm+almox viravam uma lista bagunçada.
-    {
-      title: 'Relatórios · Farmácia',
-      module: 'farmacia',
-      items: [
-        { name: 'Estoque', icon: Pill, href: '/reports/pharmacy-stock', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
-        { name: 'Consumo', icon: BarChart3, href: '/reports/pharmacy-consumption', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
-        { name: 'Gestão de Consumo', icon: FileText, href: '/reports/pharmacy-admin-consumption', show: (f) => f.isAdmin },
-        { name: 'Multi-Estoque', icon: BarChart3, href: '/reports/farmacia-multi-estoque', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
-        { name: 'Validade', icon: CalendarClock, href: '/reports/stock-expiry?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
-        { name: 'Movimentações', icon: BarChart3, href: '/reports/movimentacoes?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
-        // Relatório de dispensações por dia. Aparece em qualquer estoque; a
-        // própria tela orienta a escolher um satélite (é onde há dispensação).
-        { name: 'Movimentação Diária', icon: CalendarClock, href: '/farmacia/movimentacao-diaria', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
-      ],
-    },
     {
       title: 'Relatórios · Almoxarifado',
       module: 'almoxarifado',

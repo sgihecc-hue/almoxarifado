@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Search, Download, AlertCircle,
   Loader2, ArrowUpDown, Pill, FileSpreadsheet, FileText,
-  Eye, Plus, Edit, Trash2, PackageMinus, X, Layers
+  Plus, Edit, Trash2, PackageMinus, X, Layers, History
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -731,8 +731,11 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                               <Edit className="w-4 h-4" />
                             </Button>
                           )}
-                          <Button variant="ghost" size="sm" onClick={() => navigate(`/inventory/pharmacy/${item.id}`)} title="Ver detalhes" className="h-8 px-2">
-                            <Eye className="w-4 h-4" />
+                          {/* Rotulo visivel: so o icone de olho ninguem descobria que
+                              existe linha do tempo, entradas e saidas do item. */}
+                          <Button variant="ghost" size="sm" onClick={() => navigate(`/inventory/pharmacy/${item.id}`)} title="Linha do tempo, entradas e saídas do item" className="h-8 px-2 gap-1.5">
+                            <History className="w-4 h-4" />
+                            <span className="hidden sm:inline text-xs">Histórico</span>
                           </Button>
                           {canEdit && (
                             <Button variant="outline" size="sm" onClick={() => handleDelete(item)} title="Excluir" className="text-red-600 border-red-200 hover:bg-red-50 h-8 px-2">
