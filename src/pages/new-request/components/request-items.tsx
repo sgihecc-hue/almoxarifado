@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Search, Plus, Minus, Loader2, Bed, X } from 'lucide-react'
+import { Search, Plus, Minus, Loader2, Bed } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -46,11 +46,7 @@ interface RequestItemsProps {
   defaultValues?: RequestItem[]
 }
 
-const JUSTIFICATIVA_MOTIVOS = ['Quebra', 'Não encontrado', 'Avariado'] as const
 
-// Só estas classes de medicação exigem justificativa ao adicionar na solicitação.
-// Demais itens de farmácia entram direto (apenas com seleção de lote FEFO).
-const REQUIRES_JUSTIFICATION_CLASSES = new Set(['controlados', 'antimicrobianos'])
 
 export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItemsProps) {
   const { user } = useAuth()
@@ -85,18 +81,8 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   const [nurseName, setNurseName] = useState('')
   const [patientError, setPatientError] = useState<string | null>(null)
 
-  // Justificativa modal (farmacia, nao-colchao)
-  const [showJustModal, setShowJustModal] = useState(false)
-  const [justPendingItem, setJustPendingItem] = useState<Item | null>(null)
-  const [justPendingUid, setJustPendingUid] = useState<string>('')
-  const [justMotivo, setJustMotivo] = useState<string>('')
-  const [justPatientName, setJustPatientName] = useState('')
-  const [justProntuario, setJustProntuario] = useState('')
-  const [justIsCurativo, setJustIsCurativo] = useState(false)
-  const [justError, setJustError] = useState<string | null>(null)
 
   // Cache de medication_class por item_id
-  const [medicationClassCache, setMedicationClassCache] = useState<Record<string, string | null>>({})
 
   useEffect(() => {
     loadItems()
@@ -118,18 +104,6 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     } finally {
       setLoading(false)
     }
-  }
-
-  async function getMedicationClass(itemId: string): Promise<string | null> {
-    if (itemId in medicationClassCache) return medicationClassCache[itemId]
-    const { data } = await supabase
-      .from('pharmacy_items')
-      .select('medication_class')
-      .eq('id', itemId)
-      .single()
-    const cls = (data as any)?.medication_class ?? null
-    setMedicationClassCache(prev => ({ ...prev, [itemId]: cls }))
-    return cls
   }
 
   // Farmácia: lista TODOS os itens ativos (inclusive zerados) — sem pista de
@@ -164,24 +138,10 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     // Demais itens: não permite duplicar no mesmo pedido
     if (selectedItems.some(i => i.id === item.id)) return
 
-    // Itens de farmacia: só controlados e antimicrobianos exigem justificativa
+    // Farmácia: nenhum item pede justificativa ao ser adicionado. Antes o
+    // pop-up aparecia em controlados e antimicrobianos; a farmácia pediu a
+    // remoção. Todos entram direto (com seleção de lote FEFO).
     if (type === 'pharmacy') {
-      const cls = await getMedicationClass(item.id)
-      const clsNorm = (cls || '').toLowerCase()
-      if (REQUIRES_JUSTIFICATION_CLASSES.has(clsNorm)) {
-        const isCurativo = clsNorm === 'curativo'
-        setJustPendingItem(item)
-        const uid = makeUid()
-        setJustPendingUid(uid)
-        setJustMotivo('')
-        setJustPatientName('')
-        setJustProntuario('')
-        setJustIsCurativo(isCurativo)
-        setJustError(null)
-        setShowJustModal(true)
-        return
-      }
-      // Demais itens de farmácia: adiciona direto (com seleção de lote FEFO)
       setSelectedItems([...selectedItems, { id: item.id, quantity: 1, _uid: makeUid() }])
       return
     }
@@ -218,42 +178,6 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     setPatientError(null)
   }
 
-  const handleConfirmJustificativa = () => {
-    if (!justPendingItem) return
-
-    // Curativo: apenas nome do paciente obrigatorio
-    if (justIsCurativo) {
-      if (!justPatientName.trim()) {
-        setJustError('Informe o nome do paciente.')
-        return
-      }
-    } else {
-      // Demais: motivo + nome do paciente obrigatorios
-      if (!justMotivo) {
-        setJustError('Selecione o motivo.')
-        return
-      }
-      if (!justPatientName.trim()) {
-        setJustError('Informe o nome do paciente.')
-        return
-      }
-    }
-
-    setSelectedItems(prev => [
-      ...prev,
-      {
-        id: justPendingItem.id,
-        quantity: 1,
-        _uid: justPendingUid,
-        justificativa_motivo: justIsCurativo ? undefined : justMotivo,
-        justificativa_patient_name: justPatientName.trim(),
-        justificativa_prontuario: justProntuario.trim() || undefined,
-      },
-    ])
-    setShowJustModal(false)
-    setJustPendingItem(null)
-    setJustError(null)
-  }
 
   const handleRemoveItem = (uid: string) => {
     setSelectedItems(selectedItems.filter(item => item._uid !== uid))
@@ -541,108 +465,6 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
       </Dialog>
 
       {/* Justificativa Modal para itens de farmacia (exceto colchao) */}
-      <Dialog open={showJustModal} onOpenChange={(open) => { setShowJustModal(open); if (!open) setJustError(null) }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Plus className="w-5 h-5 text-amber-600" />
-              Justificativa do Item
-            </DialogTitle>
-          </DialogHeader>
-          {justPendingItem && (
-            <p className="text-sm text-gray-500 mb-1">
-              Item: <strong>{justPendingItem.name}</strong>
-            </p>
-          )}
-
-          <div className="space-y-4">
-            {/* Para curativo: apenas nome do paciente */}
-            {justIsCurativo ? (
-              <div>
-                <Label>Nome do Paciente *</Label>
-                <Input
-                  value={justPatientName}
-                  onChange={(e) => { setJustPatientName(e.target.value); if (justError) setJustError(null) }}
-                  placeholder="Nome completo do paciente"
-                  className="mt-1"
-                />
-              </div>
-            ) : (
-              <>
-                <div>
-                  <Label>Motivo *</Label>
-                  <select
-                    value={justMotivo}
-                    onChange={(e) => { setJustMotivo(e.target.value); if (justError) setJustError(null) }}
-                    className="mt-1 w-full border rounded-md px-3 py-2 text-sm bg-white"
-                  >
-                    <option value="">Selecione o motivo...</option>
-                    {JUSTIFICATIVA_MOTIVOS.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <Label>Nome do Paciente *</Label>
-                  <Input
-                    value={justPatientName}
-                    onChange={(e) => { setJustPatientName(e.target.value); if (justError) setJustError(null) }}
-                    placeholder="Nome completo do paciente"
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label>Prontuario (opcional)</Label>
-                  <Input
-                    value={justProntuario}
-                    onChange={(e) => setJustProntuario(e.target.value)}
-                    placeholder="Numero do prontuario"
-                    className="mt-1"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    Paciente nao cadastrado?{' '}
-                    <a
-                      href="/farmacia/pacientes"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-500 hover:underline"
-                    >
-                      Cadastrar aqui
-                    </a>
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-
-          {justError && (
-            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-700">
-              {justError}
-            </div>
-          )}
-
-          <DialogFooter className="mt-4">
-            <Button
-              variant="outline"
-              onClick={() => { setShowJustModal(false); setJustError(null) }}
-            >
-              <X className="w-4 h-4 mr-1" />
-              Cancelar
-            </Button>
-            <Button
-              onClick={handleConfirmJustificativa}
-              disabled={
-                justIsCurativo
-                  ? !justPatientName.trim()
-                  : !justMotivo || !justPatientName.trim()
-              }
-              className="bg-primary-500 hover:bg-primary-600 text-white"
-            >
-              Adicionar Item
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
