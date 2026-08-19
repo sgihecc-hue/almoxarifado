@@ -37,6 +37,9 @@ interface ItemRow {
 }
 
 interface LineItem {
+  // Identidade da LINHA, nao do item: o mesmo material pode aparecer varias
+  // vezes, uma por lote. Sem isto o React repete chave e embaralha as linhas.
+  _uid: string
   item_id: string
   name: string
   code: string
@@ -144,8 +147,16 @@ export function NfEntryWarehouse() {
   }, [search])
 
   function addLine(item: ItemRow) {
-    if (lines.some((l) => l.item_id === item.id)) { setSearch(''); setResults([]); return }
+    // Satelite Terreo: o MESMO item pode entrar em varias linhas — uma por
+    // LOTE. Uma entrada costuma trazer o mesmo material com lotes e validades
+    // diferentes, e a RPC trata cada linha de forma independente, criando o
+    // lote por (item, lote, local). No Almoxarifado o comportamento continua
+    // o de sempre: um item so pode entrar uma vez.
+    if (!isFarmacia && lines.some((l) => l.item_id === item.id)) {
+      setSearch(''); setResults([]); return
+    }
     setLines((prev) => [...prev, {
+      _uid: `${item.id}-${Date.now()}-${prev.length}`,
       item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
       quantity: 1, batch_number: '', expiry_date: '', unit_price: 0,
     }])
@@ -351,7 +362,9 @@ export function NfEntryWarehouse() {
                   {results.length === 0 ? (
                     <div className="px-4 py-3 text-sm text-gray-400">Nenhum item encontrado.</div>
                   ) : results.map((i) => {
-                    const already = lines.some((l) => l.item_id === i.id)
+                    // No Almoxarifado item repetido fica bloqueado; na Satelite
+                    // Terreo nao, porque cada linha e um lote diferente.
+                    const already = !isFarmacia && lines.some((l) => l.item_id === i.id)
                     return (
                       <button key={i.id} onClick={() => addLine(i)} disabled={already}
                         className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 disabled:opacity-50 flex items-center justify-between">
@@ -476,7 +489,7 @@ export function NfEntryWarehouse() {
               </thead>
               <tbody>
                 {lines.map((l, idx) => (
-                  <tr key={l.item_id} className="border-b last:border-0">
+                  <tr key={l._uid} className="border-b last:border-0">
                     <td className="py-2 pr-2">
                       <p className="font-medium text-gray-900">{l.name}</p>
                       <p className="text-xs text-gray-400">{l.code || 'sem código'} · {l.unit}</p>
