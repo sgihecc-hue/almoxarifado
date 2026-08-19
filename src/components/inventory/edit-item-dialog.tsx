@@ -24,7 +24,16 @@ import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
 
 // Estoques de farmácia que guardam lotes de medicamento (o Satélite Térreo é
 // material/almoxarifado, então não entra na edição de lotes de remédio).
-const LOT_LOCATIONS = PHARMACY_STOCKS.filter((s) => s.itemType === 'pharmacy')
+const LOT_LOCATIONS_PHARMACY = PHARMACY_STOCKS.filter((s) => s.itemType === 'pharmacy')
+
+// Locais de MATERIAL que guardam lote. Só o(s) estoque(s) de material do
+// seletor da farmácia (hoje a Satélite Térreo): o Almoxarifado não trabalha com
+// lote por local — o saldo dele é o global (warehouse_items.current_stock).
+const LOT_LOCATIONS_WAREHOUSE = PHARMACY_STOCKS.filter((s) => s.itemType === 'warehouse')
+
+function lotLocationsFor(type: 'pharmacy' | 'warehouse') {
+  return type === 'pharmacy' ? LOT_LOCATIONS_PHARMACY : LOT_LOCATIONS_WAREHOUSE
+}
 
 interface LotRow {
   _key: string
@@ -100,6 +109,11 @@ type FormData = z.infer<typeof schema>
 interface EditItemDialogProps {
   item: Item
   type: 'pharmacy' | 'warehouse'
+  // Material: o editor de lotes so faz sentido num SATELITE (SAT_T), que tem
+  // saldo por local. O Almoxarifado central controla saldo global, sem lote por
+  // local — para ele a tela segue exatamente como era, sem este bloco.
+  // Medicamento ignora esta prop: sempre teve o editor.
+  allowLotEdit?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
@@ -109,7 +123,11 @@ const unitOptions = [
   'Un','Pc','Cx','Fr','Amp','Tb','Rl','Lt','Kg','Gl','ml','g','Pr','Cj','Sc','Rm','Ct','FL',
 ]
 
-export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: EditItemDialogProps) {
+export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenChange, onSuccess }: EditItemDialogProps) {
+  // Medicamento sempre teve o editor de lotes. Material so mostra quando a tela
+  // que abriu o dialogo esta num satelite (passa allowLotEdit) — o Almoxarifado
+  // central nao passa, entao nada muda para ele.
+  const podeEditarLotes = type === 'pharmacy' || allowLotEdit
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [scanningBarcode, setScanningBarcode] = useState(false)
@@ -129,13 +147,16 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
     setSelectedClasses((prev) => prev.includes(c) ? prev.filter((k) => k !== c) : [...prev, c])
   }
 
-  // Lotes do medicamento (expiry_tracking) — editáveis nesta tela (só farmácia).
+  // Lotes do item (expiry_tracking) — editáveis nesta tela para medicamento
+  // (farmácia) e para material (Satélite Térreo).
+  const LOT_LOCATIONS = lotLocationsFor(type)
+  const lotesLabel = type === 'pharmacy' ? 'Lotes do medicamento' : 'Lotes do material'
   const [lots, setLots] = useState<LotRow[]>([])
   const [loadingLots, setLoadingLots] = useState(false)
   const [lotsDirty, setLotsDirty] = useState(false)
 
   useEffect(() => {
-    if (!open || type !== 'pharmacy') { setLots([]); setLotsDirty(false); return }
+    if (!open || !podeEditarLotes) { setLots([]); setLotsDirty(false); return }
     let alive = true
     ;(async () => {
       setLoadingLots(true)
@@ -299,10 +320,11 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
       }
       await itemsService.update(item.id, updatePayload, type)
 
-      // 1b) Farmácia: se mexeu nos lotes, grava via RPC (edita/adiciona/remove
-      // lotes e recalcula o saldo por local + current_stock). O RPC vira a
-      // fonte da verdade do estoque quando há lote.
-      if (type === 'pharmacy' && lotsDirty) {
+      // 1b) Se mexeu nos lotes, grava via RPC (edita/adiciona/remove lotes e
+      // recalcula o saldo por local). Na farmácia o RPC também recalcula o
+      // current_stock do medicamento (soma dos lotes); no material NÃO — lá o
+      // current_stock é o saldo do almoxarifado e não pode ser mexido.
+      if (podeEditarLotes && lotsDirty) {
         const semLocal = lots.find((l) => !l.deleted && !l.location_id)
         if (semLocal) throw new Error('Selecione o estoque de cada lote.')
         const payload = lots.map((l) => ({
@@ -313,7 +335,8 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
           location_id: l.location_id,
           deleted: !!l.deleted,
         }))
-        const { error: rpcErr } = await supabase.rpc('farmacia_editar_lotes', {
+        const rpcName = type === 'pharmacy' ? 'farmacia_editar_lotes' : 'almox_editar_lotes'
+        const { error: rpcErr } = await supabase.rpc(rpcName, {
           p_item_id: item.id,
           p_lots: payload,
         })
@@ -528,18 +551,21 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
             </div>
           )}
 
-          {/* Lotes do medicamento (farmácia) — editar/adicionar/remover */}
-          {type === 'pharmacy' && (
-            <div className="rounded-lg border border-indigo-200 overflow-hidden">
+          {/* Lotes do item (medicamento ou material) — editar/adicionar/remover */}
+          {podeEditarLotes && (
+          <div className="rounded-lg border border-indigo-200 overflow-hidden">
               <div className="flex items-center justify-between gap-2 px-4 py-3 bg-indigo-50 border-b border-indigo-200">
                 <div className="flex items-center gap-2 text-sm font-semibold text-indigo-900">
-                  <Layers className="w-4 h-4" /> Lotes do medicamento
+                  <Layers className="w-4 h-4" /> {lotesLabel}
                 </div>
                 <span className="text-xs text-indigo-700">Total: <strong>{totalLotes}</strong></span>
               </div>
               <div className="p-4 space-y-3 bg-white">
                 <p className="text-xs text-gray-500">
-                  Edite lote, validade, estoque e quantidade. O saldo do medicamento é recalculado pela soma dos lotes ao salvar.
+                  Edite lote, validade, estoque e quantidade.{' '}
+                  {type === 'pharmacy'
+                    ? 'O saldo do medicamento é recalculado pela soma dos lotes ao salvar.'
+                    : 'O saldo por estoque é recalculado pela soma dos lotes ao salvar (o saldo do Almoxarifado não é alterado).'}
                 </p>
                 {loadingLots ? (
                   <div className="flex items-center gap-2 text-sm text-gray-400 py-2"><Loader2 className="w-4 h-4 animate-spin" /> Carregando lotes...</div>
@@ -603,7 +629,7 @@ export function EditItemDialog({ item, type, open, onOpenChange, onSuccess }: Ed
                   <Plus className="w-4 h-4 mr-1" /> Adicionar lote
                 </Button>
               </div>
-            </div>
+          </div>
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
