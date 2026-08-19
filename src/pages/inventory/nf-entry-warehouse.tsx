@@ -45,7 +45,9 @@ interface LineItem {
 }
 
 const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Consignado', 'Troca de validade'] as const
-type EntryType = typeof ENTRY_TYPES[number]
+// 'Inventário' nao entra em ENTRY_TYPES pra nao aparecer no Almoxarifado —
+// so o tipo precisa conhece-lo, porque a Satelite Terreo usa esta tela.
+type EntryType = typeof ENTRY_TYPES[number] | 'Inventário'
 
 const LOC_LABELS: Record<string, string> = {
   ALMOX: 'Almoxarifado',
@@ -66,6 +68,13 @@ export function NfEntryWarehouse() {
   const [searchParams] = useSearchParams()
   const locationCode = searchParams.get('loc') || 'ALMOX'
   const locationLabel = LOC_LABELS[locationCode] ?? locationCode
+  // Esta tela atende o Almoxarifado E a Satelite Terreo (estoque de material
+  // da farmacia). O tipo "Inventario" existe so no lado da farmacia — a lista
+  // do almoxarifado fica exatamente como era.
+  const isFarmacia = locationCode !== 'ALMOX'
+  const tiposEntrada: readonly string[] = isFarmacia
+    ? [...ENTRY_TYPES, 'Inventário']
+    : ENTRY_TYPES
   const backTo = '/inventory/warehouse'
   const today = new Date().toISOString().slice(0, 10)
 
@@ -125,8 +134,10 @@ export function NfEntryWarehouse() {
 
   // Validacao "estilo antigo do almox": lote/validade NAO sao obrigatorios
   // — muito material de expediente/limpeza nao tem lote nem validade.
+  // No Inventario nao existe fornecedor — a contagem nao vem de ninguem.
+  const isInventario = entryType === 'Inventário'
   const canSubmit =
-    supplierName.trim() &&
+    (isInventario || supplierName.trim()) &&
     (!isCompra || (invoiceNumber.trim() && invoiceDate && afmNumber.trim())) &&
     lines.length > 0 && lines.every((l) => l.quantity > 0)
 
@@ -178,7 +189,7 @@ export function NfEntryWarehouse() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
             <FileText className="w-6 h-6 text-emerald-600" />
-            Nova Entrada — Almoxarifado
+            Nova Entrada — {locationLabel}
           </h1>
           <p className="text-sm text-gray-500">Lance vários itens de uma vez. Escolha o tipo de entrada.</p>
         </div>
@@ -198,7 +209,7 @@ export function NfEntryWarehouse() {
               onChange={(e) => setEntryType(e.target.value as EntryType)}
               className="mt-1 w-full h-9 rounded-md border border-input px-3 py-1 bg-white text-sm"
             >
-              {ENTRY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {tiposEntrada.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
@@ -218,7 +229,7 @@ export function NfEntryWarehouse() {
             <Input id="cnpj" value={supplierCnpj} onChange={(e) => setSupplierCnpj(formatCNPJ(e.target.value))} placeholder="00.000.000/0000-00" maxLength={18} className="mt-1" />
           </div>
           <div>
-            <Label htmlFor="forn">{isCompra ? 'Fornecedor *' : 'Fornecedor / Origem *'}</Label>
+            <Label htmlFor="forn">{isCompra ? 'Fornecedor *' : isInventario ? 'Fornecedor / Origem (opcional)' : 'Fornecedor / Origem *'}</Label>
             <Input id="forn" value={supplierName} onChange={(e) => setSupplierName(e.target.value)} placeholder={isCompra ? 'Empresa fornecedora' : 'Quem forneceu / origem'} className="mt-1" />
           </div>
         </div>
