@@ -49,6 +49,11 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
   // Saldo local (item_id -> quantity NESTE location) quando ha locationId.
   // Vazio => usa o current_stock global do cadastro.
   const [localQtyById, setLocalQtyById] = useState<Map<string, number>>(new Map())
+  // Lotes do item NESTE local, ordenados por validade (o mais proximo primeiro).
+  // So e preenchido quando ha locationId — no Almoxarifado a tela segue
+  // mostrando o campo de lote do proprio cadastro, como sempre.
+  type LoteLocal = { batch_number: string | null; expiry_date: string | null; current_quantity: number }
+  const [lotesById, setLotesById] = useState<Map<string, LoteLocal[]>>(new Map())
   // Consumo/dia CALCULADO das saídas dos últimos 30 dias (RPC
   // warehouse_consumo_diario). item_id -> unidades/dia.
   const [consumoDiaById, setConsumoDiaById] = useState<Map<string, number>>(new Map())
@@ -122,8 +127,26 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
           .eq('item_type', 'warehouse')
         if (stocksErr) throw stocksErr
         setLocalQtyById(new Map((stocks ?? []).map((s: any) => [s.item_id, s.quantity])))
+
+        // Lotes reais deste local. A tela mostrava warehouse_items.batch_number
+        // — um campo unico do cadastro — entao um item com varios lotes exibia
+        // so um, e quem entrou sem preencher esse campo aparecia sem lote.
+        const { data: lotes, error: lotesErr } = await supabase
+          .from('expiry_tracking')
+          .select('item_id, batch_number, expiry_date, current_quantity')
+          .eq('location_id', locationId)
+          .order('expiry_date', { ascending: true, nullsFirst: false })
+        if (lotesErr) throw lotesErr
+        const mapa = new Map<string, LoteLocal[]>()
+        for (const l of (lotes ?? []) as any[]) {
+          const lista = mapa.get(l.item_id) ?? []
+          lista.push({ batch_number: l.batch_number, expiry_date: l.expiry_date, current_quantity: l.current_quantity })
+          mapa.set(l.item_id, lista)
+        }
+        setLotesById(mapa)
       } else {
         setLocalQtyById(new Map())
+        setLotesById(new Map())
       }
     } catch (error) {
       console.error('Error loading items:', error)
@@ -432,10 +455,30 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                     <td className="px-4 py-3 text-sm text-gray-600">{item.category}</td>
                     <td className="px-4 py-3 text-sm text-center text-gray-700 font-medium">{item.unit}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">
-                      {(item as any).batch_number || '-'}
+                      {(() => {
+                        // Num satelite mostra os lotes DAQUELE local; no
+                        // Almoxarifado segue o campo do cadastro, como antes.
+                        if (!locationId) return (item as any).batch_number || '-'
+                        const ls = lotesById.get(item.id) ?? []
+                        if (ls.length === 0) return '-'
+                        return (
+                          <span title={ls.map((l) => `${l.batch_number || 'sem lote'} — ${l.current_quantity}`).join(', ')}>
+                            {ls[0].batch_number || 'sem lote'}
+                            {ls.length > 1 && (
+                              <span className="ml-1 text-xs text-gray-400">+{ls.length - 1}</span>
+                            )}
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">
-                      {item.expiry_date ? new Date(item.expiry_date + 'T00:00:00').toLocaleDateString('pt-BR') : '-'}
+                      {(() => {
+                        const fmt = (d: string | null) =>
+                          d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '-'
+                        if (!locationId) return fmt(item.expiry_date ?? null)
+                        const ls = lotesById.get(item.id) ?? []
+                        return ls.length === 0 ? '-' : fmt(ls[0].expiry_date)
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-sm text-right text-gray-600">
                       {(item as any).last_purchase_price != null
