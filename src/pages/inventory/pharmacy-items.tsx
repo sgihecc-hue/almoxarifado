@@ -90,6 +90,15 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   // UPDATE de item_stocks.
   const canEditLocal = ['administrador', 'admin', 'gestor', 'atendente', 'pharmacist'].includes(user?.role ?? '')
 
+  // Validade que a coluna mostra: a do lote selecionado (default FEFO). Sem
+  // lote no estoque ativo, nao ha validade — ordenar e filtrar usam isto para
+  // ficarem coerentes com o que esta na tela.
+  const getExpiry = (item: Item): string | null => {
+    const lots = lotsByItem.get(item.id) ?? []
+    const idx = selectedLotByItem.get(item.id) ?? 0
+    return lots[idx]?.expiry_date ?? null
+  }
+
   // Local/prateleira do item NO ESTOQUE ATIVO.
   const getShelf = (item: Item): string => {
     if (!activeStock) return ''
@@ -272,26 +281,6 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     }
   }
 
-  const sortedItems = [...items].sort((a, b) => {
-    if (!sortColumn) return 0
-
-    const aValue = a[sortColumn as keyof Item]
-    const bValue = b[sortColumn as keyof Item]
-
-    if (typeof aValue === 'string' && typeof bValue === 'string') {
-      return sortDirection === 'asc' 
-        ? aValue.localeCompare(bValue)
-        : bValue.localeCompare(aValue)
-    }
-
-    if (typeof aValue === 'number' && typeof bValue === 'number') {
-      return sortDirection === 'asc' 
-        ? aValue - bValue
-        : bValue - aValue
-    }
-
-    return 0
-  })
 
   // Consumo médio mensal: o valor INFORMADO no cadastro tem prioridade; sem
   // ele, cai na média do histórico (comportamento anterior).
@@ -328,6 +317,46 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   // itens com base num número diferente do exibido. Além disso, o loadItems só
   // rodava ao trocar de local, então mexer no filtro não refazia a busca — por
   // isso "os filtros não filtravam".
+  // Local, Validade e Consumo nao sao campos do item — sao calculados (Local
+  // vem de item_stocks, Validade do lote selecionado, Consumo do cadastro ou
+  // do historico). Por isso precisam de comparacao propria: o acesso direto
+  // a[coluna] devolvia undefined e a lista nao mudava de ordem.
+  const sortedItems = [...items].sort((a, b) => {
+    if (!sortColumn) return 0
+    const dir = sortDirection === 'asc' ? 1 : -1
+
+    if (sortColumn === 'shelf_location') {
+      const x = getShelf(a), y = getShelf(b)
+      if (!x && !y) return 0
+      if (!x) return 1            // sem local vai sempre pro fim
+      if (!y) return -1
+      return x.localeCompare(y, 'pt-BR') * dir
+    }
+
+    if (sortColumn === 'expiry_date') {
+      const x = getExpiry(a), y = getExpiry(b)
+      if (!x && !y) return 0
+      if (!x) return 1            // sem validade vai sempre pro fim
+      if (!y) return -1
+      return (x < y ? -1 : x > y ? 1 : 0) * dir
+    }
+
+    if (sortColumn === 'consumo') {
+      return (consumoMensal(a) - consumoMensal(b)) * dir
+    }
+
+    const aValue = a[sortColumn as keyof Item]
+    const bValue = b[sortColumn as keyof Item]
+
+    if (typeof aValue === 'string' && typeof bValue === 'string') {
+      return aValue.localeCompare(bValue) * dir
+    }
+    if (typeof aValue === 'number' && typeof bValue === 'number') {
+      return (aValue - bValue) * dir
+    }
+    return 0
+  })
+
   const filteredItems = sortedItems
     .filter(item =>
       searchTerm === '' ||
@@ -338,6 +367,18 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     .filter(item => !filters.status?.length || filters.status.includes(statusLocal(item)))
     .filter(item => filters.minStock === undefined || getLocalQty(item) >= filters.minStock)
     .filter(item => filters.maxStock === undefined || getLocalQty(item) <= filters.maxStock)
+    // Data de Validade: o campo ja existia nos filtros avancados, mas nenhuma
+    // tela usava o valor — preenchia e nada acontecia. Compara com a validade
+    // do lote exibido; item sem lote sai da lista quando ha filtro de data.
+    .filter(item => {
+      const range = filters.expiryDateRange
+      if (!range?.start && !range?.end) return true
+      const exp = getExpiry(item)
+      if (!exp) return false
+      if (range.start && exp < range.start.toISOString().slice(0, 10)) return false
+      if (range.end && exp > range.end.toISOString().slice(0, 10)) return false
+      return true
+    })
 
   if (loading) {
     return (
@@ -513,14 +554,32 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                 <th className="px-2 py-2 text-center text-xs font-medium text-gray-600 whitespace-nowrap">
                   Unidade
                 </th>
-                <th className="px-2 py-2 text-left text-xs font-medium text-gray-600 whitespace-nowrap" title="Localização física (prateleira/seção) neste estoque">
-                  Local
+                <th
+                  className="px-2 py-2 text-left text-xs font-medium text-gray-600 cursor-pointer hover:bg-gray-100 whitespace-nowrap"
+                  title="Localização física (prateleira/seção) neste estoque"
+                  onClick={() => handleSort('shelf_location')}
+                >
+                  <div className="flex items-center gap-1">
+                    Local
+                    {sortColumn === 'shelf_location' && (
+                      <ArrowUpDown className="w-3 h-3" />
+                    )}
+                  </div>
                 </th>
                 <th className="px-2 py-2 text-left text-xs font-medium text-gray-600 whitespace-nowrap">
                   Lote
                 </th>
-                <th className="px-2 py-2 text-left text-xs font-medium text-gray-600 whitespace-nowrap">
-                  Validade
+                <th
+                  className="px-2 py-2 text-left text-xs font-medium text-gray-600 cursor-pointer hover:bg-gray-100 whitespace-nowrap"
+                  title="Validade do lote exibido — ordena do mais próximo de vencer ao mais distante"
+                  onClick={() => handleSort('expiry_date')}
+                >
+                  <div className="flex items-center gap-1">
+                    Validade
+                    {sortColumn === 'expiry_date' && (
+                      <ArrowUpDown className="w-3 h-3" />
+                    )}
+                  </div>
                 </th>
                 <th className="px-2 py-2 text-right text-xs font-medium text-gray-600 whitespace-nowrap">
                   Última Compra
@@ -528,8 +587,16 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                 <th className="px-2 py-2 text-right text-xs font-medium text-gray-600 whitespace-nowrap">
                   Valor Ref.
                 </th>
-                <th className="px-2 py-2 text-right text-xs font-medium text-gray-600 whitespace-nowrap">
-                  Consumo
+                <th
+                  className="px-2 py-2 text-right text-xs font-medium text-gray-600 cursor-pointer hover:bg-gray-100 whitespace-nowrap"
+                  onClick={() => handleSort('consumo')}
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    Consumo
+                    {sortColumn === 'consumo' && (
+                      <ArrowUpDown className="w-3 h-3" />
+                    )}
+                  </div>
                 </th>
                 <th
                   className="px-2 py-2 text-right text-xs font-medium text-gray-600 cursor-pointer hover:bg-gray-100 whitespace-nowrap"
