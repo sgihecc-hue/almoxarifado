@@ -39,6 +39,22 @@ interface DeliveredRequest {
   items: RequestItem[]
 }
 
+// Conferência de MATERIAL (Satélite Térreo). Uma linha por item do pedido, com
+// lote/validade/quantidade digitados por quem recebeu — é a contagem física
+// que vale, não o que o almoxarifado diz ter mandado.
+interface MaterialReceiptForm {
+  request_item_id: string
+  item_id: string
+  batch_number: string
+  expiry_date: string
+  quantity: string
+  unit: string
+}
+
+// Recorte da lista de material: pedidos dos últimos 60 dias. Sem isso a tela
+// carregaria o histórico inteiro do satélite.
+const MATERIAL_JANELA_DIAS = 60
+
 function Toast({ message, type, onClose }: { message: string; type: 'success' | 'error'; onClose: () => void }) {
   useEffect(() => {
     const t = setTimeout(onClose, 4000)
@@ -62,10 +78,124 @@ export function ReceiptConfirmation() {
   const [loading, setLoading] = useState(true)
   const [confirming, setConfirming] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  // Formulário da conferência de material, indexado por request_item_id.
+  const [forms, setForms] = useState<Record<string, MaterialReceiptForm>>({})
+
+  // Satélite Térreo (e qualquer estoque de material) usa o fluxo de conferência
+  // item a item. Os demais estoques são medicamento e seguem o fluxo antigo,
+  // que não muda em nada.
+  const isMaterial = activeStock?.itemType === 'warehouse'
 
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     setToast({ message, type })
   }, [])
+
+  // ——— Material: pedidos do almoxarifado para este satélite que ainda têm item
+  // sem recebimento registrado (nada em material_receipts para o request_item).
+  const loadMaterialRequests = useCallback(async () => {
+    if (!activeStock) return
+    try {
+      setLoading(true)
+
+      const desde = new Date()
+      desde.setDate(desde.getDate() - MATERIAL_JANELA_DIAS)
+
+      // 'delivered' e 'completed' porque o almoxarifado fecha o pedido direto
+      // como 'completed' — o status do pedido é do fluxo dele, não nosso.
+      const { data, error } = await supabase
+        .from('requests')
+        .select(`
+          id,
+          request_number,
+          created_at,
+          delivered_at,
+          requester:users!requests_requester_id_fkey(full_name),
+          department:departments!requests_department_id_fkey(name),
+          delivered_by_user:users!requests_delivered_by_fkey(full_name),
+          request_items(
+            id,
+            quantity,
+            approved_quantity,
+            supplied_quantity,
+            warehouse_item:warehouse_items(id, name, code, unit)
+          )
+        `)
+        .eq('type', 'warehouse')
+        .in('status', ['delivered', 'completed'])
+        .gte('created_at', desde.toISOString())
+        .order('delivered_at', { ascending: false, nullsFirst: false })
+
+      if (error) throw error
+
+      // Só os pedidos do setor dono deste estoque.
+      const scoped = ((data || []) as any[]).filter((r) =>
+        departmentBelongsToStock(r.department?.name, activeStock)
+      )
+
+      // Quais itens já foram conferidos? Uma linha em material_receipts para o
+      // request_item basta pra tirar o item da lista.
+      const ids = scoped.map((r) => r.id)
+      let jaRecebidos = new Set<string>()
+      if (ids.length > 0) {
+        const { data: recs, error: recErr } = await supabase
+          .from('material_receipts')
+          .select('request_item_id')
+          .in('request_id', ids)
+        if (recErr) throw recErr
+        jaRecebidos = new Set(
+          (recs || []).map((r: any) => r.request_item_id).filter(Boolean)
+        )
+      }
+
+      const novosForms: Record<string, MaterialReceiptForm> = {}
+      const mapped: DeliveredRequest[] = scoped
+        .map((req: any) => {
+          const items: RequestItem[] = (req.request_items || [])
+            .filter((ri: any) => ri.warehouse_item && !jaRecebidos.has(ri.id))
+            .map((ri: any) => {
+              const item = ri.warehouse_item
+              // Sugestão de quantidade: o que o almox informou ter liberado.
+              // Fica editável de propósito — vale a contagem de quem recebe.
+              const sugerida = ri.supplied_quantity ?? ri.approved_quantity ?? ri.quantity
+              novosForms[ri.id] = {
+                request_item_id: ri.id,
+                item_id: item.id,
+                batch_number: '',
+                expiry_date: '',
+                quantity: String(sugerida ?? ''),
+                unit: 'UN',
+              }
+              return {
+                id: ri.id,
+                quantity: sugerida,
+                requested_quantity: ri.quantity,
+                item_name: item?.name ?? '—',
+                item_code: item?.code ?? '—',
+                item_unit: item?.unit,
+              } as RequestItem
+            })
+          return {
+            id: req.id,
+            request_number: req.request_number,
+            requester_name: req.requester?.full_name ?? '—',
+            department_name: req.department?.name ?? '—',
+            delivered_at: req.delivered_at,
+            delivered_by_name: req.delivered_by_user?.full_name ?? '—',
+            created_at: req.created_at,
+            items,
+          }
+        })
+        .filter((r) => r.items.length > 0)
+
+      setForms(novosForms)
+      setRequests(mapped)
+    } catch (err) {
+      console.error('ReceiptConfirmation.loadMaterialRequests:', err)
+      showToast('Erro ao carregar pedidos de material.', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [showToast, activeStock?.id])
 
   const loadDeliveredRequests = useCallback(async () => {
     try {
@@ -147,8 +277,53 @@ export function ReceiptConfirmation() {
   }, [showToast, activeStock?.id])
 
   useEffect(() => {
-    loadDeliveredRequests()
-  }, [loadDeliveredRequests])
+    if (isMaterial) loadMaterialRequests()
+    else loadDeliveredRequests()
+  }, [isMaterial, loadMaterialRequests, loadDeliveredRequests])
+
+  function updateForm(itemId: string, campo: keyof MaterialReceiptForm, valor: string) {
+    setForms((prev) => ({ ...prev, [itemId]: { ...prev[itemId], [campo]: valor } }))
+  }
+
+  // Conferência de material: manda lote/validade/quantidade de cada item pra
+  // RPC, que credita o estoque DESTE local. Não mexe no almoxarifado.
+  async function handleConfirmMaterial(req: DeliveredRequest) {
+    if (!activeStock) return
+    try {
+      setConfirming(req.id)
+
+      const payload = req.items.map((item) => {
+        const f = forms[item.id]
+        const qtd = Number(f?.quantity)
+        if (!Number.isFinite(qtd) || qtd <= 0) {
+          throw new Error(`Informe a quantidade recebida de "${item.item_name}".`)
+        }
+        return {
+          request_item_id: item.id,
+          item_id: f.item_id,
+          quantity: Math.trunc(qtd),
+          batch_number: f.batch_number?.trim() || null,
+          expiry_date: f.expiry_date || null,
+          unit: f.unit?.trim() || null,
+        }
+      })
+
+      const { error } = await supabase.rpc('confirmar_recebimento_material', {
+        p_request_id: req.id,
+        p_location_code: activeStock.code,
+        p_items: payload,
+      })
+      if (error) throw error
+
+      showToast('Recebimento registrado e estoque creditado!', 'success')
+      setRequests((prev) => prev.filter((r) => r.id !== req.id))
+    } catch (err: any) {
+      console.error('ReceiptConfirmation.handleConfirmMaterial:', err)
+      showToast(err?.message ?? 'Erro ao registrar recebimento.', 'error')
+    } finally {
+      setConfirming(null)
+    }
+  }
 
   async function handleConfirm(req: DeliveredRequest) {
     try {
@@ -186,7 +361,9 @@ export function ReceiptConfirmation() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Confirmar Recebimento</h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              Pedidos entregues aguardando confirmação. Confira os itens e confirme o recebimento.
+              {isMaterial
+                ? `Materiais entregues pelo almoxarifado. Informe lote, validade e a quantidade realmente recebida — mostrando os pedidos dos últimos ${MATERIAL_JANELA_DIAS} dias.`
+                : 'Pedidos entregues aguardando confirmação. Confira os itens e confirme o recebimento.'}
             </p>
           </div>
         </div>
@@ -211,7 +388,9 @@ export function ReceiptConfirmation() {
             <div>
               <h2 className="text-lg font-semibold text-gray-700">Nenhum pedido aguardando confirmação</h2>
               <p className="text-sm text-gray-500 mt-1">
-                Quando um pedido for marcado como entregue, ele aparecerá aqui para confirmação.
+                {isMaterial
+                  ? `Nenhum material dos últimos ${MATERIAL_JANELA_DIAS} dias está pendente de conferência. Assim que o almoxarifado entregar um pedido, ele aparece aqui.`
+                  : 'Quando um pedido for marcado como entregue, ele aparecerá aqui para confirmação.'}
               </p>
             </div>
           </div>
@@ -284,7 +463,8 @@ export function ReceiptConfirmation() {
                     <Button
                       onClick={(e) => {
                         e.stopPropagation()
-                        handleConfirm(req)
+                        if (isMaterial) handleConfirmMaterial(req)
+                        else handleConfirm(req)
                       }}
                       disabled={confirming === req.id}
                       className="bg-green-600 hover:bg-green-700 text-white"
@@ -306,7 +486,87 @@ export function ReceiptConfirmation() {
                 </div>
               </div>
 
+              {/* Itens — material: conferência com lote/validade/quantidade.
+                  stopPropagation no bloco todo pra digitar sem que o clique
+                  abra os detalhes do pedido. */}
+              {isMaterial && (
+                <div className="p-5" onClick={(e) => e.stopPropagation()}>
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                    Conferência ({req.items.length} {req.items.length === 1 ? 'item' : 'itens'}) — quantidade na
+                    unidade da {activeStock?.label ?? 'farmácia'}
+                  </p>
+                  <div className="space-y-3">
+                    {req.items.map((item) => {
+                      const f = forms[item.id]
+                      return (
+                        <div
+                          key={item.id}
+                          className="p-3 bg-gray-50 rounded-lg border border-gray-100"
+                        >
+                          <div className="flex flex-wrap items-center gap-2 mb-2">
+                            <span className="font-medium text-gray-900">{item.item_name}</span>
+                            <span className="text-xs px-1.5 py-0.5 bg-white border border-gray-200 rounded text-gray-500">
+                              {item.item_code}
+                            </span>
+                            <span className="text-[11px] text-gray-400">
+                              almox. informou {item.quantity}
+                              {item.item_unit ? ` ${item.item_unit}` : ''}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                            <div>
+                              <label className="block text-[11px] text-gray-500 mb-1">Lote</label>
+                              <input
+                                type="text"
+                                value={f?.batch_number ?? ''}
+                                onChange={(e) => updateForm(item.id, 'batch_number', e.target.value)}
+                                placeholder="Sem lote"
+                                className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-gray-500 mb-1">Validade</label>
+                              <input
+                                type="date"
+                                value={f?.expiry_date ?? ''}
+                                onChange={(e) => updateForm(item.id, 'expiry_date', e.target.value)}
+                                className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-gray-500 mb-1">Qtd. recebida</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={f?.quantity ?? ''}
+                                onChange={(e) => updateForm(item.id, 'quantity', e.target.value)}
+                                className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-gray-500 mb-1">Unidade</label>
+                              <input
+                                type="text"
+                                value={f?.unit ?? ''}
+                                onChange={(e) => updateForm(item.id, 'unit', e.target.value)}
+                                placeholder="UN"
+                                className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-3">
+                    Conte o que chegou e digite na unidade desta farmácia — o almoxarifado trabalha em
+                    caixa/pacote e não existe conversão automática.
+                  </p>
+                </div>
+              )}
+
               {/* Items */}
+              {!isMaterial && (
               <div className="p-5">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                   Itens ({req.items.length})
@@ -340,6 +600,7 @@ export function ReceiptConfirmation() {
                   ))}
                 </div>
               </div>
+              )}
             </div>
           ))}
         </div>
