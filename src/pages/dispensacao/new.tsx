@@ -392,15 +392,29 @@ export function NewDispensation() {
         const { error: matErr } = await supabase.rpc('criar_saida_material', {
           p_source_location_code: activeStock?.code ?? 'SAT_T',
           p_sector: selectedSector,
-          p_items: selectedItems.map((i) => ({
-            item_id: i.item_id,
-            quantity: i.quantity,
-            expiry_tracking_id: i.expiry_tracking_id,
-            // Lote digitado: a RPC reaproveita a linha se o lote já existir
-            // nesse item/local, senão cria (podendo ficar negativa — FA5).
-            batch_number: i.manual_lot ? (i.batch_number || '').trim() || null : null,
-            expiry_date: i.manual_lot ? i.expiry_date : null,
-          })),
+          p_items: selectedItems.map((i) => {
+            // Higieniza antes de enviar. O banco converte estes campos em
+            // uuid/date/integer e qualquer lixo vira "Valor invalido para o
+            // campo", sem dizer qual — foi o que aconteceu quando o valor
+            // interno do seletor ('__manual__') escapou no lugar do lote.
+            const lote = i.manual_lot ? null
+              : (typeof i.expiry_tracking_id === 'string'
+                  && /^[0-9a-f-]{36}$/i.test(i.expiry_tracking_id)
+                    ? i.expiry_tracking_id : null)
+            // Validade so vai se estiver completa (aaaa-mm-dd); parcial ou em
+            // formato brasileiro o banco recusa.
+            const val = i.manual_lot && /^\d{4}-\d{2}-\d{2}$/.test(i.expiry_date || '')
+              ? i.expiry_date : null
+            return {
+              item_id: i.item_id,
+              quantity: Number(i.quantity),
+              expiry_tracking_id: lote,
+              // Lote digitado: a RPC reaproveita a linha se o lote já existir
+              // nesse item/local, senão cria (podendo ficar negativa — FA5).
+              batch_number: i.manual_lot ? (i.batch_number || '').trim() || null : null,
+              expiry_date: val,
+            }
+          }),
           p_notes: null,
         })
         if (matErr) throw matErr
