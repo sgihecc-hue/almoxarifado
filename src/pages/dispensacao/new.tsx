@@ -29,6 +29,10 @@ interface SelectedItem {
   available_in_batch: number
   item_stock: number // estoque agregado (para opção "sem lote")
   quantity: number
+  // MATERIAL: lote digitado na hora ("Outro lote"). Muito material do satélite
+  // veio por solicitação do almoxarifado sem lote no sistema — a operadora está
+  // com a caixa na mão e digita o que está impresso nela.
+  manual_lot?: boolean
 }
 
 interface PharmacyItemRow {
@@ -47,6 +51,9 @@ interface LotRow {
   expiry_date: string | null
   current_quantity: number
 }
+
+// Valor sentinela do seletor de lote para "digitar o lote na hora" (só material).
+const MANUAL_LOT = '__manual__'
 
 const STEPS_PRESCRICAO = [
   { label: 'Paciente', icon: UserCheck },
@@ -262,17 +269,21 @@ export function NewDispensation() {
       // o lote que esta pegando fisicamente da prateleira — evita saldo sair
       // do lote errado por default silencioso. available_in_batch comeca com
       // o estoque total (0 depois quando ele escolhe o lote).
-      // Material não tem lote — não carrega lotes e não limita a quantidade
-      // pelo saldo do lote (saldo pode ser 0 até o inventário; FA5 permite).
-      if (!isMaterial) await loadLots(item.id)
+      // Material TAMBÉM tem lote (o inventário do satélite lançou lote/validade
+      // em expiry_tracking). Diferença: no material o FEFO já vem
+      // pré-selecionado e o lote NÃO é obrigatório — há material antigo sem
+      // lote informado, e o saldo do lote não limita a quantidade (pode estar
+      // 0 até o inventário; FA5 permite).
+      const lots = await loadLots(item.id)
+      const fefo = isMaterial ? lots[0] : undefined
       setSelectedItems((prev) => [
         ...prev,
         {
           item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
           is_mav: item.is_mav, medication_class: item.medication_class,
-          expiry_tracking_id: null,
-          batch_number: null,
-          expiry_date: null,
+          expiry_tracking_id: fefo?.id ?? null,
+          batch_number: fefo?.batch_number ?? null,
+          expiry_date: fefo?.expiry_date ?? null,
           available_in_batch: isMaterial ? Number.MAX_SAFE_INTEGER : item.current_stock,
           item_stock: item.current_stock,
           quantity: 1,
@@ -287,16 +298,27 @@ export function NewDispensation() {
   function changeLot(idx: number, lotId: string) {
     setSelectedItems((prev) => prev.map((it, i) => {
       if (i !== idx) return it
+      if (lotId === MANUAL_LOT) {
+        // "Outro lote (digitar)": libera os campos de lote/validade. Sem id —
+        // a RPC reaproveita ou cria a linha em expiry_tracking.
+        return {
+          ...it, manual_lot: true, expiry_tracking_id: null, batch_number: '', expiry_date: null,
+          available_in_batch: Number.MAX_SAFE_INTEGER,
+        }
+      }
       if (!lotId) {
-        const avail = it.item_stock
-        return { ...it, expiry_tracking_id: null, batch_number: null, expiry_date: null, available_in_batch: avail, quantity: Math.min(it.quantity, Math.max(1, avail)) }
+        // Material sem lote continua liberado (não trava a quantidade).
+        const avail = isMaterial ? Number.MAX_SAFE_INTEGER : it.item_stock
+        return { ...it, manual_lot: false, expiry_tracking_id: null, batch_number: null, expiry_date: null, available_in_batch: avail, quantity: Math.min(it.quantity, Math.max(1, avail)) }
       }
       const lot = (lotsByItem[it.item_id] || []).find((l) => l.id === lotId)
       if (!lot) return it
+      // No material o saldo do lote não limita a quantidade (FA5).
+      const avail = isMaterial ? Number.MAX_SAFE_INTEGER : lot.current_quantity
       return {
-        ...it, expiry_tracking_id: lot.id, batch_number: lot.batch_number,
-        expiry_date: lot.expiry_date, available_in_batch: lot.current_quantity,
-        quantity: Math.min(it.quantity, Math.max(1, lot.current_quantity)),
+        ...it, manual_lot: false, expiry_tracking_id: lot.id, batch_number: lot.batch_number,
+        expiry_date: lot.expiry_date, available_in_batch: avail,
+        quantity: Math.min(it.quantity, Math.max(1, avail)),
       }
     }))
   }
@@ -322,6 +344,16 @@ export function NewDispensation() {
       })
       return copy
     })
+  }
+
+  // Lote/validade digitados (material, opção "Outro lote"). Um não depende do
+  // outro: pode vir só o lote, quando a validade não está legível na caixa.
+  function setManualBatch(idx: number, batch: string) {
+    setSelectedItems((prev) => prev.map((it, i) => i === idx ? { ...it, batch_number: batch } : it))
+  }
+
+  function setManualExpiry(idx: number, date: string) {
+    setSelectedItems((prev) => prev.map((it, i) => i === idx ? { ...it, expiry_date: date || null } : it))
   }
 
   function setQty(idx: number, qty: number) {
@@ -353,13 +385,22 @@ export function NewDispensation() {
   async function doSubmit() {
     setSubmitting(true); setError('')
     try {
-      // MATERIAL (SAT_T): baixa própria, sem lote e sem tabelas de medicamento.
-      // O trigger debita o item_stocks(SAT_T, warehouse).
+      // MATERIAL (SAT_T): baixa própria, sem tabelas de medicamento. O trigger
+      // debita o item_stocks(SAT_T, warehouse); a RPC abate o lote quando
+      // expiry_tracking_id vier preenchido (item sem lote vai sem o campo).
       if (isMaterial) {
         const { error: matErr } = await supabase.rpc('criar_saida_material', {
           p_source_location_code: activeStock?.code ?? 'SAT_T',
           p_sector: selectedSector,
-          p_items: selectedItems.map((i) => ({ item_id: i.item_id, quantity: i.quantity })),
+          p_items: selectedItems.map((i) => ({
+            item_id: i.item_id,
+            quantity: i.quantity,
+            expiry_tracking_id: i.expiry_tracking_id,
+            // Lote digitado: a RPC reaproveita a linha se o lote já existir
+            // nesse item/local, senão cria (podendo ficar negativa — FA5).
+            batch_number: i.manual_lot ? (i.batch_number || '').trim() || null : null,
+            expiry_date: i.manual_lot ? i.expiry_date : null,
+          })),
           p_notes: null,
         })
         if (matErr) throw matErr
@@ -710,7 +751,7 @@ export function NewDispensation() {
           </h2>
           <p className="text-xs" style={{ color: txtMut }}>
             {isMaterial
-              ? 'Busque e clique para adicionar o material.'
+              ? 'Busque e clique para adicionar o material. O lote que vence primeiro (FEFO) é escolhido automaticamente — você pode trocar abaixo ou deixar sem lote.'
               : 'Busque e clique para adicionar. O lote que vence primeiro (FEFO) é escolhido automaticamente — você pode trocar abaixo.'}
           </p>
 
@@ -808,30 +849,33 @@ export function NewDispensation() {
                         style={{ ...inputStyle, width: 80, borderColor: over ? '#dc2626' : (inputStyle.border as string) }}
                       />
                       <span className="text-xs" style={{ color: txtMut }}>{it.unit}</span>
-                      {/* Material não tem lote — seletor só aparece p/ medicamento. */}
-                      {!isMaterial && (
+                      {/* Lote: obrigatório no medicamento; no material vem com o
+                          FEFO pré-selecionado e pode ficar vazio (item sem
+                          lote registrado ainda pode ser dispensado). */}
                       <select
-                        value={it.expiry_tracking_id ?? ''}
+                        value={it.manual_lot ? MANUAL_LOT : (it.expiry_tracking_id ?? '')}
                         onChange={(e) => changeLot(idx, e.target.value)}
-                        title="Lote (obrigatório) — escolha o mesmo do físico"
+                        title={isMaterial ? 'Lote (opcional) — escolha o mesmo do físico' : 'Lote (obrigatório) — escolha o mesmo do físico'}
                         style={{
                           ...inputStyle,
                           width: 'auto',
                           minWidth: 240,
                           padding: '6px 10px',
                           background: it.expiry_tracking_id ? expiryColor(it.expiry_date) : undefined,
-                          borderColor: it.expiry_tracking_id ? undefined : '#ef4444',
+                          borderColor: isMaterial || it.expiry_tracking_id ? undefined : '#ef4444',
                         }}>
                         <option value="">
-                          {lots.length === 0 ? 'Sem lote registrado' : '— Selecione o lote * —'}
+                          {lots.length === 0 ? 'Sem lote registrado' : isMaterial ? '— Sem lote —' : '— Selecione o lote * —'}
                         </option>
                         {lots.map((l) => (
                           <option key={l.id} value={l.id}>
                             Lote {l.batch_number} · Val {fmt(l.expiry_date)} · {l.current_quantity} un
                           </option>
                         ))}
+                        {/* Material que veio do almoxarifado sem lote no
+                            sistema: a operadora digita o que está na caixa. */}
+                        {isMaterial && <option value={MANUAL_LOT}>+ Outro lote (digitar)</option>}
                       </select>
-                      )}
                       <Button
                         variant="outline" size="sm"
                         onClick={() => removeItem(idx)}
@@ -844,6 +888,29 @@ export function NewDispensation() {
                         </span>
                       )}
                     </div>
+                    {/* Campos do lote digitado. Só aparecem no material e só
+                        quando "Outro lote (digitar)" está escolhido. */}
+                    {isMaterial && it.manual_lot && (
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <input
+                          type="text"
+                          value={it.batch_number ?? ''}
+                          onChange={(e) => setManualBatch(idx, e.target.value)}
+                          placeholder="Lote impresso na caixa"
+                          style={{ ...inputStyle, width: 'auto', minWidth: 220, padding: '6px 10px' }}
+                        />
+                        <input
+                          type="date"
+                          value={it.expiry_date ?? ''}
+                          onChange={(e) => setManualExpiry(idx, e.target.value)}
+                          title="Validade (opcional)"
+                          style={{ ...inputStyle, width: 'auto', padding: '6px 10px' }}
+                        />
+                        <span className="text-xs" style={{ color: txtMut }}>
+                          Validade opcional — deixe em branco se não souber.
+                        </span>
+                      </div>
+                    )}
                     {/* Multi-lote: dispensar o mesmo medicamento de mais de um
                         lote — cria outra linha logo abaixo, cada uma com seu
                         lote e sua quantidade (igual ao atendimento). */}
