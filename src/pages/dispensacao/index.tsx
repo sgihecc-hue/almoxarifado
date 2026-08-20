@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { pharmacyDispensationService } from '@/lib/services/pharmacy-dispensation'
+import { loadMaterialDispensations } from '@/lib/services/material-dispensations'
 import type { PharmacyDispensation } from '@/lib/types/dispensation'
 export function DispensationList() {
   const navigate = useNavigate()
@@ -40,17 +41,24 @@ export function DispensationList() {
     color: txt, outline: 'none',
   }
 
-  useEffect(() => { loadData() }, [])
+  // Recarrega ao trocar de estoque: cada local mostra so as suas dispensacoes.
+  useEffect(() => { loadData() }, [activeStock?.id])
 
   async function loadData() {
     setLoading(true)
     try {
-      const data = await pharmacyDispensationService.getAll({
+      const f = {
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
         search: search || undefined,
-        locationId: activeStock?.id,
-      })
+      }
+      // Satelite de MATERIAL (ex.: Satelite Terreo): as dispensacoes vivem em
+      // stock_movements, nao em pharmacy_dispensations — por isso esta lista
+      // aparecia vazia la. Medicamento segue pelo servico de sempre.
+      const isMaterial = activeStock?.itemType === 'warehouse'
+      const data = isMaterial && activeStock
+        ? await loadMaterialDispensations(activeStock.id, f)
+        : await pharmacyDispensationService.getAll({ ...f, locationId: activeStock?.id })
       setDispensations(data)
     } catch (error) {
       console.error('Error:', error)
