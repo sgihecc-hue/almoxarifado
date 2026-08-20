@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { pharmacyDispensationService } from '@/lib/services/pharmacy-dispensation'
+import { isMaterialDispensationId, loadMaterialDispensationById } from '@/lib/services/material-dispensations'
+import { useModule } from '@/contexts/module'
 import type { PharmacyDispensation } from '@/lib/types/dispensation'
 
 // Validade do lote: coluna DATE no banco: fixa meia-noite local para nao
@@ -17,6 +19,7 @@ function fmtDate(d: string | null | undefined) {
 
 export function DispensationDetails() {
   const { id } = useParams<{ id: string }>()
+  const { activeStock } = useModule()
   const navigate = useNavigate()
   const { mode } = useTheme()
 
@@ -46,7 +49,12 @@ export function DispensationDetails() {
   async function loadData() {
     setLoading(true)
     try {
-      const data = await pharmacyDispensationService.getById(id!)
+      // Dispensacao de MATERIAL nao existe em pharmacy_dispensations: ela vive
+      // em stock_movements e a lista monta uma chave sintetica. Por isso o
+      // detalhe dava "nao encontrada" na Satelite Terreo.
+      const data = isMaterialDispensationId(id!)
+        ? await loadMaterialDispensationById(activeStock!.id, id!)
+        : await pharmacyDispensationService.getById(id!)
       setDispensation(data)
     } catch (e) {
       console.error('Error:', e)

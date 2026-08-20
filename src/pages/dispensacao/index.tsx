@@ -44,6 +44,10 @@ export function DispensationList() {
   // Recarrega ao trocar de estoque: cada local mostra so as suas dispensacoes.
   useEffect(() => { loadData() }, [activeStock?.id])
 
+  // No material a coluna traz o SETOR que recebeu, nao um paciente — o rotulo
+  // antigo fazia parecer que a lista misturava dispensacoes de outros estoques.
+  const materialAqui = activeStock?.itemType === 'warehouse'
+
   async function loadData() {
     setLoading(true)
     try {
@@ -126,7 +130,7 @@ export function DispensationList() {
         <table className="w-full min-w-[900px]">
           <thead>
             <tr style={{ borderBottom: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}` }}>
-              {['N\u00ba', 'Data', 'Tipo', 'Paciente / Setor', 'Prontuario / Medico', 'Itens', 'Status'].map((h) => (
+              {['N\u00ba', 'Data', 'Tipo', materialAqui ? 'Destino' : 'Paciente / Setor', materialAqui ? 'Responsável' : 'Prontuario / Medico', 'Itens', 'Status'].map((h) => (
                 <th key={h} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider" style={{ color: txtMut }}>
                   {h}
                 </th>

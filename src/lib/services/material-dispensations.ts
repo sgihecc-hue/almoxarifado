@@ -129,3 +129,29 @@ export async function loadMaterialDispensations(
 
   return results
 }
+
+// =====================================================================
+// Carrega UMA dispensacao de material a partir da chave sintetica que
+// loadMaterialDispensations monta (`performed_at|setor|usuario`). A tela de
+// detalhe recebe esse valor na URL; como nao ha registro em
+// pharmacy_dispensations, ela precisa vir por aqui.
+// =====================================================================
+export function isMaterialDispensationId(id: string): boolean {
+  // A chave sintetica sempre tem as duas barras verticais; um UUID nunca tem.
+  return id.includes('|')
+}
+
+export async function loadMaterialDispensationById(
+  locationId: string,
+  id: string,
+): Promise<PharmacyDispensation | null> {
+  const [performedAt] = id.split('|')
+  if (!performedAt) return null
+  // Busca pelo instante exato e depois casa a chave inteira — assim o setor e
+  // o usuario tambem batem, sem depender de escapar caractere na consulta.
+  const todas = await loadMaterialDispensations(locationId, {
+    dateFrom: performedAt.slice(0, 10),
+    dateTo: performedAt.slice(0, 10),
+  })
+  return todas.find((d) => d.id === id) ?? null
+}
