@@ -449,19 +449,20 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                 unico compartilhado por todos os estoques. */}
             {activeStock && (
               <>
-                {/* "Nova Entrada" só no CAF: as entradas (compra/inventário)
-                    entram pelo CAF, que é a central de abastecimento. Os
-                    satélites recebem por solicitação/transferência, não por
-                    entrada direta. */}
-                {activeStock.code === 'CAF' && (
-                  <Button
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                    onClick={() => navigate(`/inventory/pharmacy/nf-entry?loc=${activeStock.code}`)}
-                  >
-                    <FileText className="w-4 h-4 mr-2" />
-                    Nova Entrada
-                  </Button>
-                )}
+                {/* "Nova Entrada" em TODOS os estoques de farmacia. Era so no
+                    CAF, partindo da ideia de que satelite so recebe por
+                    solicitacao/transferencia. Na pratica o satelite tambem faz
+                    contagem fisica e precisa lancar o resultado — sem isto nao
+                    havia como corrigir um saldo que a contagem mostrou MAIOR
+                    que o sistema (a saida por ajuste so resolve o contrario).
+                    A entrada e gravada no estoque ativo (?loc=), nunca no CAF. */}
+                <Button
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  onClick={() => navigate(`/inventory/pharmacy/nf-entry?loc=${activeStock.code}`)}
+                >
+                  <FileText className="w-4 h-4 mr-2" />
+                  Nova Entrada
+                </Button>
                 <Button
                   className="bg-red-600 hover:bg-red-700 text-white"
                   onClick={() => navigate(`/inventory/pharmacy/saida-lote?loc=${activeStock.code}`)}

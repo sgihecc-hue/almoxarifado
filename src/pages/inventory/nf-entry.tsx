@@ -37,6 +37,14 @@ interface LineItem {
 // Tipos de entrada. 'Compra' exige NF/AFM; os demais não.
 // 'Inventário' = entrada por contagem/acerto de estoque (recontagem), sem NF.
 const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Permuta', 'Consignado', 'Troca de validade', 'Inventário'] as const
+
+// Rotulo mostrado na tela. O VALOR gravado continua 'Inventário' — a farmacia
+// chama de "Ajuste por inventário", mas ja existem 86 entradas gravadas com o
+// nome antigo. Trocar o valor partiria o historico e os relatorios em dois
+// nomes para a mesma coisa.
+const ENTRY_TYPE_LABEL: Partial<Record<EntryType, string>> = {
+  'Inventário': 'Ajuste por inventário',
+}
 type EntryType = typeof ENTRY_TYPES[number]
 
 function formatCNPJ(value: string) {
@@ -262,7 +270,7 @@ export function NfEntry({ type }: NfEntryProps) {
               onChange={(e) => setEntryType(e.target.value as EntryType)}
               className="mt-1 w-full h-9 rounded-md border border-input px-3 py-1 bg-white text-sm"
             >
-              {ENTRY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {ENTRY_TYPES.map((t) => <option key={t} value={t}>{ENTRY_TYPE_LABEL[t] ?? t}</option>)}
             </select>
           </div>
           <div>

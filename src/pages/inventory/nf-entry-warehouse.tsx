@@ -318,7 +318,11 @@ export function NfEntryWarehouse() {
               onChange={(e) => setEntryType(e.target.value as EntryType)}
               className="mt-1 w-full h-9 rounded-md border border-input px-3 py-1 bg-white text-sm"
             >
-              {tiposEntrada.map((t) => <option key={t} value={t}>{t}</option>)}
+              {/* Mesmo rotulo da tela de medicamento: a farmacia chama de
+                  "Ajuste por inventário". O valor gravado segue 'Inventário'. */}
+              {tiposEntrada.map((t) => (
+                <option key={t} value={t}>{t === 'Inventário' ? 'Ajuste por inventário' : t}</option>
+              ))}
             </select>
           </div>
           <div>
