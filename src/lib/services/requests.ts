@@ -188,6 +188,8 @@ class RequestService {
             quantity,
             approved_quantity,
             supplied_quantity,
+            almox_batch_number,
+            almox_expiry_date,
             observation,
             is_checked
           ),
@@ -416,6 +418,8 @@ class RequestService {
             quantity,
             approved_quantity,
             supplied_quantity,
+            almox_batch_number,
+            almox_expiry_date,
             observation,
             is_checked
           ),

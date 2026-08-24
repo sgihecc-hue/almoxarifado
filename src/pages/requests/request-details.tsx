@@ -54,6 +54,12 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   // de recebimento do satelite.
   const [almoxLote, setAlmoxLote] = useState<string>((item as any).almox_batch_number ?? '')
   const [almoxValidade, setAlmoxValidade] = useState<string>((item as any).almox_expiry_date ?? '')
+  // Re-hidrata quando o pedido e recarregado (comentario, refresh, remount).
+  // Sem isto o campo voltava vazio e o onBlur gravava null por cima do lote.
+  useEffect(() => {
+    setAlmoxLote((item as any).almox_batch_number ?? '')
+    setAlmoxValidade((item as any).almox_expiry_date ?? '')
+  }, [(item as any).almox_batch_number, (item as any).almox_expiry_date])
 
   // Carrega SÓ as opções de lote do dropdown. Pode ser chamada a qualquer
   // momento — não mexe nas linhas que o usuário está preenchendo.
@@ -453,7 +459,13 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                 type="text"
                 value={almoxLote}
                 onChange={(e) => setAlmoxLote(e.target.value)}
-                onBlur={() => saveField('almox_batch_number', almoxLote.trim() || null)}
+                onBlur={() => {
+                  // So grava se MUDOU: blur em campo vazio nunca apaga o lote.
+                  const novo = almoxLote.trim() || null
+                  if (novo !== ((item as any).almox_batch_number ?? null)) {
+                    saveField('almox_batch_number', novo)
+                  }
+                }}
                 placeholder="Lote (opcional)"
                 className="w-full text-sm border rounded px-2 h-8"
               />
@@ -467,7 +479,12 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                 type="date"
                 value={almoxValidade}
                 onChange={(e) => setAlmoxValidade(e.target.value)}
-                onBlur={() => saveField('almox_expiry_date', almoxValidade || null)}
+                onBlur={() => {
+                  const novo = almoxValidade || null
+                  if (novo !== ((item as any).almox_expiry_date ?? null)) {
+                    saveField('almox_expiry_date', novo)
+                  }
+                }}
                 className="w-full text-sm border rounded px-2 h-8"
               />
             ) : (
