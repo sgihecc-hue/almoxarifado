@@ -99,7 +99,13 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   }, [request])
 
   const isManager = user?.role === 'gestor' || user?.role === 'administrador' || user?.role === 'atendente'
-  const canManage = isManager && request?.status === 'pending'
+  // Farmaceutico e staff SO em solicitacao de farmacia: atende (aprova) e informa
+  // lote/quantidade. NAO recebe os passos do almoxarifado (Iniciar Processamento /
+  // Marcar como Entregue), que seguem restritos a isManager — dar isso a ele
+  // deixaria o pedido 'delivered' sem que a baixa do almox fizesse sentido.
+  const isPharmacyStaff = isManager ||
+    (user?.role === 'pharmacist' && request?.type === 'pharmacy')
+  const canManage = isPharmacyStaff && request?.status === 'pending'
   // Fluxo depende do TIPO da solicitacao:
   // - Farmacia: aprovar ja marca como entregue -> solicitante confirma
   //   recebimento -> completed. Sem botao "Marcar como Entregue".

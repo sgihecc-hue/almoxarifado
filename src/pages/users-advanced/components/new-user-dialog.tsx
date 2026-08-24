@@ -26,7 +26,7 @@ const userSchema = z.object({
   full_name: z
     .string()
     .min(3, 'Nome deve ter no mínimo 3 caracteres'),
-  role: z.enum(['solicitante', 'atendente', 'gestor', 'administrador']),
+  role: z.enum(['solicitante', 'atendente', 'pharmacist', 'gestor', 'administrador']),
   department_id: z.string().optional(),
   password: z
     .string()
@@ -152,6 +152,7 @@ export function NewUserDialog({ open, onOpenChange, onSuccess }: NewUserDialogPr
               >
                 <option value="solicitante">Solicitante</option>
                 <option value="atendente">Atendente</option>
+                <option value="pharmacist">Farmacêutico</option>
                 <option value="gestor">Gestor</option>
                 <option value="administrador">Administrador</option>
               </select>

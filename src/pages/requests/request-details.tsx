@@ -971,7 +971,8 @@ export function RequestDetails() {
                 <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Qtd Solic.</th>
                 {/* Coluna "Saldo" só aparece pra staff da farmácia/almox — solicitante
                     (setor solicitante) não deve ver o estoque, senão informa consumo. */}
-                {(user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente') && (
+                {(user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente' ||
+                  (user?.role === 'pharmacist' && request.type === 'pharmacy')) && (
                   <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Saldo</th>
                 )}
                 <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Qtd Fornec.</th>
@@ -994,7 +995,8 @@ export function RequestDetails() {
             </thead>
             <tbody>
               {request.request_items.map((item) => {
-                const isStaff = user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente'
+                const isStaff = user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente' ||
+                  (user?.role === 'pharmacist' && request.type === 'pharmacy')
                 const statusAllowsEdit = request.status === 'pending' || request.status === 'approved' || request.status === 'processing'
                 return (
                   <ItemRow
