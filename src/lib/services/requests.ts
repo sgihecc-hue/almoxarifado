@@ -258,6 +258,8 @@ class RequestService {
                       quantity: typeof item.quantity !== 'number' ? 0 : Math.max(0, Math.floor(item.quantity)),
                       approved_quantity: item.approved_quantity,
                       supplied_quantity: item.supplied_quantity,
+                      almox_batch_number: item.almox_batch_number,
+                      almox_expiry_date: item.almox_expiry_date,
                       observation: item.observation,
                       is_checked: item.is_checked || false,
                       status: 'available' as const,
@@ -463,6 +465,11 @@ class RequestService {
             quantity: item.quantity,
             approved_quantity: item.approved_quantity,
             supplied_quantity: item.supplied_quantity,
+            // Lote/validade informados pelo almoxarifado ao atender. Precisam
+            // atravessar este map: sem eles o campo na tela nasce vazio e um
+            // blur acidental gravaria null por cima do que ja estava salvo.
+            almox_batch_number: item.almox_batch_number,
+            almox_expiry_date: item.almox_expiry_date,
             observation: item.observation,
             is_checked: item.is_checked || false,
             status: 'available' as const,

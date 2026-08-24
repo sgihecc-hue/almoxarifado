@@ -49,6 +49,9 @@ interface MaterialReceiptForm {
   expiry_date: string
   quantity: string
   unit: string
+  // Item que NAO chegou. Fica de fora da confirmacao em vez de travar o pedido
+  // inteiro: os que chegaram sao creditados e este continua pendente.
+  nao_recebido?: boolean
 }
 
 // Recorte da lista de material: pedidos dos últimos 60 dias. Sem isso a tela
@@ -301,21 +304,44 @@ export function ReceiptConfirmation() {
     try {
       setConfirming(req.id)
 
-      const payload = req.items.map((item) => {
+      // Confirmacao PARCIAL: manda so o que foi conferido. Item marcado como
+      // "nao recebido" fica de fora e continua pendente — antes, um unico item
+      // faltando travava o pedido inteiro e os que chegaram nunca eram
+      // creditados. Quem esquecer de preencher ve TODOS os faltantes de uma
+      // vez, em vez de descobrir um por clique.
+      const semQuantidade: string[] = []
+      const payload: Array<Record<string, unknown>> = []
+
+      for (const item of req.items) {
         const f = forms[item.id]
-        const qtd = Number(f?.quantity)
-        if (!Number.isFinite(qtd) || qtd <= 0) {
-          throw new Error(`Informe a quantidade recebida de "${item.item_name}".`)
+        if (f?.nao_recebido) continue
+        const digitado = (f?.quantity ?? '').trim()
+        const qtd = Number(digitado)
+        if (digitado === '' || !Number.isFinite(qtd) || qtd <= 0) {
+          semQuantidade.push(item.item_name)
+          continue
         }
-        return {
+        payload.push({
           request_item_id: item.id,
           item_id: f.item_id,
           quantity: Math.trunc(qtd),
           batch_number: f.batch_number?.trim() || null,
           expiry_date: f.expiry_date || null,
           unit: f.unit?.trim() || null,
-        }
-      })
+        })
+      }
+
+      if (semQuantidade.length > 0) {
+        const lista = semQuantidade.join(', ')
+        throw new Error(
+          semQuantidade.length === 1
+            ? `Informe a quantidade recebida de "${lista}" — ou marque "nao chegou".`
+            : `${semQuantidade.length} itens sem quantidade: ${lista}. Informe a quantidade de cada um ou marque "nao chegou".`,
+        )
+      }
+      if (payload.length === 0) {
+        throw new Error('Nenhum item conferido. Informe a quantidade de pelo menos um item.')
+      }
 
       const { error } = await supabase.rpc('confirmar_recebimento_material', {
         p_request_id: req.id,
@@ -324,8 +350,16 @@ export function ReceiptConfirmation() {
       })
       if (error) throw error
 
-      showToast('Recebimento registrado e estoque creditado!', 'success')
-      setRequests((prev) => prev.filter((r) => r.id !== req.id))
+      const pendentes = req.items.length - payload.length
+      showToast(
+        pendentes > 0
+          ? `${payload.length} ${payload.length === 1 ? 'item creditado' : 'itens creditados'}. ${pendentes} ${pendentes === 1 ? 'continua pendente' : 'continuam pendentes'}.`
+          : 'Recebimento registrado e estoque creditado!',
+        'success',
+      )
+      // Recarrega em vez de remover o pedido: numa confirmacao parcial ele
+      // precisa continuar na lista, mostrando so o que ainda falta conferir.
+      await loadMaterialRequests()
     } catch (err: any) {
       console.error('ReceiptConfirmation.handleConfirmMaterial:', err)
       showToast(err?.message ?? 'Erro ao registrar recebimento.', 'error')
@@ -510,7 +544,11 @@ export function ReceiptConfirmation() {
                       return (
                         <div
                           key={item.id}
-                          className="p-3 bg-gray-50 rounded-lg border border-gray-100"
+                          className={`p-3 rounded-lg border transition-colors ${
+                            f?.nao_recebido
+                              ? 'bg-gray-100 border-gray-200 opacity-60'
+                              : 'bg-gray-50 border-gray-100'
+                          }`}
                         >
                           <div className="flex flex-wrap items-center gap-2 mb-2">
                             <span className="font-medium text-gray-900">{item.item_name}</span>
@@ -521,6 +559,22 @@ export function ReceiptConfirmation() {
                               almox. informou {item.quantity}
                               {item.item_unit ? ` ${item.item_unit}` : ''}
                             </span>
+                            {/* Item que nao chegou: sai desta confirmacao e
+                                continua pendente, sem travar os que chegaram. */}
+                            <label className="ml-auto flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={!!f?.nao_recebido}
+                                onChange={(e) =>
+                                  setForms((prev) => ({
+                                    ...prev,
+                                    [item.id]: { ...prev[item.id], nao_recebido: e.target.checked },
+                                  }))
+                                }
+                                className="rounded border-gray-300"
+                              />
+                              não chegou
+                            </label>
                           </div>
                           <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
                             <div>
@@ -528,6 +582,7 @@ export function ReceiptConfirmation() {
                               <input
                                 type="text"
                                 value={f?.batch_number ?? ''}
+                                disabled={!!f?.nao_recebido}
                                 onChange={(e) => updateForm(item.id, 'batch_number', e.target.value)}
                                 placeholder="Sem lote"
                                 className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
@@ -538,6 +593,7 @@ export function ReceiptConfirmation() {
                               <input
                                 type="date"
                                 value={f?.expiry_date ?? ''}
+                                disabled={!!f?.nao_recebido}
                                 onChange={(e) => updateForm(item.id, 'expiry_date', e.target.value)}
                                 className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
                               />
@@ -548,6 +604,7 @@ export function ReceiptConfirmation() {
                                 type="number"
                                 min={1}
                                 value={f?.quantity ?? ''}
+                                disabled={!!f?.nao_recebido}
                                 onChange={(e) => updateForm(item.id, 'quantity', e.target.value)}
                                 className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
                               />
@@ -557,6 +614,7 @@ export function ReceiptConfirmation() {
                               <input
                                 type="text"
                                 value={f?.unit ?? ''}
+                                disabled={!!f?.nao_recebido}
                                 onChange={(e) => updateForm(item.id, 'unit', e.target.value)}
                                 placeholder="UN"
                                 className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
