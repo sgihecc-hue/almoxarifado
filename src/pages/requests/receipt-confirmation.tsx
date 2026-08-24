@@ -577,29 +577,25 @@ export function ReceiptConfirmation() {
                             </label>
                           </div>
                           <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                            {/* Lote e Validade vem do ALMOXARIFADO e sao so
+                                leitura: quem recebe nao digita data nem lote,
+                                so conta e digita a quantidade. */}
                             <div>
                               <label className="block text-[11px] text-gray-500 mb-1">Lote</label>
-                              <input
-                                type="text"
-                                value={f?.batch_number ?? ''}
-                                disabled={!!f?.nao_recebido}
-                                onChange={(e) => updateForm(item.id, 'batch_number', e.target.value)}
-                                placeholder="Sem lote"
-                                className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
-                              />
+                              <div className="w-full px-2 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg text-gray-700 truncate">
+                                {f?.batch_number || <span className="text-gray-400">sem lote</span>}
+                              </div>
                             </div>
                             <div>
                               <label className="block text-[11px] text-gray-500 mb-1">Validade</label>
-                              <input
-                                type="date"
-                                value={f?.expiry_date ?? ''}
-                                disabled={!!f?.nao_recebido}
-                                onChange={(e) => updateForm(item.id, 'expiry_date', e.target.value)}
-                                className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
-                              />
+                              <div className="w-full px-2 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg text-gray-700">
+                                {f?.expiry_date
+                                  ? new Date(f.expiry_date + 'T00:00:00').toLocaleDateString('pt-BR')
+                                  : <span className="text-gray-400">—</span>}
+                              </div>
                             </div>
                             <div>
-                              <label className="block text-[11px] text-gray-500 mb-1">Qtd. recebida</label>
+                              <label className="block text-[11px] font-semibold text-gray-700 mb-1">Qtd. recebida *</label>
                               <input
                                 type="number"
                                 min={1}
@@ -609,16 +605,14 @@ export function ReceiptConfirmation() {
                                 className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
                               />
                             </div>
+                            {/* Unidade e informativa: o valor gravado continua
+                                o mesmo de antes ('UN'), so deixou de ser
+                                digitavel — quem recebe so conta a quantidade. */}
                             <div>
                               <label className="block text-[11px] text-gray-500 mb-1">Unidade</label>
-                              <input
-                                type="text"
-                                value={f?.unit ?? ''}
-                                disabled={!!f?.nao_recebido}
-                                onChange={(e) => updateForm(item.id, 'unit', e.target.value)}
-                                placeholder="UN"
-                                className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-200"
-                              />
+                              <div className="w-full px-2 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg text-gray-700">
+                                {f?.unit || 'UN'}
+                              </div>
                             </div>
                           </div>
                         </div>
