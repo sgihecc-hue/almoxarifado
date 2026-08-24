@@ -117,6 +117,8 @@ export function ReceiptConfirmation() {
             quantity,
             approved_quantity,
             supplied_quantity,
+            almox_batch_number,
+            almox_expiry_date,
             warehouse_item:warehouse_items(id, name, code, unit)
           )
         `)
@@ -154,15 +156,22 @@ export function ReceiptConfirmation() {
             .filter((ri: any) => ri.warehouse_item && !jaRecebidos.has(ri.id))
             .map((ri: any) => {
               const item = ri.warehouse_item
-              // Sugestão de quantidade: o que o almox informou ter liberado.
-              // Fica editável de propósito — vale a contagem de quem recebe.
+              // O que o almoxarifado declarou ter liberado. Fica SO como
+              // referencia na tela ("almox informou X") — NAO entra no campo.
               const sugerida = ri.supplied_quantity ?? ri.approved_quantity ?? ri.quantity
+              // Quantidade nasce VAZIA de proposito: quem recebe tem que contar
+              // e digitar. Quando vinha pre-preenchida, as 9 conferencias reais
+              // foram salvas com o numero do almox sem uma unica edicao — em 5
+              // delas o almox tinha liberado quantidade diferente da aprovada.
+              // Campo pre-preenchido com botao de confirmar acima vira carimbo.
+              // Lote e validade, ao contrario, vem PRONTOS do almoxarifado:
+              // sao o que a pessoa confere contra a caixa.
               novosForms[ri.id] = {
                 request_item_id: ri.id,
                 item_id: item.id,
-                batch_number: '',
-                expiry_date: '',
-                quantity: String(sugerida ?? ''),
+                batch_number: ri.almox_batch_number ?? '',
+                expiry_date: ri.almox_expiry_date ?? '',
+                quantity: '',
                 unit: 'UN',
               }
               return {

@@ -45,6 +45,15 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     manual?: boolean; batch_number?: string; expiry_date?: string
   }>>([])
   const isPharmacy = requestType === 'pharmacy'
+  // ALMOXARIFADO: lote e validade sao dois campos livres e OPCIONAIS, gravados
+  // em colunas proprias de request_items. De proposito NAO existe quantidade
+  // por lote aqui: no fluxo da farmacia a soma dos lotes sobrescreve
+  // supplied_quantity, que e exatamente o numero que o trigger
+  // trg_deduct_stock_on_request_delivered subtrai de warehouse_items.current_stock.
+  // Estes campos nao encostam em saldo nenhum — so viajam ate a conferencia
+  // de recebimento do satelite.
+  const [almoxLote, setAlmoxLote] = useState<string>((item as any).almox_batch_number ?? '')
+  const [almoxValidade, setAlmoxValidade] = useState<string>((item as any).almox_expiry_date ?? '')
 
   // Carrega SÓ as opções de lote do dropdown. Pode ser chamada a qualquer
   // momento — não mexe nas linhas que o usuário está preenchendo.
@@ -433,6 +442,37 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                 </div>
               )
             })}
+          </td>
+        </>
+      )}
+      {!isPharmacy && (
+        <>
+          <td className="py-3 px-2">
+            {canEdit ? (
+              <input
+                type="text"
+                value={almoxLote}
+                onChange={(e) => setAlmoxLote(e.target.value)}
+                onBlur={() => saveField('almox_batch_number', almoxLote.trim() || null)}
+                placeholder="Lote (opcional)"
+                className="w-full text-sm border rounded px-2 h-8"
+              />
+            ) : (
+              <span className="text-xs">{almoxLote || '—'}</span>
+            )}
+          </td>
+          <td className="text-center py-3 px-2 text-xs">
+            {canEdit ? (
+              <input
+                type="date"
+                value={almoxValidade}
+                onChange={(e) => setAlmoxValidade(e.target.value)}
+                onBlur={() => saveField('almox_expiry_date', almoxValidade || null)}
+                className="w-full text-sm border rounded px-2 h-8"
+              />
+            ) : (
+              <span>{almoxValidade ? new Date(almoxValidade + 'T00:00:00').toLocaleDateString('pt-BR') : '—'}</span>
+            )}
           </td>
         </>
       )}
@@ -976,19 +1016,17 @@ export function RequestDetails() {
                   <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Saldo</th>
                 )}
                 <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Qtd Fornec.</th>
-                {/* Colunas Lote e Validade so aparecem em solicitacoes de
-                    FARMACIA (o staff informa o lote no atendimento; validade
-                    preenche automatica). Almoxarifado nao usa. */}
-                {request.type === 'pharmacy' && (
-                  <>
-                    {/* FA2: lote deixou de ser obrigatório — item sem lote não
-                        barra a solicitação, só fica como não atendido. */}
-                    <th className="text-center py-3 px-3 font-medium text-gray-600 w-64">
-                      Lote(s)
-                    </th>
-                    <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Validade</th>
-                  </>
-                )}
+                {/* Lote e Validade valem nos DOIS modulos, com naturezas
+                    diferentes: na FARMACIA o staff escolhe o(s) lote(s) do
+                    estoque (com quantidade por lote); no ALMOXARIFADO sao dois
+                    campos livres e opcionais, que servem para o satelite
+                    conferir na hora de receber. FA2: lote nunca e obrigatorio. */}
+                <>
+                  <th className="text-center py-3 px-3 font-medium text-gray-600 w-64">
+                    Lote(s)
+                  </th>
+                  <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Validade</th>
+                </>
                 <th className="text-center py-3 px-3 font-medium text-gray-600 w-44">Observação</th>
                 <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Confirmar</th>
               </tr>
