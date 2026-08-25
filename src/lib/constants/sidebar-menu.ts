@@ -21,6 +21,7 @@ import {
   PackageMinus,
   Undo2,
   ArrowRightLeft,
+  ArrowUpDown,
   Handshake,
   CalendarX,
   Stethoscope,
@@ -136,6 +137,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       items: [
         { name: 'Almoxarifado', icon: Package2, href: '/inventory/warehouse', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Etiquetas (código de barras)', icon: Barcode, href: '/almox/etiquetas', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Livro de movimentacao: toda entrada e saida de material, com saldo
+        // antes/depois e autor. Le a view v_almox_movimentacao (so leitura).
+        { name: 'Movimentação', icon: ArrowUpDown, href: '/almox/movimentacao', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
       ],
     },
     // --- OPERAÇÕES: separado por modulo. Farmacia NAO ve "Quebras e
