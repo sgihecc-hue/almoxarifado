@@ -16,6 +16,7 @@ import { StockLocationItems } from '@/pages/inventory/stock-location-items'
 import { WarehouseItems } from '@/pages/inventory/warehouse-items'
 import { EtiquetasAlmox } from '@/pages/almox/etiquetas'
 import { AlmoxMovimentacao } from '@/pages/almox/movimentacao'
+import { EntradaLeitor } from '@/pages/almox/entrada-leitor'
 import { SaidasFarmacia } from '@/pages/farmacia/saidas'
 import { NfEntry } from '@/pages/inventory/nf-entry'
 import { NfEntryWarehouse } from '@/pages/inventory/nf-entry-warehouse'
@@ -168,6 +169,13 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <EtiquetasAlmox />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/almox/entrada-leitor" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <EntradaLeitor />
                   </MainLayout>
                 </ProtectedRoute>
               } />

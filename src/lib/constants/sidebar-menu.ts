@@ -22,6 +22,7 @@ import {
   Undo2,
   ArrowRightLeft,
   ArrowUpDown,
+  ScanLine,
   Handshake,
   CalendarX,
   Stethoscope,
@@ -137,6 +138,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       items: [
         { name: 'Almoxarifado', icon: Package2, href: '/inventory/warehouse', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Etiquetas (código de barras)', icon: Barcode, href: '/almox/etiquetas', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Entrada por leitor de codigo de barras: o almoxarife bipa a etiqueta
+        // e so digita lote, validade e quantidade. Nao substitui a Nova Entrada.
+        { name: 'Entrada por Leitor', icon: ScanLine, href: '/almox/entrada-leitor', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         // Livro de movimentacao: toda entrada e saida de material, com saldo
         // antes/depois e autor. Le a view v_almox_movimentacao (so leitura).
         { name: 'Movimentação', icon: ArrowUpDown, href: '/almox/movimentacao', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
