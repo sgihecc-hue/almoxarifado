@@ -50,21 +50,92 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     manual?: boolean; batch_number?: string; expiry_date?: string
   }>>([])
   const isPharmacy = requestType === 'pharmacy'
-  // ALMOXARIFADO: lote e validade sao dois campos livres e OPCIONAIS, gravados
-  // em colunas proprias de request_items. De proposito NAO existe quantidade
-  // por lote aqui: no fluxo da farmacia a soma dos lotes sobrescreve
-  // supplied_quantity, que e exatamente o numero que o trigger
-  // trg_deduct_stock_on_request_delivered subtrai de warehouse_items.current_stock.
-  // Estes campos nao encostam em saldo nenhum — so viajam ate a conferencia
-  // de recebimento do satelite.
-  const [almoxLote, setAlmoxLote] = useState<string>((item as any).almox_batch_number ?? '')
-  const [almoxValidade, setAlmoxValidade] = useState<string>((item as any).almox_expiry_date ?? '')
+  // ALMOXARIFADO: tambem aceita VARIOS lotes por item, cada um com a sua
+  // quantidade — mas por um caminho COMPLETAMENTE separado do da farmacia.
+  //
+  // POR QUE NAO USAR request_item_lots AQUI: a soma das quantidades daquela
+  // tabela e sincronizada em request_items.supplied_quantity (ver
+  // sincronizarFornecido), e supplied_quantity e EXATAMENTE o numero que o
+  // gatilho trg_deduct_stock_on_request_delivered subtrai de
+  // warehouse_items.current_stock. Gravar lote do almoxarifado la faria
+  // "informar lote" mexer em saldo em silencio (ja houve debito em dobro de
+  // 9.564 unidades por acoplamento parecido). Entao o almoxarifado grava numa
+  // coluna jsonb propria, request_items.almox_lotes, que NENHUM gatilho le:
+  // e registro puro, so viaja ate a conferencia de recebimento do satelite.
+  //
+  // almox_batch_number / almox_expiry_date continuam existindo e espelham
+  // SEMPRE o PRIMEIRO lote da lista — a tela de Confirmar Recebimento do
+  // Satelite Terreo le esses dois campos e nao pode quebrar.
+  type AlmoxLote = { lote: string; validade: string; quantidade: number | '' }
+  const almoxLotesIniciais = (): AlmoxLote[] => {
+    const raw = (item as any).almox_lotes
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw.map((r: any) => ({
+        lote: r?.lote ?? '',
+        validade: r?.validade ?? '',
+        quantidade: r?.quantidade == null ? '' : Number(r.quantidade),
+      }))
+    }
+    // Compatibilidade: pedido antigo, gravado antes da coluna jsonb existir.
+    const legado = (item as any).almox_batch_number
+    if (legado) {
+      return [{ lote: legado, validade: (item as any).almox_expiry_date ?? '', quantidade: '' }]
+    }
+    return [{ lote: '', validade: '', quantidade: '' }]
+  }
+  const [almoxLotes, setAlmoxLotes] = useState<AlmoxLote[]>(almoxLotesIniciais)
+  // Opcoes de lote do estoque que esta ATENDENDO. Pode vir VAZIA: hoje o
+  // almoxarifado central nao tem lotes cadastrados em expiry_tracking, e por
+  // isso a digitacao manual e sempre permitida (nunca desabilitamos os campos
+  // de texto por o dropdown estar vazio).
+  const [almoxOpcoes, setAlmoxOpcoes] = useState<LotOption[]>([])
   // Re-hidrata quando o pedido e recarregado (comentario, refresh, remount).
-  // Sem isto o campo voltava vazio e o onBlur gravava null por cima do lote.
+  // Sem isto os campos voltavam vazios e o onBlur gravava null por cima.
   useEffect(() => {
-    setAlmoxLote((item as any).almox_batch_number ?? '')
-    setAlmoxValidade((item as any).almox_expiry_date ?? '')
-  }, [(item as any).almox_batch_number, (item as any).almox_expiry_date])
+    setAlmoxLotes(almoxLotesIniciais())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [(item as any).almox_lotes, (item as any).almox_batch_number, (item as any).almox_expiry_date])
+
+  // Carrega as opcoes de lote do MATERIAL no estoque ativo (mesma logica de
+  // isolamento por local que a farmacia usa: nunca chumbar o CAF/almox central).
+  useEffect(() => {
+    if (isPharmacy) return
+    let cancelado = false
+    const carregar = async () => {
+      const warehouseItemId = (item as any).warehouse_item_id ?? item.item?.id
+      if (!warehouseItemId) return
+      const locId = activeStock?.id
+      let q = supabase
+        .from('expiry_tracking')
+        .select('id, batch_number, expiry_date, current_quantity')
+        .eq('item_id', warehouseItemId)
+        .gt('current_quantity', 0) // no dropdown so entra lote COM saldo
+        .order('expiry_date', { ascending: true, nullsFirst: false }) // FEFO
+      if (locId) q = q.eq('location_id', locId)
+      const { data, error } = await q
+      if (error) { console.error('almox lots', error); return }
+      if (!cancelado) setAlmoxOpcoes((data || []) as LotOption[])
+    }
+    carregar()
+    return () => { cancelado = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPharmacy, item.id, activeStock?.id])
+
+  // Grava a lista em almox_lotes e espelha o primeiro lote nas colunas antigas.
+  // NUNCA toca em supplied_quantity/delivered_quantity/approved_quantity nem em
+  // qualquer tabela de estoque.
+  const salvarAlmoxLotes = async (linhas: AlmoxLote[]) => {
+    const validas = linhas
+      .map((l) => ({
+        lote: (l.lote || '').trim(),
+        validade: l.validade || null,
+        quantidade: l.quantidade === '' ? null : Number(l.quantidade),
+      }))
+      .filter((l) => l.lote !== '' || l.validade !== null || l.quantidade !== null)
+    await saveField('almox_lotes', validas.length > 0 ? validas : null)
+    await saveField('almox_batch_number', validas[0]?.lote || null)
+    await saveField('almox_expiry_date', validas[0]?.validade ?? null)
+  }
 
   // Carrega SÓ as opções de lote do dropdown. Pode ser chamada a qualquer
   // momento — não mexe nas linhas que o usuário está preenchendo.
@@ -479,42 +550,131 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       )}
       {!isPharmacy && (
         <>
-          <td className="py-3 px-2">
+          {/* Multi-lote do ALMOXARIFADO. Uma linha por lote: dropdown (quando
+              houver lote cadastrado no estoque ativo), lote digitavel, e
+              quantidade. A validade fica na celula ao lado, alinhada linha a
+              linha — assim os <th> "Lote(s)" e "Validade" continuam servindo
+              aos dois modulos e nada muda do lado da farmacia. */}
+          <td className="py-3 px-2 align-top">
             {canEdit ? (
-              <input
-                type="text"
-                value={almoxLote}
-                onChange={(e) => setAlmoxLote(e.target.value)}
-                onBlur={() => {
-                  // So grava se MUDOU: blur em campo vazio nunca apaga o lote.
-                  const novo = almoxLote.trim() || null
-                  if (novo !== ((item as any).almox_batch_number ?? null)) {
-                    saveField('almox_batch_number', novo)
-                  }
-                }}
-                placeholder="Lote (opcional)"
-                className="w-full text-sm border rounded px-2 h-8"
-              />
+              <div className="space-y-1">
+                {almoxLotes.map((l, idx) => (
+                  <div key={idx} className="flex items-center gap-1">
+                    {almoxOpcoes.length > 0 && (
+                      // Escolher no dropdown so PREENCHE lote e validade; os
+                      // campos seguem editaveis por cima.
+                      <select
+                        value={almoxOpcoes.find((o) => o.batch_number === l.lote)?.id || ''}
+                        onChange={(e) => {
+                          const op = almoxOpcoes.find((o) => o.id === e.target.value)
+                          if (!op) return
+                          const novos = almoxLotes.map((x, i) => i === idx
+                            ? { ...x, lote: op.batch_number || '', validade: op.expiry_date || '' }
+                            : x)
+                          setAlmoxLotes(novos)
+                          salvarAlmoxLotes(novos)
+                        }}
+                        className="h-8 text-xs border rounded px-1 max-w-[130px]"
+                        title="Lotes com saldo neste estoque"
+                      >
+                        <option value="">Selecionar…</option>
+                        {almoxOpcoes.map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.batch_number}
+                            {o.expiry_date ? ` · ${new Date(o.expiry_date + 'T00:00:00').toLocaleDateString('pt-BR')}` : ''}
+                            {` · ${o.current_quantity}`}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <input
+                      type="text"
+                      value={l.lote}
+                      onChange={(e) => setAlmoxLotes(almoxLotes.map((x, i) => i === idx ? { ...x, lote: e.target.value } : x))}
+                      onBlur={() => salvarAlmoxLotes(almoxLotes)}
+                      placeholder="Nº do lote"
+                      className="flex-1 min-w-[90px] text-sm border rounded px-2 h-8"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      value={l.quantidade === '' ? '' : l.quantidade}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => {
+                        const v = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0)
+                        setAlmoxLotes(almoxLotes.map((x, i) => i === idx ? { ...x, quantidade: v } : x))
+                      }}
+                      onBlur={() => salvarAlmoxLotes(almoxLotes)}
+                      placeholder="Qtd"
+                      className="w-16 text-center text-sm border rounded px-1 h-8"
+                    />
+                    {almoxLotes.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const novos = almoxLotes.filter((_, i) => i !== idx)
+                          setAlmoxLotes(novos)
+                          salvarAlmoxLotes(novos)
+                        }}
+                        className="text-red-400 hover:text-red-600 text-xs px-1"
+                        title="Remover lote"
+                      >✕</button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setAlmoxLotes([...almoxLotes, { lote: '', validade: '', quantidade: '' }])}
+                  className="text-xs text-blue-600 hover:underline"
+                >+ Adicionar lote</button>
+                {/* AVISO, nunca bloqueio: divergencia entre a soma dos lotes e o
+                    fornecido nao impede gravar (o lote aqui e so registro). */}
+                {(() => {
+                  const soma = almoxLotes.reduce((s, l) => s + (l.quantidade === '' ? 0 : Number(l.quantidade)), 0)
+                  if (soma === 0) return null
+                  const fornecido = Number(suppliedQty) || 0
+                  return (
+                    <p className={`text-[11px] ${soma === fornecido ? 'text-gray-400' : 'text-amber-600'}`}>
+                      Soma dos lotes: {soma}
+                      {soma !== fornecido && ` (fornecido: ${fornecido})`}
+                    </p>
+                  )
+                })()}
+              </div>
             ) : (
-              <span className="text-xs">{almoxLote || '—'}</span>
+              <div className="space-y-1">
+                {almoxLotes.filter((l) => l.lote || l.quantidade !== '').map((l, idx) => (
+                  <div key={idx} className="text-xs">
+                    {l.lote || '—'}{l.quantidade !== '' ? ` · ${l.quantidade}` : ''}
+                  </div>
+                ))}
+                {almoxLotes.every((l) => !l.lote && l.quantidade === '') && <span className="text-xs">—</span>}
+              </div>
             )}
           </td>
-          <td className="text-center py-3 px-2 text-xs">
+          <td className="text-center py-3 px-2 text-xs align-top">
             {canEdit ? (
-              <input
-                type="date"
-                value={almoxValidade}
-                onChange={(e) => setAlmoxValidade(e.target.value)}
-                onBlur={() => {
-                  const novo = almoxValidade || null
-                  if (novo !== ((item as any).almox_expiry_date ?? null)) {
-                    saveField('almox_expiry_date', novo)
-                  }
-                }}
-                className="w-full text-sm border rounded px-2 h-8"
-              />
+              <div className="space-y-1">
+                {almoxLotes.map((l, idx) => (
+                  <input
+                    key={idx}
+                    type="date"
+                    value={l.validade}
+                    onChange={(e) => setAlmoxLotes(almoxLotes.map((x, i) => i === idx ? { ...x, validade: e.target.value } : x))}
+                    onBlur={() => salvarAlmoxLotes(almoxLotes)}
+                    className="w-full text-sm border rounded px-2 h-8"
+                  />
+                ))}
+              </div>
             ) : (
-              <span>{almoxValidade ? new Date(almoxValidade + 'T00:00:00').toLocaleDateString('pt-BR') : '—'}</span>
+              <div className="space-y-1">
+                {almoxLotes.filter((l) => l.lote || l.quantidade !== '').map((l, idx) => (
+                  <div key={idx}>
+                    {l.validade ? new Date(l.validade + 'T00:00:00').toLocaleDateString('pt-BR') : '—'}
+                  </div>
+                ))}
+                {almoxLotes.every((l) => !l.lote && l.quantidade === '') && <span>—</span>}
+              </div>
             )}
           </td>
         </>
@@ -1061,9 +1221,11 @@ export function RequestDetails() {
                 <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Qtd Fornec.</th>
                 {/* Lote e Validade valem nos DOIS modulos, com naturezas
                     diferentes: na FARMACIA o staff escolhe o(s) lote(s) do
-                    estoque (com quantidade por lote); no ALMOXARIFADO sao dois
-                    campos livres e opcionais, que servem para o satelite
-                    conferir na hora de receber. FA2: lote nunca e obrigatorio. */}
+                    estoque (com quantidade por lote, gravado em
+                    request_item_lots); no ALMOXARIFADO sao lotes DIGITAVEIS
+                    (varios por item, com quantidade), gravados em
+                    request_items.almox_lotes — registro puro, sem tocar em
+                    saldo. FA2: lote nunca e obrigatorio. */}
                 <>
                   <th className="text-center py-3 px-3 font-medium text-gray-600 w-64">
                     Lote(s)
