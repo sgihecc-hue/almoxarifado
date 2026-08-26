@@ -630,14 +630,22 @@ export function NewRequest() {
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Voltar
               </Button>
-              <Button
-                onClick={handleNext}
-                disabled={items.length === 0}
-                className="bg-primary-500 hover:bg-primary-600 text-white w-full max-w-md"
-              >
-                Próximo
-                <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
+              {/* No ALMOXARIFADO este botao foi removido: quem avanca a etapa e o
+                  "Confirmar Selecao" do proprio RequestItems, que grava os itens
+                  e ja passa para a revisao. O "Proximo" so ficava habilitado
+                  DEPOIS de confirmar — ou seja, depois de a tela ja ter
+                  avancado —, entao nunca era usado e so confundia.
+                  A FARMACIA continua com os dois botoes, sem alteracao. */}
+              {requestType !== 'warehouse' && (
+                <Button
+                  onClick={handleNext}
+                  disabled={items.length === 0}
+                  className="bg-primary-500 hover:bg-primary-600 text-white w-full max-w-md"
+                >
+                  Próximo
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              )}
             </div>
           </div>
         )}
