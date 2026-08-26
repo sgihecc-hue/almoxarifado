@@ -37,6 +37,11 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   // request_item_lots (lote + quantidade). O campo antigo
   // request_items.expiry_tracking_id continua como fallback de 1 lote só.
   const [lots, setLots] = useState<LotOption[]>([])
+  // Lote sem saldo POLUI o dropdown: quem atende so quer escolher entre o que
+  // tem. Por padrao eles ficam escondidos; este interruptor os traz de volta
+  // para o caso do FA5 (item existe no fisico e nao foi lancado) — a mesma
+  // razao pela qual a consulta continua trazendo todos.
+  const [mostrarSemSaldo, setMostrarSemSaldo] = useState(false)
   // Cada linha é um lote do item. `manual` = lote digitado na hora (item
   // zerado, sem lote cadastrado): guarda batch_number/expiry_date até o
   // saveLots criar o registro real (RPC farmacia_garantir_lote).
@@ -83,6 +88,16 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     if (error) { console.error('lots', error); return }
     setLots((data || []) as LotOption[])
   }
+
+  // Opcoes do dropdown: so os lotes COM saldo, mais qualquer lote ja escolhido
+  // nesta tela — se um lote zerou depois de selecionado, esconde-lo apagaria a
+  // escolha do usuario sem aviso.
+  const lotesVisiveis = mostrarSemSaldo
+    ? lots
+    : lots.filter((lo) =>
+        (lo.current_quantity || 0) > 0 ||
+        itemLots.some((l) => l.expiry_tracking_id === lo.id))
+  const lotesSemSaldo = lots.length - lots.filter((lo) => (lo.current_quantity || 0) > 0).length
 
   // Recarrega opções + as linhas do item a partir do banco.
   // ATENÇÃO: sobrescreve o que estiver sendo digitado, então só deve rodar na
@@ -373,8 +388,8 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                         }}
                         className="flex-1 min-w-[150px] h-7 px-1 text-xs rounded border border-gray-300 bg-white"
                       >
-                        <option value="">{lots.length ? '— Lote —' : 'Sem lotes cadastrados'}</option>
-                        {lots.map((lo, i) => (
+                        <option value="">{lotesVisiveis.length ? '— Lote —' : 'Sem lote com saldo'}</option>
+                        {lotesVisiveis.map((lo, i) => (
                           <option key={lo.id} value={lo.id}>
                             {i === 0 ? '★ ' : ''}{lo.batch_number}
                             {lo.current_quantity > 0
@@ -410,15 +425,26 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                   <button
                     type="button"
                     onClick={() => setItemLots([...itemLots, { expiry_tracking_id: '', quantity: 0 }])}
-                    disabled={lots.length === 0}
+                    disabled={lotesVisiveis.length === 0}
                     className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-300"
-                    title={lots.length === 0 ? 'Nenhum lote cadastrado — use "Digitar lote"' : ''}
+                    title={lotesVisiveis.length === 0 ? 'Nenhum lote com saldo — use "Digitar lote"' : ''}
                   >+ Adicionar lote</button>
                   <button
                     type="button"
                     onClick={() => setItemLots([...itemLots, { expiry_tracking_id: '', quantity: 0, manual: true, batch_number: '', expiry_date: '' }])}
                     className="text-xs text-blue-600 hover:text-blue-800"
                   >+ Digitar lote</button>
+                  {lotesSemSaldo > 0 && (
+                    <label className="flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={mostrarSemSaldo}
+                        onChange={(e) => setMostrarSemSaldo(e.target.checked)}
+                        className="h-3 w-3"
+                      />
+                      mostrar {lotesSemSaldo} lote{lotesSemSaldo > 1 ? 's' : ''} sem saldo
+                    </label>
+                  )}
                 </div>
                 {itemLots.length > 0 && suppliedQty !== '' && somaLotes !== Number(suppliedQty) && (
                   <p className="text-[10px] text-amber-600">
