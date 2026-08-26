@@ -23,6 +23,7 @@ import {
   ArrowRightLeft,
   ArrowUpDown,
   ScanLine,
+  TrendingUp,
   Handshake,
   CalendarX,
   Stethoscope,
@@ -138,6 +139,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       items: [
         { name: 'Almoxarifado', icon: Package2, href: '/inventory/warehouse', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Etiquetas (código de barras)', icon: Barcode, href: '/almox/etiquetas', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Ressuprimento (POP.ALMXEPRO.09): CDM, ponto de ressuprimento,
+        // estoque minimo e compra sugerida, calculados do consumo real.
+        { name: 'Ressuprimento', icon: TrendingUp, href: '/almox/ressuprimento', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         // Entrada por leitor de codigo de barras: o almoxarife bipa a etiqueta
         // e so digita lote, validade e quantidade. Nao substitui a Nova Entrada.
         { name: 'Entrada por Leitor', icon: ScanLine, href: '/almox/entrada-leitor', show: (f) => f.isManager || f.isAdmin || f.isAtendente },

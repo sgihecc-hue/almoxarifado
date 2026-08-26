@@ -17,6 +17,7 @@ import { WarehouseItems } from '@/pages/inventory/warehouse-items'
 import { EtiquetasAlmox } from '@/pages/almox/etiquetas'
 import { AlmoxMovimentacao } from '@/pages/almox/movimentacao'
 import { EntradaLeitor } from '@/pages/almox/entrada-leitor'
+import { Ressuprimento } from '@/pages/almox/ressuprimento'
 import { SaidasFarmacia } from '@/pages/farmacia/saidas'
 import { NfEntry } from '@/pages/inventory/nf-entry'
 import { NfEntryWarehouse } from '@/pages/inventory/nf-entry-warehouse'
@@ -176,6 +177,13 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <EntradaLeitor />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/almox/ressuprimento" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <Ressuprimento />
                   </MainLayout>
                 </ProtectedRoute>
               } />
