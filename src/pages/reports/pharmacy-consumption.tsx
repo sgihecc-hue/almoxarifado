@@ -1,1079 +1,691 @@
-import { useState, useEffect } from 'react'
-import { 
-  Calendar, 
-  BarChart3, 
-  Download, 
-  Settings, 
-  Pill, 
-  ArrowUpDown, 
-  Loader2, 
-  AlertTriangle,
-  TrendingUp,
-  Clock,
-  CalendarDays,
-  CalendarClock,
-  Save,
-  CheckCircle2,
-  Building2,
-  X,
-  Search
+import { useState, useEffect, useMemo } from 'react'
+import { useTheme } from '@/contexts/theme'
+import {
+  Search, Loader2, Filter, Info, Download, X,
+  ChevronDown, ChevronUp, BarChart3, ListOrdered,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { format, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns'
-import { ptBR } from 'date-fns/locale'
-import { itemsService } from '@/lib/services/items'
-import { departmentsService } from '@/lib/services/departments'
-import { useAuth } from '@/contexts/auth'
 import { supabase } from '@/lib/supabase'
-import { 
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import { Switch } from '@/components/ui/switch'
-import { ConsumptionLineChart } from '@/components/charts/consumption-line-chart'
-import { DepartmentPieChart } from '@/components/charts/department-pie-chart'
-import type { Item } from '@/lib/services/items'
-import type { Department } from '@/lib/types/departments'
 
-// Types for consumption data
-interface ConsumptionData {
-  date: string;
-  quantity: number;
-  value: number;
-  department?: string;
+// Teto de linhas por carga. A view tem ~5,6 mil linhas hoje; o teto existe para
+// a tela não travar se alguém pedir um período muito largo.
+const MAX_ROWS = 20000
+const PAGE_SIZE = 50
+
+// Espelho da view public.v_farmacia_consumo — uma linha por saída de estoque.
+// É só leitura: a tela nunca escreve nada.
+type Consumo = {
+  id: string
+  data: string
+  tipo: string
+  quantidade: number | null
+  custo_unitario: number | null
+  custo_total: number | null
+  estoque_codigo: string | null
+  estoque: string | null
+  item_id: string | null
+  item: string | null
+  codigo: string | null
+  unidade: string | null
+  apresentacao: string | null
+  classe: string | null
+  controlado: boolean | null
+  alta_vigilancia: boolean | null
+  talidomida: boolean | null
+  padronizado: boolean | null
+  destino: string | null
+  destino_tipo: string | null
+  prontuario: string | null
+  paciente: string | null
+  data_prescricao: string | null
+  lote: string | null
+  validade: string | null
+  usuario_id: string | null
+  usuario: string | null
 }
 
-interface ConsumptionStats {
-  totalQuantity: number;
-  totalValue: number;
-  averageQuantity: number;
-  averageValue: number;
-  maxQuantity: number;
-  maxDate: string;
-  items: {
-    id: string;
-    name: string;
-    quantity: number;
-    value: number;
-  }[];
-  byDepartment?: {
-    department: string;
-    quantity: number;
-    value: number;
-    percentage: number;
-  }[];
+// Tipos de saída da view. Só os três primeiros são consumo assistencial de fato —
+// transferência muda o material de lugar, ajuste e devolução interna corrigem saldo.
+const TIPOS = [
+  { valor: 'PRESCRICAO', rotulo: 'Prescrição', consumo: true },
+  { valor: 'SOLICITACAO', rotulo: 'Solicitação', consumo: true },
+  { valor: 'SAIDA_AVULSA', rotulo: 'Saída avulsa', consumo: true },
+  { valor: 'TRANSFERENCIA', rotulo: 'Transferência', consumo: false },
+  { valor: 'DEVOLUCAO_INT', rotulo: 'Devolução interna', consumo: false },
+  { valor: 'AJUSTE', rotulo: 'Ajuste', consumo: false },
+]
+
+const TIPOS_PADRAO = TIPOS.filter((t) => t.consumo).map((t) => t.valor)
+
+const ESTOQUES = [
+  { valor: 'CAF', rotulo: 'CAF' },
+  { valor: 'SAT_1', rotulo: 'Satélite 1' },
+  { valor: 'SAT_2', rotulo: 'Satélite 2' },
+  { valor: 'SAT_T', rotulo: 'Satélite Térreo' },
+]
+
+function fmtData(d: string | null | undefined) {
+  if (!d) return '—'
+  return new Date(d).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 }
 
-interface ReportSettings {
-  autoRefresh: boolean;
-  refreshInterval: number; // in minutes
-  defaultPeriod: 'daily' | 'weekly' | 'monthly';
-  showValueData: boolean;
-  includeLowStockWarnings: boolean;
-  topItemsCount: number;
-  categories: string[];
-  showDepartmentBreakdown: boolean;
+function fmtDia(d: string | null | undefined) {
+  if (!d) return '—'
+  return new Date(d).toLocaleDateString('pt-BR')
+}
+
+function fmtQtd(v: number | null | undefined) {
+  if (v === null || v === undefined) return '—'
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ',')
+}
+
+function fmtMoeda(v: number | null | undefined) {
+  const n = v ?? 0
+  return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+}
+
+function iso(d: Date) {
+  return d.toISOString().slice(0, 10)
+}
+
+function rotuloTipo(t: string | null) {
+  return TIPOS.find((x) => x.valor === t)?.rotulo ?? (t ?? '—')
 }
 
 export function PharmacyConsumptionReport() {
-  const { user } = useAuth()
-  const isAdmin = user?.role === 'administrador'
-  const [items, setItems] = useState<Item[]>([])
-  const [departments, setDepartments] = useState<Department[]>([])
+  const { mode } = useTheme()
+
+  const txt = mode === 'dark' ? '#fff' : '#0d2e1c'
+  const txtSec = mode === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(13,46,28,0.65)'
+  const txtMut = mode === 'dark' ? 'rgba(255,255,255,0.45)' : 'rgba(13,46,28,0.45)'
+
+  const card: React.CSSProperties = {
+    background: mode === 'dark' ? 'rgba(10,15,20,0.55)' : 'rgba(255,255,255,0.65)',
+    backdropFilter: 'blur(30px)', WebkitBackdropFilter: 'blur(30px)',
+    border: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.5)'}`,
+    borderRadius: 16,
+  }
+  const inputStyle: React.CSSProperties = {
+    background: mode === 'dark' ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.7)',
+    border: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)'}`,
+    borderRadius: 10, padding: '8px 12px', fontSize: 14,
+    color: txt, outline: 'none', width: '100%',
+  }
+  const lbl: React.CSSProperties = {
+    color: txtSec, fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
+    letterSpacing: 0.5, display: 'block', marginBottom: 4,
+  }
+  const cellBorder = `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'}`
+  const divisor = `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'}`
+
+  const [rows, setRows] = useState<Consumo[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily')
-  const [dateRange, setDateRange] = useState<{start: Date, end: Date}>({
-    start: subDays(new Date(), 1),
-    end: new Date()
-  })
-  const [consumptionData, setConsumptionData] = useState<ConsumptionData[]>([])
-  const [stats, setStats] = useState<ConsumptionStats | null>(null)
-  const [showSettingsDialog, setShowSettingsDialog] = useState(false)
-  const [settings, setSettings] = useState<ReportSettings>({
-    autoRefresh: false,
-    refreshInterval: 30,
-    defaultPeriod: 'daily',
-    showValueData: true,
-    includeLowStockWarnings: true,
-    topItemsCount: 10,
-    categories: ['Medicamentos', 'Material Hospitalar'],
-    showDepartmentBreakdown: true
-  })
-  const [customDateRange, setCustomDateRange] = useState<{start: string, end: string}>({
-    start: format(dateRange.start, 'yyyy-MM-dd'),
-    end: format(dateRange.end, 'yyyy-MM-dd')
-  })
-  const [settingsSaved, setSettingsSaved] = useState(false)
-  const [selectedDepartment, setSelectedDepartment] = useState<string>('all')
-  const [showDepartmentFilter, setShowDepartmentFilter] = useState(false)
-  const [selectedItem, setSelectedItem] = useState<string>('all')
-  const [showItemFilter, setShowItemFilter] = useState(false)
-  const [itemSearchTerm, setItemSearchTerm] = useState('')
+  const [erro, setErro] = useState<string | null>(null)
+  const [truncado, setTruncado] = useState(false)
 
-  // Load items and departments on component mount
-  useEffect(() => {
-    loadItems()
-    loadDepartments()
-  }, [])
+  const [modo, setModo] = useState<'resumo' | 'detalhado'>('resumo')
+  const [filtrosAbertos, setFiltrosAbertos] = useState(true)
+  const [page, setPage] = useState(0)
 
-  // Update date range when period changes
-  useEffect(() => {
-    const today = new Date()
-    let start: Date
-    let end: Date = today
+  // ---- Filtros ----
+  const hoje = new Date()
+  const [dataDe, setDataDe] = useState(iso(new Date(hoje.getTime() - 29 * 86400000)))
+  const [dataAte, setDataAte] = useState(iso(hoje))
+  const [estoquesSel, setEstoquesSel] = useState<string[]>([])
+  const [tiposSel, setTiposSel] = useState<string[]>(TIPOS_PADRAO)
+  const [busca, setBusca] = useState('')
+  const [classe, setClasse] = useState('')
+  const [soControlados, setSoControlados] = useState(false)
+  const [soAltaVig, setSoAltaVig] = useState(false)
+  const [soTalidomida, setSoTalidomida] = useState(false)
+  const [soPadronizados, setSoPadronizados] = useState(false)
+  const [destino, setDestino] = useState('')
+  const [prontuario, setProntuario] = useState('')
+  const [usuario, setUsuario] = useState('')
 
-    switch (period) {
-      case 'daily':
-        start = subDays(today, 1)
-        break
-      case 'weekly':
-        start = startOfWeek(today, { weekStartsOn: 1 }) // Week starts on Monday
-        end = endOfWeek(today, { weekStartsOn: 1 })
-        break
-      case 'monthly':
-        start = startOfMonth(today)
-        end = endOfMonth(today)
-        break
-      default:
-        start = subDays(today, 1)
-    }
+  // Listas de opções (classe/destino/usuário) saem dos próprios dados carregados.
+  const [opcoes, setOpcoes] = useState<{ classes: string[]; destinos: string[]; usuarios: string[] }>(
+    { classes: [], destinos: [], usuarios: [] }
+  )
 
-    setDateRange({ start, end })
-    setCustomDateRange({
-      start: format(start, 'yyyy-MM-dd'),
-      end: format(end, 'yyyy-MM-dd')
-    })
-  }, [period])
-
-  // Auto-refresh data based on settings
-  useEffect(() => {
-    let intervalId: number | undefined
-
-    if (settings.autoRefresh && !loading) {
-      intervalId = window.setInterval(() => {
-        loadItems()
-      }, settings.refreshInterval * 60 * 1000)
-    }
-
-    return () => {
-      if (intervalId) clearInterval(intervalId)
-    }
-  }, [settings.autoRefresh, settings.refreshInterval, loading])
-
-  // Process consumption data when items change or date range changes or department/item selection changes
-  useEffect(() => {
-    if (items.length > 0) {
-      loadConsumptionFromDatabase()
-    }
-  }, [items, dateRange, selectedDepartment, selectedItem])
-
-  async function loadItems() {
+  // Só o período e o tipo vão para o servidor; o resto é refinado em memória,
+  // assim mexer num filtro não custa uma ida ao banco.
+  async function carregar() {
+    setLoading(true)
+    setErro(null)
     try {
-      setLoading(true)
-      setError(null)
-      const data = await itemsService.getAll()
-      
-      // Filter only pharmacy items
-      const pharmacyItems = data.filter(item => 
-        item.category === 'Medicamentos' || item.category === 'Material Hospitalar'
-      )
-      
-      setItems(pharmacyItems)
-    } catch (error) {
-      console.error('Error loading items:', error)
-      setError('Erro ao carregar itens. Por favor, tente novamente.')
+      let query = supabase
+        .from('v_farmacia_consumo')
+        .select('*')
+        .order('data', { ascending: false })
+
+      if (dataDe) query = query.gte('data', `${dataDe}T00:00:00`)
+      if (dataAte) query = query.lte('data', `${dataAte}T23:59:59`)
+
+      const { data, error } = await query.range(0, MAX_ROWS - 1)
+      if (error) throw error
+
+      const lista = (data ?? []) as Consumo[]
+      setRows(lista)
+      setTruncado(lista.length >= MAX_ROWS)
+
+      const uniq = (vals: (string | null)[]) =>
+        Array.from(new Set(vals.filter((v): v is string => !!v && v.trim() !== ''))).sort(
+          (a, b) => a.localeCompare(b, 'pt-BR')
+        )
+      setOpcoes({
+        classes: uniq(lista.map((r) => r.classe)),
+        destinos: uniq(lista.map((r) => r.destino)),
+        usuarios: uniq(lista.map((r) => r.usuario)),
+      })
+    } catch (e) {
+      console.error(e)
+      setErro('Não foi possível carregar o consumo. Tente novamente.')
+      setRows([])
     } finally {
       setLoading(false)
     }
   }
 
-  async function loadDepartments() {
-    try {
-      const data = await departmentsService.getAll()
-      setDepartments(data)
-    } catch (error) {
-      console.error('Error loading departments:', error)
-      setError('Erro ao carregar setores. Por favor, tente novamente.')
+  // Carga inicial e toda vez que o período mudar — é o único filtro que vai ao banco.
+  useEffect(() => { void carregar() }, [dataDe, dataAte])
+  // Qualquer mudança de filtro reinicia a paginação do detalhado.
+  useEffect(() => { setPage(0) }, [
+    estoquesSel, tiposSel, busca, classe, soControlados, soAltaVig,
+    soTalidomida, soPadronizados, destino, prontuario, usuario, modo,
+  ])
+
+  const filtradas = useMemo(() => {
+    const termo = busca.trim().toLowerCase()
+    return rows.filter((r) => {
+      if (tiposSel.length > 0 && !tiposSel.includes(r.tipo)) return false
+      if (estoquesSel.length > 0 && !estoquesSel.includes(r.estoque_codigo ?? '')) return false
+      if (classe && r.classe !== classe) return false
+      if (destino && r.destino !== destino) return false
+      if (usuario && r.usuario !== usuario) return false
+      if (soControlados && !r.controlado) return false
+      if (soAltaVig && !r.alta_vigilancia) return false
+      if (soTalidomida && !r.talidomida) return false
+      if (soPadronizados && !r.padronizado) return false
+      if (prontuario.trim() && !(r.prontuario ?? '').toLowerCase().includes(prontuario.trim().toLowerCase())) return false
+      if (termo) {
+        const alvo = `${r.item ?? ''} ${r.codigo ?? ''}`.toLowerCase()
+        if (!alvo.includes(termo)) return false
+      }
+      return true
+    })
+  }, [rows, tiposSel, estoquesSel, classe, destino, usuario, soControlados,
+      soAltaVig, soTalidomida, soPadronizados, prontuario, busca])
+
+  const totais = useMemo(() => {
+    let qtd = 0, custo = 0
+    for (const r of filtradas) {
+      qtd += r.quantidade ?? 0
+      custo += r.custo_total ?? 0
     }
-  }
+    return { saidas: filtradas.length, qtd, custo }
+  }, [filtradas])
 
-  async function loadConsumptionFromDatabase() {
-    try {
-      setError(null)
-      
-      // Get real consumption entries from database
-      const { data: consumptionEntries, error: consumptionError } = await supabase
-        .from('consumption_entries')
-        .select(`
-          *,
-          item:pharmacy_items!consumption_entries_item_id_fkey(
-            id,
-            name,
-            code,
-            category,
-            unit,
-            price
-          ),
-          department:departments!consumption_entries_department_id_fkey(
-            id,
-            name,
-            code
-          ),
-          created_by_user:users!consumption_entries_created_by_fkey(
-            full_name
-          )
-        `)
-        .gte('date', format(dateRange.start, 'yyyy-MM-dd'))
-        .lte('date', format(dateRange.end, 'yyyy-MM-dd'))
-        .order('date', { ascending: true })
-
-      if (consumptionError) {
-        console.error('Error fetching consumption data:', consumptionError)
-        throw new Error('Erro ao carregar dados de consumo do banco')
+  // Resumo agregado: consumo somado por item, do maior para o menor.
+  // Não carrega prontuário nem paciente — esses só aparecem no detalhado.
+  const resumo = useMemo(() => {
+    const mapa = new Map<string, {
+      chave: string; item: string; codigo: string; unidade: string
+      classe: string; qtd: number; saidas: number; custo: number
+    }>()
+    for (const r of filtradas) {
+      const chave = r.item_id ?? `${r.codigo ?? ''}|${r.item ?? ''}`
+      const atual = mapa.get(chave) ?? {
+        chave,
+        item: r.item ?? '—',
+        codigo: r.codigo ?? '',
+        unidade: r.unidade ?? '',
+        classe: r.classe ?? '',
+        qtd: 0, saidas: 0, custo: 0,
       }
-      
-      if (!consumptionEntries || !Array.isArray(consumptionEntries)) {
-        console.warn('Invalid consumption entries data')
-        setConsumptionData([])
-        setStats(null)
-        return
-      }
-      
-      // Convert to expected format
-      const processedEntries = consumptionEntries
-        .filter(entry => entry && entry.item && entry.department)
-        .map(entry => ({
-          item: entry.item,
-          department: entry.department,
-          quantity: entry.quantity,
-          date: entry.date,
-          notes: entry.notes,
-          created_by: entry.created_by_user?.full_name || 'Sistema',
-          created_at: entry.created_at
-        }))
-      
-      // Filter by department if selected
-      const departmentFilteredEntries = selectedDepartment !== 'all' 
-        ? processedEntries.filter(entry => entry.department.name === selectedDepartment)
-        : processedEntries
-      
-      // Filter by item if selected
-      const itemFilteredEntries = selectedItem !== 'all'
-        ? departmentFilteredEntries.filter(entry => entry.item.id === selectedItem)
-        : departmentFilteredEntries
-      
-      // Process consumption data by date
-      const consumptionByDate: Record<string, { quantity: number, value: number }> = {}
-      const itemConsumption: Record<string, { id: string, name: string, quantity: number, value: number }> = {}
-      const departmentConsumption: Record<string, { quantity: number, value: number }> = {}
-      
-      itemFilteredEntries.forEach(entry => {
-        if (!entry || !entry.item || !entry.department) {
-          console.warn('Invalid entry data:', entry)
-          return
-        }
-        
-        const date = entry.date
-        const itemPrice = typeof entry.item.price === 'number' ? entry.item.price : 0
-        const value = itemPrice * entry.quantity
-        
-        // Add to consumption by date
-        if (!consumptionByDate[date]) {
-          consumptionByDate[date] = { quantity: 0, value: 0 }
-        }
-        consumptionByDate[date].quantity += entry.quantity
-        consumptionByDate[date].value += value
-        
-        // Add to item consumption
-        if (!itemConsumption[entry.item.id]) {
-          itemConsumption[entry.item.id] = {
-            id: entry.item.id,
-            name: entry.item.name,
-            quantity: 0,
-            value: 0
-          }
-        }
-        itemConsumption[entry.item.id].quantity += entry.quantity
-        itemConsumption[entry.item.id].value += value
-        
-        // Add to department consumption
-        if (!departmentConsumption[entry.department.name]) {
-          departmentConsumption[entry.department.name] = { quantity: 0, value: 0 }
-        }
-        departmentConsumption[entry.department.name].quantity += entry.quantity
-        departmentConsumption[entry.department.name].value += value
-      })
-      
-      // Convert to array format for charts
-      const consumptionArray = Object.entries(consumptionByDate).map(([date, data]) => ({
-        date,
-        quantity: Math.round(data.quantity * 100) / 100,
-        value: Math.round(data.value * 100) / 100
-      })).sort((a, b) => a.date.localeCompare(b.date))
-      
-      setConsumptionData(consumptionArray)
-      
-      // Calculate statistics
-      if (consumptionArray.length > 0) {
-        const totalQuantity = consumptionArray.reduce((sum, item) => sum + item.quantity, 0)
-        const totalValue = consumptionArray.reduce((sum, item) => sum + item.value, 0)
-        const averageQuantity = totalQuantity / consumptionArray.length
-        const averageValue = totalValue / consumptionArray.length
-        
-        // Find max consumption day
-        const maxConsumptionItem = consumptionArray.reduce((max, item) => 
-          item.quantity > max.quantity ? item : max, 
-          consumptionArray[0]
-        )
-        
-        // Sort items by consumption
-        const topItems = Object.values(itemConsumption)
-          .sort((a, b) => b.quantity - a.quantity)
-          .slice(0, settings.topItemsCount)
-        
-        // Process department breakdown
-        const departmentStats = Object.entries(departmentConsumption).map(([department, data]) => ({
-          department,
-          quantity: Math.round(data.quantity * 100) / 100,
-          value: Math.round(data.value * 100) / 100,
-          percentage: totalQuantity > 0 ? (data.quantity / totalQuantity) * 100 : 0
-        })).sort((a, b) => b.quantity - a.quantity)
-        
-        setStats({
-          totalQuantity: Math.round(totalQuantity * 100) / 100,
-          totalValue: Math.round(totalValue * 100) / 100,
-          averageQuantity: Math.round(averageQuantity * 100) / 100,
-          averageValue: Math.round(averageValue * 100) / 100,
-          maxQuantity: Math.round(maxConsumptionItem.quantity * 100) / 100,
-          maxDate: maxConsumptionItem.date,
-          items: topItems,
-          byDepartment: departmentStats
-        })
-      } else {
-        // Set empty stats if no data
-        setStats({
-          totalQuantity: 0,
-          totalValue: 0,
-          averageQuantity: 0,
-          averageValue: 0,
-          maxQuantity: 0,
-          maxDate: format(new Date(), 'yyyy-MM-dd'),
-          items: [],
-          byDepartment: []
-        })
-      }
-    } catch (error) {
-      console.error('Error loading consumption from database:', error)
-      setError('Erro ao carregar dados de consumo. Verifique se há registros no banco.')
-      // Set empty data on error
-      setConsumptionData([])
-      setStats({
-        totalQuantity: 0,
-        totalValue: 0,
-        averageQuantity: 0,
-        averageValue: 0,
-        maxQuantity: 0,
-        maxDate: format(new Date(), 'yyyy-MM-dd'),
-        items: [],
-        byDepartment: []
-      })
+      atual.qtd += r.quantidade ?? 0
+      atual.custo += r.custo_total ?? 0
+      atual.saidas += 1
+      mapa.set(chave, atual)
     }
+    return Array.from(mapa.values()).sort((a, b) => b.qtd - a.qtd)
+  }, [filtradas])
+
+  const listaAtual: unknown[] = modo === 'resumo' ? resumo : filtradas
+  const totalPaginas = Math.max(1, Math.ceil(listaAtual.length / PAGE_SIZE))
+  const inicio = page * PAGE_SIZE
+  const resumoPagina = resumo.slice(inicio, inicio + PAGE_SIZE)
+  const detalhePagina = filtradas.slice(inicio, inicio + PAGE_SIZE)
+
+  // Etiquetas do que está ativo, para o usuário não se perder com o painel recolhido.
+  const filtrosAtivos = useMemo(() => {
+    const ativos: { rotulo: string; limpar: () => void }[] = []
+    if (estoquesSel.length) ativos.push({ rotulo: `Estoque: ${estoquesSel.map((e) => ESTOQUES.find((x) => x.valor === e)?.rotulo ?? e).join(', ')}`, limpar: () => setEstoquesSel([]) })
+    const tiposDiferentes = tiposSel.length !== TIPOS_PADRAO.length || !TIPOS_PADRAO.every((t) => tiposSel.includes(t))
+    if (tiposDiferentes) ativos.push({ rotulo: `Tipo: ${tiposSel.map(rotuloTipo).join(', ') || 'nenhum'}`, limpar: () => setTiposSel(TIPOS_PADRAO) })
+    if (busca.trim()) ativos.push({ rotulo: `Item: "${busca.trim()}"`, limpar: () => setBusca('') })
+    if (classe) ativos.push({ rotulo: `Classe: ${classe}`, limpar: () => setClasse('') })
+    if (soControlados) ativos.push({ rotulo: 'Só controlados', limpar: () => setSoControlados(false) })
+    if (soAltaVig) ativos.push({ rotulo: 'Só alta vigilância', limpar: () => setSoAltaVig(false) })
+    if (soTalidomida) ativos.push({ rotulo: 'Só talidomida', limpar: () => setSoTalidomida(false) })
+    if (soPadronizados) ativos.push({ rotulo: 'Só padronizados', limpar: () => setSoPadronizados(false) })
+    if (destino) ativos.push({ rotulo: `Destino: ${destino}`, limpar: () => setDestino('') })
+    if (prontuario.trim()) ativos.push({ rotulo: `Prontuário: ${prontuario.trim()}`, limpar: () => setProntuario('') })
+    if (usuario) ativos.push({ rotulo: `Usuário: ${usuario}`, limpar: () => setUsuario('') })
+    return ativos
+  }, [estoquesSel, tiposSel, busca, classe, soControlados, soAltaVig,
+      soTalidomida, soPadronizados, destino, prontuario, usuario])
+
+  function limparTudo() {
+    setEstoquesSel([])
+    setTiposSel(TIPOS_PADRAO)
+    setBusca(''); setClasse(''); setDestino(''); setProntuario(''); setUsuario('')
+    setSoControlados(false); setSoAltaVig(false); setSoTalidomida(false); setSoPadronizados(false)
   }
 
-  const handleCustomDateChange = () => {
-    try {
-      const start = new Date(customDateRange.start)
-      const end = new Date(customDateRange.end)
-      
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        throw new Error('Data inválida')
-      }
-      
-      if (start > end) {
-        throw new Error('Data inicial deve ser anterior à data final')
-      }
-      
-      setDateRange({ start, end })
-      // Use a string literal instead of 'custom'
-      setPeriod(period)
-    } catch (error) {
-      console.error('Error setting custom date range:', error)
-      setError('Erro ao definir período personalizado. Verifique as datas.')
+  function atalho(dias: 'hoje' | 7 | 30 | 'mes') {
+    const agora = new Date()
+    if (dias === 'hoje') { setDataDe(iso(agora)); setDataAte(iso(agora)); return }
+    if (dias === 'mes') {
+      setDataDe(iso(new Date(agora.getFullYear(), agora.getMonth(), 1)))
+      setDataAte(iso(agora)); return
     }
+    setDataDe(iso(new Date(agora.getTime() - (dias - 1) * 86400000)))
+    setDataAte(iso(agora))
   }
 
-  const handleExport = () => {
-    try {
-      // Create CSV content
-      const headers = ['Data', 'Quantidade', 'Valor (R$)']
-      const rows = consumptionData.map(item => [
-        item.date,
-        item.quantity.toString(),
-        item.value.toFixed(2)
-      ])
-      
-      const csvContent = [
-        headers.join(','),
-        ...rows.map(row => row.join(','))
-      ].join('\n')
-      
-      // Create blob and download
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-      const link = document.createElement('a')
-      const url = URL.createObjectURL(blob)
-      
-      link.setAttribute('href', url)
-      link.setAttribute('download', `consumo_farmacia_${format(new Date(), 'dd-MM-yyyy')}.csv`)
-      link.style.visibility = 'hidden'
-      
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-    } catch (error) {
-      console.error('Error exporting data:', error)
-      setError('Erro ao exportar dados.')
-    }
+  function alterna(lista: string[], valor: string, set: (v: string[]) => void) {
+    set(lista.includes(valor) ? lista.filter((v) => v !== valor) : [...lista, valor])
   }
 
-  const saveSettings = () => {
-    // In a real app, you would save these settings to a database
-    // For now, we'll just update the local state
-    setSettingsSaved(true)
-    setTimeout(() => setSettingsSaved(false), 3000)
-    setShowSettingsDialog(false)
+  // CSV gerado no navegador: separador ';' e BOM, que é o que o Excel pt-BR espera.
+  function exportarCSV() {
+    const cabecalho = modo === 'resumo'
+      ? ['Item', 'Código', 'Unidade', 'Classe', 'Quantidade', 'Saídas', 'Custo total']
+      : ['Data', 'Item', 'Código', 'Quantidade', 'Unidade', 'Estoque', 'Tipo',
+         'Destino', 'Prontuário', 'Paciente', 'Lote', 'Validade', 'Custo total', 'Usuário']
+
+    const linhas = modo === 'resumo'
+      ? resumo.map((r) => [r.item, r.codigo, r.unidade, r.classe,
+          fmtQtd(r.qtd), String(r.saidas), (r.custo ?? 0).toFixed(2).replace('.', ',')])
+      : filtradas.map((r) => [
+          fmtData(r.data), r.item ?? '', r.codigo ?? '', fmtQtd(r.quantidade), r.unidade ?? '',
+          r.estoque ?? '', rotuloTipo(r.tipo), r.destino ?? '', r.prontuario ?? '',
+          r.paciente ?? '', r.lote ?? '', fmtDia(r.validade),
+          (r.custo_total ?? 0).toFixed(2).replace('.', ','), r.usuario ?? '',
+        ])
+
+    const escapa = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const csv = [cabecalho, ...linhas].map((l) => l.map(escapa).join(';')).join('\r\n')
+
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `consumo_farmacia_${modo}_${dataDe}_a_${dataAte}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
-  // Filter items for the item selector
-  const filteredItems = items.filter(item => 
-    !itemSearchTerm || 
-    item.name.toLowerCase().includes(itemSearchTerm.toLowerCase()) ||
-    item.code?.toLowerCase().includes(itemSearchTerm.toLowerCase())
-  )
+  const chip = (ativo: boolean): React.CSSProperties => ({
+    fontSize: 12, padding: '6px 12px', borderRadius: 999, cursor: 'pointer',
+    background: ativo ? 'rgba(37,99,235,0.15)' : (mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+    border: `1px solid ${ativo ? 'rgba(37,99,235,0.45)' : (mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')}`,
+    color: ativo ? (mode === 'dark' ? '#93c5fd' : '#1d4ed8') : txtSec,
+    fontWeight: ativo ? 600 : 500,
+  })
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 text-primary-500 animate-spin mx-auto mb-4" />
-          <p className="text-gray-500">Carregando dados de consumo...</p>
-        </div>
-      </div>
-    )
-  }
+  const th: React.CSSProperties = { ...lbl, padding: '10px 16px', marginBottom: 0, textAlign: 'left' }
+  const thR: React.CSSProperties = { ...th, textAlign: 'right' }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-blue-100 rounded-lg">
-              <BarChart3 className="w-6 h-6 text-blue-600" />
+    <div className="max-w-7xl mx-auto space-y-6">
+      {/* Cabeçalho */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold" style={{ color: txt }}>Consumo da Farmácia</h1>
+          <p className="text-sm" style={{ color: txtSec }}>
+            Saídas registradas no sistema (dispensação por prescrição, atendimento de solicitação
+            e saída avulsa)
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={modo === 'resumo' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setModo('resumo')}>
+            <BarChart3 size={14} className="mr-1" /> Resumo
+          </Button>
+          <Button
+            variant={modo === 'detalhado' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setModo('detalhado')}>
+            <ListOrdered size={14} className="mr-1" /> Detalhado
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportarCSV} disabled={filtradas.length === 0}>
+            <Download size={14} className="mr-1" /> CSV
+          </Button>
+        </div>
+      </div>
+
+      {/* Totais do que está filtrado */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="p-4" style={card}>
+          <p style={lbl}>Saídas</p>
+          <p className="text-2xl font-bold" style={{ color: txt }}>{totais.saidas.toLocaleString('pt-BR')}</p>
+        </div>
+        <div className="p-4" style={card}>
+          <p style={lbl}>Quantidade total</p>
+          <p className="text-2xl font-bold" style={{ color: txt }}>{fmtQtd(totais.qtd)}</p>
+        </div>
+        <div className="p-4" style={card}>
+          <p style={lbl}>Custo total</p>
+          <p className="text-2xl font-bold" style={{ color: txt }}>{fmtMoeda(totais.custo)}</p>
+        </div>
+      </div>
+
+      {/* Filtros — painel recolhível, para a tela não virar um paredão */}
+      <div style={card}>
+        <button
+          onClick={() => setFiltrosAbertos(!filtrosAbertos)}
+          className="w-full px-5 py-3 flex items-center justify-between"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}>
+          <span className="flex items-center gap-2 text-sm font-semibold" style={{ color: txt }}>
+            <Filter size={16} style={{ color: txtMut }} />
+            Filtros
+            {filtrosAtivos.length > 0 && (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full"
+                style={{ background: 'rgba(37,99,235,0.15)', color: mode === 'dark' ? '#93c5fd' : '#1d4ed8' }}>
+                {filtrosAtivos.length}
+              </span>
+            )}
+          </span>
+          {filtrosAbertos
+            ? <ChevronUp size={16} style={{ color: txtMut }} />
+            : <ChevronDown size={16} style={{ color: txtMut }} />}
+        </button>
+
+        {filtrosAbertos && (
+          <div className="px-5 pb-5 space-y-4" style={{ borderTop: divisor, paddingTop: 16 }}>
+            {/* Período */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <label style={lbl}>Data inicial</label>
+                <input type="date" value={dataDe} onChange={(e) => setDataDe(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={lbl}>Data final</label>
+                <input type="date" value={dataAte} onChange={(e) => setDataAte(e.target.value)} style={inputStyle} />
+              </div>
+              <div className="md:col-span-2">
+                <label style={lbl}>Atalhos</label>
+                <div className="flex flex-wrap gap-2">
+                  <button style={chip(false)} onClick={() => atalho('hoje')}>Hoje</button>
+                  <button style={chip(false)} onClick={() => atalho(7)}>7 dias</button>
+                  <button style={chip(false)} onClick={() => atalho(30)}>30 dias</button>
+                  <button style={chip(false)} onClick={() => atalho('mes')}>Mês atual</button>
+                </div>
+              </div>
             </div>
+
+            {/* Estoque */}
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Estatísticas de Consumo - Farmácia</h1>
-              <p className="text-sm text-gray-500 mt-1">
-                Análise detalhada do consumo de medicamentos e materiais hospitalares
+              <label style={lbl}>Estoque</label>
+              <div className="flex flex-wrap gap-2">
+                {ESTOQUES.map((e) => (
+                  <button key={e.valor}
+                    style={chip(estoquesSel.includes(e.valor))}
+                    onClick={() => alterna(estoquesSel, e.valor, setEstoquesSel)}>
+                    {e.rotulo}
+                  </button>
+                ))}
+                {estoquesSel.length > 0 && (
+                  <button style={chip(false)} onClick={() => setEstoquesSel([])}>Todos</button>
+                )}
+              </div>
+            </div>
+
+            {/* Tipo de saída */}
+            <div>
+              <label style={lbl}>Tipo de saída</label>
+              <div className="flex flex-wrap gap-2">
+                {TIPOS.map((t) => (
+                  <button key={t.valor}
+                    style={chip(tiposSel.includes(t.valor))}
+                    onClick={() => alterna(tiposSel, t.valor, setTiposSel)}>
+                    {t.rotulo}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Busca e listas */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <label style={lbl}>Item (nome ou código)</label>
+                <div className="relative">
+                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: txtMut }} />
+                  <input
+                    value={busca}
+                    onChange={(e) => setBusca(e.target.value)}
+                    placeholder="Ex.: dipirona ou 1042"
+                    style={{ ...inputStyle, paddingLeft: 32 }}
+                  />
+                </div>
+              </div>
+              <div>
+                <label style={lbl}>Classe</label>
+                <select value={classe} onChange={(e) => setClasse(e.target.value)} style={inputStyle}>
+                  <option value="">Todas</option>
+                  {opcoes.classes.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={lbl}>Destino (setor/unidade)</label>
+                <select value={destino} onChange={(e) => setDestino(e.target.value)} style={inputStyle}>
+                  <option value="">Todos</option>
+                  {opcoes.destinos.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={lbl}>Usuário que realizou</label>
+                <select value={usuario} onChange={(e) => setUsuario(e.target.value)} style={inputStyle}>
+                  <option value="">Todos</option>
+                  {opcoes.usuarios.map((u) => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <label style={lbl}>Prontuário</label>
+                <input
+                  value={prontuario}
+                  onChange={(e) => setProntuario(e.target.value)}
+                  placeholder="Número do prontuário"
+                  style={inputStyle}
+                />
+              </div>
+              <div className="md:col-span-3">
+                <label style={lbl}>Marcadores do item</label>
+                <div className="flex flex-wrap gap-2">
+                  <button style={chip(soControlados)} onClick={() => setSoControlados(!soControlados)}>Só controlados</button>
+                  <button style={chip(soAltaVig)} onClick={() => setSoAltaVig(!soAltaVig)}>Só alta vigilância</button>
+                  <button style={chip(soTalidomida)} onClick={() => setSoTalidomida(!soTalidomida)}>Só talidomida</button>
+                  <button style={chip(soPadronizados)} onClick={() => setSoPadronizados(!soPadronizados)}>Só padronizados</button>
+                </div>
+              </div>
+            </div>
+
+            {/* Transferência/ajuste/devolução não são consumo assistencial. */}
+            <div className="flex items-start gap-2 p-3 rounded-lg"
+              style={{ background: mode === 'dark' ? 'rgba(37,99,235,0.08)' : 'rgba(37,99,235,0.06)' }}>
+              <Info size={13} style={{ color: txtMut, marginTop: 2, flexShrink: 0 }} />
+              <p className="text-xs" style={{ color: txtSec }}>
+                <strong>Transferência</strong> entre estoques não é consumo: o material não saiu da
+                farmácia, só mudou de lugar. O mesmo vale para <strong>ajuste</strong> e
+                <strong> devolução interna</strong>, que apenas corrigem saldo. Por isso os três vêm
+                desmarcados — marque-os apenas se quiser ver toda a movimentação.
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={() => setShowDepartmentFilter(!showDepartmentFilter)}
-            >
-              <Building2 className="w-4 h-4 mr-2" />
-              Filtrar por Setor
-            </Button>
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={() => setShowItemFilter(!showItemFilter)}
-            >
-              <Pill className="w-4 h-4 mr-2" />
-              Filtrar por Item
-            </Button>
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={handleExport}
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Exportar
-            </Button>
-            {isAdmin && (
-              <Button 
-                variant="outline" 
-                size="sm"
-                onClick={() => setShowSettingsDialog(true)}
-              >
-                <Settings className="w-4 h-4 mr-2" />
-                Configurações
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {/* Department Filter */}
-        {showDepartmentFilter && (
-          <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-gray-700">Filtrar por Setor:</h3>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => setShowDepartmentFilter(false)}
-                className="h-8 px-2 text-gray-500"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-              <Button 
-                variant={selectedDepartment === 'all' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setSelectedDepartment('all')}
-                className="justify-start"
-              >
-                Todos os Setores
-              </Button>
-              {departments.map(dept => (
-                <Button 
-                  key={dept.id}
-                  variant={selectedDepartment === dept.name ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setSelectedDepartment(dept.name)}
-                  className="justify-start"
-                >
-                  {dept.name}
-                </Button>
-              ))}
-            </div>
-          </div>
         )}
 
-        {/* Item Filter */}
-        {showItemFilter && (
-          <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-gray-700">Filtrar por Item:</h3>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => setShowItemFilter(false)}
-                className="h-8 px-2 text-gray-500"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-            
-            <div className="mb-3">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <Input
-                  placeholder="Buscar por nome ou código..."
-                  className="pl-9"
-                  value={itemSearchTerm}
-                  onChange={(e) => setItemSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 gap-2 max-h-60 overflow-y-auto">
-              <Button 
-                variant={selectedItem === 'all' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setSelectedItem('all')}
-                className="justify-start"
-              >
-                Todos os Itens
-              </Button>
-              {filteredItems.map(item => (
-                <Button 
-                  key={item.id}
-                  variant={selectedItem === item.id ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setSelectedItem(item.id)}
-                  className="justify-start text-left"
-                >
-                  <div className="flex flex-col items-start">
-                    <span>{item.name}</span>
-                    <span className="text-xs text-gray-500">{item.code} - {item.category}</span>
-                  </div>
-                </Button>
-              ))}
-              {filteredItems.length === 0 && itemSearchTerm && (
-                <div className="text-center p-2 text-gray-500">
-                  Nenhum item encontrado
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Period Selection */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="md:col-span-3 grid grid-cols-3 gap-4">
-            <Button 
-              variant={period === 'daily' ? 'default' : 'outline'}
-              onClick={() => setPeriod('daily')}
-              className="flex items-center gap-2"
-            >
-              <Clock className="w-4 h-4" />
-              Diário
-            </Button>
-            <Button 
-              variant={period === 'weekly' ? 'default' : 'outline'}
-              onClick={() => setPeriod('weekly')}
-              className="flex items-center gap-2"
-            >
-              <CalendarDays className="w-4 h-4" />
-              Semanal
-            </Button>
-            <Button 
-              variant={period === 'monthly' ? 'default' : 'outline'}
-              onClick={() => setPeriod('monthly')}
-              className="flex items-center gap-2"
-            >
-              <Calendar className="w-4 h-4" />
-              Mensal
-            </Button>
-          </div>
-          <div className="md:col-span-1">
-            <Button 
-              variant="outline" 
-              className="w-full"
-              onClick={() => loadItems()}
-            >
-              <ArrowUpDown className="w-4 h-4 mr-2" />
-              Atualizar Dados
-            </Button>
-          </div>
-        </div>
-
-        {/* Custom Date Range */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div>
-            <Label htmlFor="start-date">Data Inicial</Label>
-            <Input
-              id="start-date"
-              type="date"
-              value={customDateRange.start}
-              onChange={(e) => setCustomDateRange({...customDateRange, start: e.target.value})}
-              className="mt-1"
-            />
-          </div>
-          <div>
-            <Label htmlFor="end-date">Data Final</Label>
-            <Input
-              id="end-date"
-              type="date"
-              value={customDateRange.end}
-              onChange={(e) => setCustomDateRange({...customDateRange, end: e.target.value})}
-              className="mt-1"
-            />
-          </div>
-          <div className="flex items-end">
-            <Button 
-              onClick={handleCustomDateChange}
-              className="w-full"
-            >
-              Aplicar Período Personalizado
-            </Button>
-          </div>
-        </div>
-
-        {/* Current Period and Department/Item Display */}
-        <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-blue-700">
-            <div className="flex items-center gap-2">
-              <CalendarClock className="w-5 h-5" />
-              <span className="font-medium">
-                Período: {format(dateRange.start, "dd 'de' MMMM", { locale: ptBR })} até {format(dateRange.end, "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
-              </span>
-            </div>
-            {selectedDepartment !== 'all' && (
-              <div className="flex items-center gap-2 sm:ml-4 sm:pl-4 sm:border-l border-blue-200">
-                <Building2 className="w-5 h-5" />
-                <span className="font-medium">
-                  Setor: {selectedDepartment}
-                </span>
-              </div>
-            )}
-            {selectedItem !== 'all' && (
-              <div className="flex items-center gap-2 sm:ml-4 sm:pl-4 sm:border-l border-blue-200">
-                <Pill className="w-5 h-5" />
-                <span className="font-medium">
-                  Item: {items.find(i => i.id === selectedItem)?.name}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Error Message */}
-        {error && (
-          <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
-            <div className="flex items-center gap-2 text-red-700">
-              <AlertTriangle className="w-5 h-5" />
-              <p>{error}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Success Message for Settings */}
-        {settingsSaved && (
-          <div className="mt-4 p-4 bg-green-50 rounded-lg border border-green-200">
-            <div className="flex items-center gap-2 text-green-700">
-              <CheckCircle2 className="w-5 h-5" />
-              <p>Configurações salvas com sucesso!</p>
-            </div>
+        {/* Filtros ativos + limpar tudo */}
+        {filtrosAtivos.length > 0 && (
+          <div className="px-5 py-3 flex flex-wrap items-center gap-2" style={{ borderTop: divisor }}>
+            <span className="text-xs" style={{ color: txtMut }}>Ativos:</span>
+            {filtrosAtivos.map((f) => (
+              <button key={f.rotulo} onClick={f.limpar} style={{ ...chip(true), display: 'flex', alignItems: 'center', gap: 4 }}>
+                {f.rotulo} <X size={11} />
+              </button>
+            ))}
+            <Button variant="outline" size="sm" onClick={limparTudo} className="ml-auto">Limpar tudo</Button>
           </div>
         )}
       </div>
 
-      {/* Statistics Overview */}
-      {stats && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Visão Geral do Consumo</h2>
-          
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <Pill className="w-5 h-5 text-blue-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-blue-700">Consumo Total</p>
-                  <p className="text-xl font-semibold text-blue-900">{stats.totalQuantity} itens</p>
-                </div>
-              </div>
+      {/* Resultado */}
+      {loading ? (
+        <div className="p-8 flex items-center justify-center gap-3" style={card}>
+          <Loader2 size={20} className="animate-spin" style={{ color: txtMut }} />
+          <span style={{ color: txtMut }}>Carregando consumo...</span>
+        </div>
+      ) : erro ? (
+        <div className="p-8 text-center" style={card}>
+          <p className="text-sm" style={{ color: '#dc2626' }}>{erro}</p>
+        </div>
+      ) : filtradas.length === 0 ? (
+        <div className="p-10 flex flex-col items-center gap-2" style={card}>
+          <p className="text-lg font-semibold" style={{ color: txt }}>Nenhuma saída encontrada</p>
+          <p className="text-sm" style={{ color: txtMut }}>Tente ampliar o período ou afrouxar os filtros.</p>
+        </div>
+      ) : (
+        <>
+          <div style={{ ...card, overflow: 'hidden' }}>
+            <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: divisor }}>
+              <p className="text-sm font-semibold" style={{ color: txt }}>
+                {modo === 'resumo'
+                  ? `${resumo.length} ${resumo.length === 1 ? 'item' : 'itens'} consumidos`
+                  : `${filtradas.length} ${filtradas.length === 1 ? 'saída' : 'saídas'}`}
+              </p>
+              <p className="text-xs" style={{ color: txtMut }}>Página {page + 1} de {totalPaginas}</p>
             </div>
-            
-            <div className="bg-green-50 p-4 rounded-lg border border-green-100">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-green-100 rounded-lg">
-                  <TrendingUp className="w-5 h-5 text-green-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-green-700">Consumo Médio</p>
-                  <p className="text-xl font-semibold text-green-900">{stats.averageQuantity} itens/dia</p>
-                </div>
-              </div>
-            </div>
-            
-            {settings.showValueData && (
-              <>
-                <div className="bg-purple-50 p-4 rounded-lg border border-purple-100">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-purple-100 rounded-lg">
-                      <BarChart3 className="w-5 h-5 text-purple-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-purple-700">Valor Total</p>
-                      <p className="text-xl font-semibold text-purple-900">
-                        R$ {stats.totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="bg-amber-50 p-4 rounded-lg border border-amber-100">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-amber-100 rounded-lg">
-                      <Calendar className="w-5 h-5 text-amber-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-amber-700">Valor Médio</p>
-                      <p className="text-xl font-semibold text-amber-900">
-                        R$ {stats.averageValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/dia
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-          
-          <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-700">
-              <span className="font-medium">Dia de maior consumo:</span> {format(new Date(stats.maxDate), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })} com {stats.maxQuantity} itens
-            </p>
-          </div>
-        </div>
-      )}
 
-      {/* Consumption Chart */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Gráfico de Consumo</h2>
-        
-        <div className="h-80 bg-gray-50 p-4 rounded-lg border border-gray-200">
-          <ConsumptionLineChart 
-            data={consumptionData} 
-            showValue={settings.showValueData}
-            period={period}
-          />
-        </div>
-      </div>
-
-      {/* Department Breakdown */}
-      {stats && stats.byDepartment && stats.byDepartment.length > 0 && settings.showDepartmentBreakdown && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Consumo por Setor</h2>
-          
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Setor</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">Quantidade</th>
-                  {settings.showValueData && (
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">Valor (R$)</th>
-                  )}
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">% do Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {stats.byDepartment.map((dept) => (
-                  <tr key={dept.department} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{dept.department}</td>
-                    <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {Math.round(dept.quantity * 100) / 100}
-                    </td>
-                    {settings.showValueData && (
-                      <td className="px-4 py-3 text-sm text-right text-gray-600">
-                        {dept.value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits:  2 })}
-                      </td>
-                    )}
-                    <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {dept.percentage.toFixed(1)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          
-          <div className="mt-4 h-60 bg-gray-50 p-4 rounded-lg border border-gray-200">
-            <DepartmentPieChart 
-              data={stats.byDepartment} 
-              showValue={settings.showValueData}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Top Consumed Items */}
-      {stats && stats.items.length > 0 && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Itens Mais Consumidos</h2>
-          
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Item</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">Quantidade</th>
-                  {settings.showValueData && (
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">Valor (R$)</th>
-                  )}
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">% do Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {stats.items.map((item) => (
-                  <tr key={item.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{item.name}</td>
-                    <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {Math.round(item.quantity * 100) / 100}
-                    </td>
-                    {settings.showValueData && (
-                      <td className="px-4 py-3 text-sm text-right text-gray-600">
-                        {item.value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                    )}
-                    <td className="px-4 py-3 text-sm text-right text-gray-600">
-                      {((item.quantity / stats.totalQuantity) * 100).toFixed(1)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Settings Dialog */}
-      <Dialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog}>
-        <DialogContent className="sm:max-w-[600px]">
-          <DialogHeader>
-            <DialogTitle>Configurações do Relatório</DialogTitle>
-          </DialogHeader>
-          
-          <div className="space-y-6 py-4">
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-gray-900">Atualização de Dados</h3>
-              
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="auto-refresh">Atualização Automática</Label>
-                  <p className="text-xs text-gray-500">
-                    Atualiza os dados automaticamente no intervalo especificado
-                  </p>
-                </div>
-                <Switch 
-                  id="auto-refresh"
-                  checked={settings.autoRefresh}
-                  onCheckedChange={(checked) => setSettings({...settings, autoRefresh: checked})}
-                />
-              </div>
-              
-              {settings.autoRefresh && (
-                <div>
-                  <Label htmlFor="refresh-interval">Intervalo de Atualização (minutos)</Label>
-                  <Input
-                    id="refresh-interval"
-                    type="number"
-                    min="1"
-                    max="60"
-                    value={settings.refreshInterval}
-                    onChange={(e) => setSettings({...settings, refreshInterval: parseInt(e.target.value) || 30})}
-                    className="mt-1"
-                  />
-                </div>
+            <div style={{ overflowX: 'auto' }}>
+              {modo === 'resumo' ? (
+                // Resumo agregado — sem prontuário e sem nome de paciente (LGPD):
+                // dado de paciente só faz sentido na leitura linha a linha.
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: cellBorder }}>
+                      <th style={th}>Item</th>
+                      <th style={th}>Classe</th>
+                      <th style={thR}>Quantidade</th>
+                      <th style={thR}>Saídas</th>
+                      <th style={thR}>Custo total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resumoPagina.map((r) => (
+                      <tr key={r.chave} style={{ borderBottom: cellBorder }}>
+                        <td style={{ padding: '10px 16px' }}>
+                          <p style={{ color: txt, fontWeight: 500 }}>{r.item}</p>
+                          {r.codigo && <p style={{ color: txtMut, fontSize: 11 }}>Cód. {r.codigo}</p>}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: txtSec }}>{r.classe || '—'}</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: txt, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          {fmtQtd(r.qtd)} {r.unidade}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: txtSec }}>{r.saidas}</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: txtSec, whiteSpace: 'nowrap' }}>
+                          {fmtMoeda(r.custo)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: cellBorder }}>
+                      <th style={th}>Data/hora</th>
+                      <th style={th}>Item</th>
+                      <th style={thR}>Quantidade</th>
+                      <th style={th}>Estoque</th>
+                      <th style={th}>Tipo</th>
+                      <th style={th}>Destino / Paciente</th>
+                      <th style={th}>Lote</th>
+                      <th style={th}>Usuário</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalhePagina.map((r) => (
+                      <tr key={r.id} style={{ borderBottom: cellBorder }}>
+                        <td style={{ padding: '10px 16px', color: txt, whiteSpace: 'nowrap' }}>{fmtData(r.data)}</td>
+                        <td style={{ padding: '10px 16px' }}>
+                          <p style={{ color: txt, fontWeight: 500 }}>{r.item ?? '—'}</p>
+                          {r.codigo && <p style={{ color: txtMut, fontSize: 11 }}>Cód. {r.codigo}</p>}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: txt, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          {fmtQtd(r.quantidade)} {r.unidade ?? ''}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: txtSec }}>{r.estoque ?? '—'}</td>
+                        <td style={{ padding: '10px 16px' }}>
+                          <span className="text-xs px-2 py-1 rounded-full font-medium"
+                            style={{
+                              background: mode === 'dark' ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+                              color: txtSec,
+                              border: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)'}`,
+                            }}>
+                            {rotuloTipo(r.tipo)}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px 16px' }}>
+                          <p style={{ color: txt }}>{r.destino ?? '—'}</p>
+                          {(r.paciente || r.prontuario) && (
+                            <p style={{ color: txtMut, fontSize: 11 }}>
+                              {r.paciente ?? '—'}{r.prontuario ? ` · Pront. ${r.prontuario}` : ''}
+                            </p>
+                          )}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: txtSec, whiteSpace: 'nowrap' }}>
+                          {r.lote ?? '—'}
+                          {r.validade && <span style={{ color: txtMut, fontSize: 11 }}> · val. {fmtDia(r.validade)}</span>}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: txtSec }}>{r.usuario ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
-            
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-gray-900">Exibição de Dados</h3>
-              
-              <div>
-                <Label htmlFor="default-period">Período Padrão</Label>
-                <select
-                  id="default-period"
-                  value={settings.defaultPeriod}
-                  onChange={(e) => setSettings({...settings, defaultPeriod: e.target.value as 'daily' | 'weekly' | 'monthly'})}
-                  className="w-full mt-1 h-9 rounded-md border border-input px-3 py-1"
-                >
-                  <option value="daily">Diário</option>
-                  <option value="weekly">Semanal</option>
-                  <option value="monthly">Mensal</option>
-                </select>
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="show-value">Exibir Dados de Valor</Label>
-                  <p className="text-xs text-gray-500">
-                    Mostra informações de valor monetário nos relatórios
-                  </p>
-                </div>
-                <Switch 
-                  id="show-value"
-                  checked={settings.showValueData}
-                  onCheckedChange={(checked) => setSettings({...settings, showValueData: checked})}
-                />
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="show-departments">Exibir Análise por Setor</Label>
-                  <p className="text-xs text-gray-500">
-                    Mostra o consumo dividido por setores
-                  </p>
-                </div>
-                <Switch 
-                  id="show-departments"
-                  checked={settings.showDepartmentBreakdown}
-                  onCheckedChange={(checked) => setSettings({...settings, showDepartmentBreakdown: checked})}
-                />
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="low-stock-warnings">Alertas de Estoque Baixo</Label>
-                  <p className="text-xs text-gray-500">
-                    Inclui alertas para itens com estoque abaixo do mínimo
-                  </p>
-                </div>
-                <Switch 
-                  id="low-stock-warnings"
-                  checked={settings.includeLowStockWarnings}
-                  onCheckedChange={(checked) => setSettings({...settings, includeLowStockWarnings: checked})}
-                />
-              </div>
-              
-              <div>
-                <Label htmlFor="top-items">Número de Itens Mais Consumidos</Label>
-                <Input
-                  id="top-items"
-                  type="number"
-                  min="5"
-                  max="50"
-                  value={settings.topItemsCount}
-                  onChange={(e) => setSettings({...settings, topItemsCount: parseInt(e.target.value) || 10})}
-                  className="mt-1"
-                />
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-gray-900">Categorias</h3>
-              
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="category-medicamentos"
-                    checked={settings.categories.includes('Medicamentos')}
-                    onChange={(e) => {
-                      const newCategories = e.target.checked
-                        ? [...settings.categories, 'Medicamentos']
-                        : settings.categories.filter(c => c !== 'Medicamentos')
-                      setSettings({...settings, categories: newCategories})
-                    }}
-                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <Label htmlFor="category-medicamentos">Medicamentos</Label>
-                </div>
-                
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="category-material"
-                    checked={settings.categories.includes('Material Hospitalar')}
-                    onChange={(e) => {
-                      const newCategories = e.target.checked
-                        ? [...settings.categories, 'Material Hospitalar']
-                        : settings.categories.filter(c => c !== 'Material Hospitalar')
-                      setSettings({...settings, categories: newCategories})
-                    }}
-                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <Label htmlFor="category-material">Material Hospitalar</Label>
-                </div>
-              </div>
+
+            <div className="px-5 py-3 flex items-start gap-2" style={{ borderTop: divisor }}>
+              <Info size={13} style={{ color: txtMut, marginTop: 2, flexShrink: 0 }} />
+              <p className="text-xs" style={{ color: txtMut }}>
+                Os números vêm das saídas registradas no sistema (dispensação por prescrição,
+                atendimento de solicitação e saída avulsa) — nada é digitado à parte.
+                {truncado && ' O período pedido passou do teto de linhas por carga; estreite as datas para ver tudo.'}
+              </p>
             </div>
           </div>
-          
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowSettingsDialog(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={saveSettings}>
-              <Save className="w-4 h-4 mr-2" />
-              Salvar Configurações
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+
+          {totalPaginas > 1 && (
+            <div className="flex items-center justify-center gap-2">
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>
+                Anterior
+              </Button>
+              <span className="text-sm" style={{ color: txtSec }}>{page + 1} / {totalPaginas}</span>
+              <Button variant="outline" size="sm" disabled={page >= totalPaginas - 1} onClick={() => setPage(page + 1)}>
+                Próxima
+              </Button>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
