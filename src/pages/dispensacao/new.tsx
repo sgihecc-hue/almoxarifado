@@ -140,7 +140,13 @@ export function NewDispensation() {
   const [itemResults, setItemResults] = useState<PharmacyItemRow[]>([])
   const [searchingItems, setSearchingItems] = useState(false)
   const [addingItem, setAddingItem] = useState<string | null>(null)
+  // Cache de lotes. A chave inclui o LOCAL: o mesmo item tem lotes diferentes
+  // em cada estoque, e guardar só por item_id fazia o cache de um satélite
+  // valer pra outro. Hoje trocar de estoque no topo navega pra fora da tela
+  // (o componente é destruído e o cache some junto), mas basta activeStock
+  // mudar sem desmontar pra a lista de lotes ficar errada.
   const [lotsByItem, setLotsByItem] = useState<Record<string, LotRow[]>>({})
+  const lotKey = (itemId: string) => `${activeStockId}:${itemId}`
   const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([])
 
   // Etapa 5 — Resumo / submit
@@ -241,7 +247,7 @@ export function NewDispensation() {
   }, [itemSearch, activeStockId])
 
   async function loadLots(itemId: string): Promise<LotRow[]> {
-    if (lotsByItem[itemId]) return lotsByItem[itemId]
+    if (lotsByItem[lotKey(itemId)]) return lotsByItem[lotKey(itemId)]
     // Só lotes DO LOCAL onde a dispensação está sendo feita (activeStockId).
     // Sem o filtro de local, a Satélite 1 via lotes que estão no CAF — cada
     // estoque só pode dispensar dos SEUS próprios lotes. Mesma regra do
@@ -255,7 +261,7 @@ export function NewDispensation() {
       .order('expiry_date', { ascending: true, nullsFirst: false })
     if (err) console.error(err)
     const lots = (data || []) as LotRow[]
-    setLotsByItem((p) => ({ ...p, [itemId]: lots }))
+    setLotsByItem((p) => ({ ...p, [lotKey(itemId)]: lots }))
     return lots
   }
 
@@ -311,7 +317,7 @@ export function NewDispensation() {
         const avail = isMaterial ? Number.MAX_SAFE_INTEGER : it.item_stock
         return { ...it, manual_lot: false, expiry_tracking_id: null, batch_number: null, expiry_date: null, available_in_batch: avail, quantity: Math.min(it.quantity, Math.max(1, avail)) }
       }
-      const lot = (lotsByItem[it.item_id] || []).find((l) => l.id === lotId)
+      const lot = (lotsByItem[lotKey(it.item_id)] || []).find((l) => l.id === lotId)
       if (!lot) return it
       // No material o saldo do lote não limita a quantidade (FA5).
       const avail = isMaterial ? Number.MAX_SAFE_INTEGER : lot.current_quantity
@@ -829,7 +835,7 @@ export function NewDispensation() {
           ) : (
             <div className="space-y-2">
               {selectedItems.map((it, idx) => {
-                const lots = lotsByItem[it.item_id] || []
+                const lots = lotsByItem[lotKey(it.item_id)] || []
                 const over = it.quantity > it.available_in_batch
                 return (
                   <div
