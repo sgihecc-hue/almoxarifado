@@ -20,6 +20,11 @@ interface ModuleContextType {
   // Estoque de farmácia atualmente selecionado (CAF / Satélites)
   activeStock: PharmacyStock | null
   setActiveStock: (s: PharmacyStock | null) => void
+  // Módulo ao qual o usuário PERTENCE, derivado do setor dele. Diferente de
+  // activeModule (o que ele está navegando agora). Usado para decidir se ele
+  // pode ATENDER uma solicitação — ver lib/utils/request-scope.ts.
+  // null = sem vínculo (admin, Supervisão Administrativa, sem setor) => sem restrição.
+  homeModule: ModuleType
 }
 
 const ModuleContext = createContext<ModuleContextType | null>(null)
@@ -74,6 +79,18 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
     })()
     return () => { cancelled = true }
   }, [isAtendente, isPharmacist, isGestor, user?.department_id])
+
+  // Módulo de origem do usuário, derivado do SETOR. É o que decide se ele pode
+  // atender uma solicitação (ver lib/utils/request-scope.ts). Admin e quem não
+  // é de farmácia nem de almoxarifado (ex.: Supervisão Administrativa) ficam
+  // com null = sem restrição, pra não trancar a supervisão fora do sistema.
+  const homeModule: ModuleType = (() => {
+    if (isAdmin) return null
+    if (!deptName) return null
+    if (deptName.trim().toLowerCase() === 'almoxarifado') return 'almoxarifado'
+    if (PHARMACY_STOCKS.some((s) => departmentBelongsToStock(deptName, s))) return 'farmacia'
+    return null
+  })()
 
   // Gestor lotado numa farmácia (CAF ou satélite) opera SÓ a farmácia: não vê
   // o card de Almoxarifado nem a tela de escolha de módulo — cai direto no
@@ -189,7 +206,7 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   }, [satelliteOnly, activeStock])
 
   return (
-    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, isPharmacyStockUser, allowedStocks, activeStock, setActiveStock }}>
+    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, isPharmacyStockUser, allowedStocks, activeStock, setActiveStock, homeModule }}>
       {children}
     </ModuleContext.Provider>
   )

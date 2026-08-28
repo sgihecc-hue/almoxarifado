@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import { useAuth } from '@/contexts/auth'
+import { useModule } from '@/contexts/module'
+import { podeAtenderSolicitacao } from '@/lib/utils/request-scope'
 import {
   CheckCircle2, XCircle, PlayCircle,
   CheckSquare, Ban, Loader2, Truck, PackageCheck, Search, User, AlertTriangle
@@ -29,6 +31,7 @@ interface RequestActionsProps {
 
 export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const { user } = useAuth()
+  const { homeModule } = useModule()
   const [loading, setLoading] = useState(false)
   const [showDialog, setShowDialog] = useState(false)
   const [showApprovalToast, setShowApprovalToast] = useState(false)
@@ -98,13 +101,19 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
     }
   }, [request])
 
-  const isManager = user?.role === 'gestor' || user?.role === 'administrador' || user?.role === 'atendente'
+  // Operador só atende solicitação do PRÓPRIO módulo. Sem isso, o papel
+  // 'atendente' liberava qualquer pedido: um atendente da farmácia abria a
+  // tela de atendimento de um pedido do almoxarifado e podia aprovar,
+  // separar e marcar como entregue. Ver lib/utils/request-scope.ts.
+  const podeAtender = podeAtenderSolicitacao(homeModule, request?.type)
+  const isManager = podeAtender &&
+    (user?.role === 'gestor' || user?.role === 'administrador' || user?.role === 'atendente')
   // Farmaceutico e staff SO em solicitacao de farmacia: atende (aprova) e informa
   // lote/quantidade. NAO recebe os passos do almoxarifado (Iniciar Processamento /
   // Marcar como Entregue), que seguem restritos a isManager — dar isso a ele
   // deixaria o pedido 'delivered' sem que a baixa do almox fizesse sentido.
   const isPharmacyStaff = isManager ||
-    (user?.role === 'pharmacist' && request?.type === 'pharmacy')
+    (podeAtender && user?.role === 'pharmacist' && request?.type === 'pharmacy')
   const canManage = isPharmacyStaff && request?.status === 'pending'
   // Fluxo depende do TIPO da solicitacao:
   // - Farmacia: aprovar ja marca como entregue -> solicitante confirma

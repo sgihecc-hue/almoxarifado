@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { useModule } from '@/contexts/module'
+import { podeAtenderSolicitacao } from '@/lib/utils/request-scope'
 import {
   ArrowLeft, MessageSquare, AlertCircle, Loader2,
   Download, Printer, CheckCircle2
@@ -755,6 +756,7 @@ export function RequestDetails() {
   const navigate = useNavigate()
   const { id } = useParams()
   const { user } = useAuth()
+  const { homeModule } = useModule()
   const [request, setRequest] = useState<Request | null>(null)
   const [loading, setLoading] = useState(true)
   const [commenting, setCommenting] = useState(false)
@@ -963,6 +965,15 @@ export function RequestDetails() {
       </div>
     )
   }
+
+  // Quem enxerga a visão de ATENDIMENTO (saldo do estoque, quantidade
+  // fornecida editável, lote e conferência). Além do papel, exige que o
+  // operador seja do mesmo módulo da solicitação — antes disso um atendente
+  // da farmácia abria a tela de atendimento de um pedido do almoxarifado.
+  // Ver lib/utils/request-scope.ts.
+  const isStaff = podeAtenderSolicitacao(homeModule, request.type) &&
+    (user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente' ||
+      (user?.role === 'pharmacist' && request.type === 'pharmacy'))
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 print:space-y-1 print:max-w-full">
@@ -1214,8 +1225,7 @@ export function RequestDetails() {
                 <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Qtd Solic.</th>
                 {/* Coluna "Saldo" só aparece pra staff da farmácia/almox — solicitante
                     (setor solicitante) não deve ver o estoque, senão informa consumo. */}
-                {(user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente' ||
-                  (user?.role === 'pharmacist' && request.type === 'pharmacy')) && (
+                {isStaff && (
                   <th className="text-center py-3 px-3 font-medium text-gray-600 w-24">Saldo</th>
                 )}
                 <th className="text-center py-3 px-3 font-medium text-gray-600 w-28">Qtd Fornec.</th>
@@ -1238,8 +1248,6 @@ export function RequestDetails() {
             </thead>
             <tbody>
               {request.request_items.map((item) => {
-                const isStaff = user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente' ||
-                  (user?.role === 'pharmacist' && request.type === 'pharmacy')
                 const statusAllowsEdit = request.status === 'pending' || request.status === 'approved' || request.status === 'processing'
                 return (
                   <ItemRow
