@@ -345,7 +345,6 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     return raw ? raw.split('\n').filter(Boolean) : []
   })
   const [newNote, setNewNote] = useState('')
-  const gravaNoBlur = requestType === 'warehouse'
   // Uma unica porta de gravacao da nota: Enter, blur e botao '+'.
   const gravarNota = () => {
     const texto = newNote.trim()
@@ -718,17 +717,14 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
             {/* Todo campo desta linha (quantidade, lote, validade) grava no
                 blur. So a observacao exigia Enter ou o botao "+": quem digitava
                 e clicava em outro campo perdia o texto sem aviso nenhum. Deu 1
-                observacao gravada em 4004 itens desde que o campo existe. */}
+                observacao gravada em 4004 itens desde que o campo existe.
+                Vale nos DOIS modulos — o dono liberou a farmacia junto. */}
             <input
               type="text"
               value={newNote}
               onChange={(e) => setNewNote(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') gravarNota() }}
-              // Gravar no blur so no ALMOXARIFADO. A farmacia tem o mesmo
-              // campo e o mesmo defeito, mas mexer nela aqui e mudanca de
-              // outro modulo: e trocar `gravaNoBlur` por true quando o dono
-              // liberar. Enter e o "+" seguem funcionando nos dois.
-              onBlur={gravaNoBlur ? () => gravarNota() : undefined}
+              onBlur={() => gravarNota()}
               placeholder="Anotar..."
               className="flex-1 h-7 px-2 text-xs border border-gray-300 rounded bg-white"
             />
