@@ -280,7 +280,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       items: [
         { name: 'Usuários', icon: Users, href: '/users-advanced', show: (f) => f.isAdmin },
         {
-          name: 'Tabelas', icon: Database, href: '/tables', show: (f) => f.isAdmin,
+          // Gestor entra aqui pra cadastrar setor — rotina de coordenacao.
+          // Excluir setor continua so com administrador (botao escondido na tela).
+          name: 'Tabelas', icon: Database, href: '/tables', show: (f) => f.isAdmin || f.isManager,
           submenu: [{ name: 'Setores', href: '/tables/departments', icon: Building2 }],
         },
         { name: 'Histórico Global', icon: History, href: '/historico-global', show: (f) => f.isAdmin },

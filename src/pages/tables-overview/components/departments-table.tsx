@@ -9,12 +9,20 @@ import { Input } from '@/components/ui/input'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { departmentsService } from '@/lib/services/departments'
+import { useAuth } from '@/contexts/auth'
 import { NewDepartmentDialog } from './new-department-dialog'
 import { EditDepartmentDialog } from './edit-department-dialog'
 import { DeleteDepartmentDialog } from './delete-department-dialog'
 import type { Department } from '@/lib/types/departments'
 
 export function DepartmentsTable() {
+  // Excluir setor desvincula os usuarios daquele setor e nao tem desfazer na
+  // tela — segue exclusivo de administrador. Gestor cria e edita (RLS
+  // 20260831120000_gestor_cria_setor.sql). Sem esconder o botao, ele
+  // apareceria pro gestor e falharia calado na policy.
+  const { user } = useAuth()
+  const podeExcluir = user?.role === 'administrador'
+
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -180,18 +188,20 @@ export function DepartmentsTable() {
                       <Pencil className="w-4 h-4 mr-2" />
                       Editar
                     </Button>
-                    <Button 
-                      variant="outline" 
-                      size="sm"
-                      className="text-red-500 hover:text-red-600"
-                      onClick={() => {
-                        setSelectedDepartment(department)
-                        setShowDeleteDialog(true)
-                      }}
-                    >
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Excluir
-                    </Button>
+                    {podeExcluir && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-red-500 hover:text-red-600"
+                        onClick={() => {
+                          setSelectedDepartment(department)
+                          setShowDeleteDialog(true)
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Excluir
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
