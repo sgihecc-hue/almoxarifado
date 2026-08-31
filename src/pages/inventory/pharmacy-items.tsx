@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Search, Download, AlertCircle,
@@ -47,6 +47,24 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   // ativo é warehouse, a tela lê o catálogo de material e o saldo de material.
   const isWarehouseStock = activeStock?.itemType === 'warehouse'
   const catalogItemType: 'pharmacy' | 'warehouse' = isWarehouseStock ? 'warehouse' : 'pharmacy'
+  // Barra de rolagem horizontal ESPELHADA no topo da tabela. A tabela tem ~15
+  // colunas e nao cabe na tela; com a barra so embaixo, era preciso rolar a
+  // lista inteira pra chegar nela. Esta fica presa no topo (sticky) e continua
+  // ao alcance com qualquer quantidade de itens. As duas ficam sincronizadas.
+  const topScrollRef = useRef<HTMLDivElement>(null)
+  const tableScrollRef = useRef<HTMLDivElement>(null)
+  // Trava pra o onScroll de uma nao disparar o da outra em laco.
+  const sincronizando = useRef(false)
+  const [larguraTabela, setLarguraTabela] = useState(0)
+
+  const espelharScroll = (de: HTMLDivElement | null, para: HTMLDivElement | null) => {
+    if (!de || !para || sincronizando.current) return
+    sincronizando.current = true
+    para.scrollLeft = de.scrollLeft
+    // libera no proximo frame: sem isso o scroll programatico reentra aqui
+    requestAnimationFrame(() => { sincronizando.current = false })
+  }
+
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -380,6 +398,22 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       return true
     })
 
+  // Mede a largura real da tabela pra dar o mesmo curso a barra de cima.
+  // Depende de `loading` porque enquanto carrega a tabela nem existe no DOM
+  // (early return abaixo), e de filteredItems.length porque a largura muda
+  // quando o conteudo muda. O ResizeObserver cobre o resto.
+  useEffect(() => {
+    const alvo = tableScrollRef.current
+    if (!alvo) return
+    const medir = () => setLarguraTabela(alvo.scrollWidth)
+    medir()
+    const ro = new ResizeObserver(medir)
+    ro.observe(alvo)
+    if (alvo.firstElementChild) ro.observe(alvo.firstElementChild)
+    window.addEventListener('resize', medir)
+    return () => { ro.disconnect(); window.removeEventListener('resize', medir) }
+  }, [loading, filteredItems.length])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -515,7 +549,21 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       {/* overflow-hidden no pai cortava a barra de rolagem do filho — por isso
           ela nao aparecia. Sem ele, a barra fica visivel embaixo da tabela. */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-        <div className="overflow-x-scroll pb-1 min-w-0 tabela-scroll-x">
+        {/* Barra de rolagem de cima: so um espacador da largura da tabela.
+            sticky pra nao sumir quando a lista e longa. */}
+        <div
+          ref={topScrollRef}
+          onScroll={() => espelharScroll(topScrollRef.current, tableScrollRef.current)}
+          className="overflow-x-scroll tabela-scroll-x sticky top-0 z-20 bg-white rounded-t-xl border-b border-gray-100"
+          aria-hidden="true"
+        >
+          <div style={{ width: larguraTabela || '100%', height: 1 }} />
+        </div>
+        <div
+          ref={tableScrollRef}
+          onScroll={() => espelharScroll(tableScrollRef.current, topScrollRef.current)}
+          className="overflow-x-scroll pb-1 min-w-0 tabela-scroll-x"
+        >
           <table className="w-full border-collapse min-w-[1400px]">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
