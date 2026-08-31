@@ -26,6 +26,11 @@ interface RequestItem {
   item_name: string
   item_code: string
   item_unit?: string
+  // Anotacao que o atendente do almoxarifado escreveu no item ao separar
+  // (request_items.observation, uma por linha). Quem RECEBE precisa ler:
+  // e ali que o almox explica "mandei 4 das 6, resto em falta". Antes so
+  // aparecia no detalhe da solicitacao, e o solicitante trabalha aqui.
+  observation?: string
 }
 
 interface DeliveredRequest {
@@ -122,6 +127,7 @@ export function ReceiptConfirmation() {
             supplied_quantity,
             almox_batch_number,
             almox_expiry_date,
+            observation,
             warehouse_item:warehouse_items(id, name, code, unit)
           )
         `)
@@ -184,6 +190,7 @@ export function ReceiptConfirmation() {
                 item_name: item?.name ?? '—',
                 item_code: item?.code ?? '—',
                 item_unit: item?.unit,
+                observation: ri.observation || undefined,
               } as RequestItem
             })
           return {
@@ -576,6 +583,21 @@ export function ReceiptConfirmation() {
                               não chegou
                             </label>
                           </div>
+                          {/* Recado do almoxarifado sobre este item. Mesmo
+                              amarelo do detalhe da solicitacao pra ser a
+                              mesma coisa aos olhos de quem le nas duas telas. */}
+                          {item.observation && (
+                            <div className="mb-2 space-y-1">
+                              {item.observation.split('\n').filter(Boolean).map((obs, i) => (
+                                <p
+                                  key={i}
+                                  className="text-xs bg-yellow-50 border border-yellow-200 text-yellow-800 px-2 py-1 rounded"
+                                >
+                                  <span className="font-medium">Almoxarifado:</span> {obs}
+                                </p>
+                              ))}
+                            </div>
+                          )}
                           <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
                             {/* Lote e Validade vem do ALMOXARIFADO e sao so
                                 leitura: quem recebe nao digita data nem lote,
