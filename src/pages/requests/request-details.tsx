@@ -410,8 +410,10 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       {isPharmacy && (
         <>
           {/* FA3: multi-lote — o item pode sair de vários lotes. A soma é
-              conferida contra a Qtd Fornecida. FA2: lote NÃO é obrigatório;
-              sem lote informado o item ainda pode ser atendido. */}
+              conferida contra a Qtd Fornecida.
+              MEDICAMENTO exige lote e validade: aprovar fica bloqueado se
+              faltar (ver validarLoteMedicamentos em request-actions.tsx).
+              Material da farmácia (MAT/MED) segue sem exigência. */}
           <td className="py-3 px-2">
             {canEdit ? (
               <div className="space-y-1">
@@ -1235,7 +1237,8 @@ export function RequestDetails() {
                     request_item_lots); no ALMOXARIFADO sao lotes DIGITAVEIS
                     (varios por item, com quantidade), gravados em
                     request_items.almox_lotes — registro puro, sem tocar em
-                    saldo. FA2: lote nunca e obrigatorio. */}
+                    saldo. Obrigatoriedade: MEDICAMENTO exige lote e validade
+                    pra aprovar; material da farmacia e almoxarifado, nao. */}
                 <>
                   <th className="text-center py-3 px-3 font-medium text-gray-600 w-64">
                     Lote(s)

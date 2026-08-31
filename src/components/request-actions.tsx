@@ -42,6 +42,9 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const [showNegativoDialog, setShowNegativoDialog] = useState(false)
   const [negativoCiente, setNegativoCiente] = useState(false)
   const [itensSemSaldo, setItensSemSaldo] = useState<Array<{ nome: string; pedido: number; saldo: number }>>([])
+  // Medicamento sem lote/validade: bloqueio duro, sem "ciente" pra furar.
+  const [showLoteDialog, setShowLoteDialog] = useState(false)
+  const [itensSemLote, setItensSemLote] = useState<Array<{ nome: string; falta: string }>>([])
   const [reason, setReason] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [employee, setEmployee] = useState<Employee | null>(null)
@@ -276,6 +279,70 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
     return mapa
   }
 
+  /**
+   * MEDICAMENTO não sai sem lote e validade.
+   *
+   * Revoga o FA2 ("lote nunca é obrigatório", 16/07) apenas onde ele abriu
+   * buraco: o atendimento de solicitação. Entrada por NF, dispensação, saída
+   * em lote e devolução já exigiam lote — este era o único caminho solto, e
+   * por ele passaram 154 itens sem lote nenhum, TODOS medicamento.
+   *
+   * Cada saída sem lote baixa o saldo e não baixa lote, deixando as duas
+   * contabilidades divergentes (foi assim que a Metadona ficou 175 x 180) e
+   * apagando a rastreabilidade que a Portaria 344/98 exige.
+   *
+   * A regra é só para MEDICAMENTO. Material da farmácia (MAT/MED — curativos,
+   * gaze, clorexidina) segue livre: nenhum deles usou a brecha.
+   *
+   * Só valida item que está de fato saindo (quantidade fornecida > 0).
+   */
+  const validarLoteMedicamentos = async (
+    fornecidos: Record<string, number>,
+  ): Promise<Array<{ nome: string; falta: string }>> => {
+    const ids = (request.request_items || [])
+      .map((it) => it.id)
+      .filter((id) => (fornecidos[id] || 0) > 0)
+    if (ids.length === 0) return []
+
+    const [{ data: itens }, { data: lotes }] = await Promise.all([
+      supabase
+        .from('request_items')
+        .select('id, item_name, pharmacy_item:pharmacy_items(category)')
+        .in('id', ids),
+      supabase
+        .from('request_item_lots')
+        .select('request_item_id, batch_number, expiry_date, quantity, expiry_tracking_id')
+        .in('request_item_id', ids),
+    ])
+
+    const porItem = new Map<string, Array<any>>()
+    for (const l of (lotes || []) as any[]) {
+      const arr = porItem.get(l.request_item_id) ?? []
+      arr.push(l)
+      porItem.set(l.request_item_id, arr)
+    }
+
+    const pendencias: Array<{ nome: string; falta: string }> = []
+    for (const it of (itens || []) as any[]) {
+      const categoria = String(it.pharmacy_item?.category ?? '').toUpperCase()
+      // 'MEDICAMENTO' e 'Medicamentos' entram; 'MAT/MED' não (começa com MAT).
+      if (!categoria.startsWith('MEDICAMENTO')) continue
+
+      const doItem = (porItem.get(it.id) ?? []).filter((l) => (Number(l.quantity) || 0) > 0)
+      const nome = it.item_name || '(item)'
+      if (doItem.length === 0) {
+        pendencias.push({ nome, falta: 'lote e validade' })
+        continue
+      }
+      const semLote = doItem.some((l) => !(l.batch_number || '').trim() && !l.expiry_tracking_id)
+      const semValidade = doItem.some((l) => !l.expiry_date)
+      if (semLote && semValidade) pendencias.push({ nome, falta: 'lote e validade' })
+      else if (semLote) pendencias.push({ nome, falta: 'o número do lote' })
+      else if (semValidade) pendencias.push({ nome, falta: 'a validade' })
+    }
+    return pendencias
+  }
+
   // Executa a aprovação de fato (chamado direto ou após confirmar o negativo).
   const executarAprovacao = async () => {
     try {
@@ -319,7 +386,15 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
     if (!isPharmacyRequest) { executarAprovacao(); return }
     setLoading(true)
     const fornecidos = await lerFornecidos()
+    // Lote/validade de medicamento vem ANTES do aviso de saldo negativo: é
+    // bloqueio, não alerta — não existe "estou ciente" que o dispense.
+    const semLote = await validarLoteMedicamentos(fornecidos)
     setLoading(false)
+    if (semLote.length > 0) {
+      setItensSemLote(semLote)
+      setShowLoteDialog(true)
+      return
+    }
     const semSaldo = (request.request_items || [])
       .map((it) => ({
         nome: it.item?.name || '(item)',
@@ -561,6 +636,43 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
           </div>
         </div>
       )}
+
+      {/* Medicamento sem lote/validade — bloqueio, não aviso: não há botão de
+          seguir mesmo assim. A saída sem lote quebra a rastreabilidade e
+          desencontra saldo e lotes. */}
+      <Dialog open={showLoteDialog} onOpenChange={setShowLoteDialog}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-700">
+              <AlertTriangle className="w-5 h-5" />
+              Falta informar o lote
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-gray-700">
+              Medicamento não pode ser atendido sem <strong>lote e validade</strong>.
+              Informe na coluna <strong>Lote(s)</strong> de cada item abaixo e aprove de novo.
+            </p>
+            <div className="rounded-lg border border-red-200 bg-red-50 divide-y divide-red-200 max-h-48 overflow-y-auto">
+              {itensSemLote.map((x, i) => (
+                <div key={i} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                  <span className="text-red-900 truncate">{x.nome}</span>
+                  <span className="text-red-700 flex-shrink-0 text-xs">falta {x.falta}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500">
+              Se o medicamento está na prateleira mas o lote não aparece na lista, use a opção
+              de digitar o lote na hora — basta o número impresso na caixa e a validade.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setShowLoteDialog(false)} className="bg-red-600 hover:bg-red-700 text-white">
+              Entendi
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* FA5: confirmação de saída sem saldo no sistema (estoque fica negativo) */}
       <Dialog open={showNegativoDialog} onOpenChange={(o) => { setShowNegativoDialog(o); if (!o) setNegativoCiente(false) }}>
