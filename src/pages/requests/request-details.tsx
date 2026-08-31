@@ -345,6 +345,16 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     return raw ? raw.split('\n').filter(Boolean) : []
   })
   const [newNote, setNewNote] = useState('')
+  const gravaNoBlur = requestType === 'warehouse'
+  // Uma unica porta de gravacao da nota: Enter, blur e botao '+'.
+  const gravarNota = () => {
+    const texto = newNote.trim()
+    if (!texto) return
+    const updated = [...observations, texto]
+    setObservations(updated)
+    saveField('observation', updated.join('\n'))
+    setNewNote('')
+  }
   const [checked, setChecked] = useState(item.is_checked || false)
   const saveField = async (field: string, value: any) => {
     try {
@@ -705,30 +715,28 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
         )}
         {canEdit && (
           <div className="flex gap-1">
+            {/* Todo campo desta linha (quantidade, lote, validade) grava no
+                blur. So a observacao exigia Enter ou o botao "+": quem digitava
+                e clicava em outro campo perdia o texto sem aviso nenhum. Deu 1
+                observacao gravada em 4004 itens desde que o campo existe. */}
             <input
               type="text"
               value={newNote}
               onChange={(e) => setNewNote(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newNote.trim()) {
-                  const updated = [...observations, newNote.trim()]
-                  setObservations(updated)
-                  saveField('observation', updated.join('\n'))
-                  setNewNote('')
-                }
-              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') gravarNota() }}
+              // Gravar no blur so no ALMOXARIFADO. A farmacia tem o mesmo
+              // campo e o mesmo defeito, mas mexer nela aqui e mudanca de
+              // outro modulo: e trocar `gravaNoBlur` por true quando o dono
+              // liberar. Enter e o "+" seguem funcionando nos dois.
+              onBlur={gravaNoBlur ? () => gravarNota() : undefined}
               placeholder="Anotar..."
               className="flex-1 h-7 px-2 text-xs border border-gray-300 rounded bg-white"
             />
+            {/* O "+" continua: e a affordance visivel de "adicionar mais uma".
+                O blur ja gravou antes do clique chegar, entao aqui vira no-op
+                (newNote ja esta vazio) — nao duplica a nota. */}
             <button
-              onClick={() => {
-                if (newNote.trim()) {
-                  const updated = [...observations, newNote.trim()]
-                  setObservations(updated)
-                  saveField('observation', updated.join('\n'))
-                  setNewNote('')
-                }
-              }}
+              onClick={() => gravarNota()}
               className="text-xs bg-emerald-500 text-white px-2 rounded hover:bg-emerald-600"
             >+</button>
           </div>
