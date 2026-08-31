@@ -25,7 +25,10 @@ import { AddStockDialog } from '@/components/inventory/add-stock-dialog'
 interface StockEntry {
   id: string
   quantity: number
-  type: 'addition' | 'request'
+  // 'movement' vem do livro-razão da farmácia (dispensação, devolução,
+  // transferência, baixa, ajuste). Em 'movement', `status` carrega a direção
+  // ('in' | 'out'), que define sinal e cor.
+  type: 'addition' | 'request' | 'movement'
   description: string
   created_by: string
   created_at: string
@@ -427,10 +430,16 @@ export function ItemDetails() {
                           <span className={`h-8 w-8 rounded-full flex items-center justify-center ring-8 ring-white ${
                             event.type === 'addition'
                               ? 'bg-green-100 text-green-600'
-                              : 'bg-blue-100 text-blue-600'
+                              : event.type === 'movement'
+                                ? (event.status === 'out'
+                                    ? 'bg-red-100 text-red-600'
+                                    : 'bg-emerald-100 text-emerald-700')
+                                : 'bg-blue-100 text-blue-600'
                           }`}>
                             {event.type === 'addition' ? (
                               <Plus className="w-5 h-5" />
+                            ) : event.type === 'movement' ? (
+                              <History className="w-5 h-5" />
                             ) : (
                               <Package2 className="w-5 h-5" />
                             )}
@@ -449,6 +458,19 @@ export function ItemDetails() {
                                     {event.quantity} {item.unit}
                                   </span>{' '}
                                   ao estoque
+                                </>
+                              ) : event.type === 'movement' ? (
+                                <>
+                                  <span className="font-medium text-gray-900">
+                                    {event.created_by}
+                                  </span>{' '}
+                                  — {event.description}:{' '}
+                                  <span className={`font-medium ${event.status === 'out' ? 'text-red-600' : 'text-emerald-700'}`}>
+                                    {event.status === 'out' ? '−' : '+'}{Math.abs(event.quantity)} {item.unit}
+                                  </span>
+                                  {event.batch_number && (
+                                    <span className="text-gray-400"> · lote {event.batch_number}</span>
+                                  )}
                                 </>
                               ) : (
                                 <>

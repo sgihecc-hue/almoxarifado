@@ -86,7 +86,10 @@ export interface Item {
 interface StockEntry {
   id: string
   quantity: number
-  type: 'addition' | 'request'
+  // 'movement' = linha vinda do livro-razão (stock_movements): dispensação,
+  // devolução, transferência, baixa, ajuste. Só a farmácia produz essas —
+  // ver getStockHistory.
+  type: 'addition' | 'request' | 'movement'
   description: string
   created_by: string
   created_at: string
@@ -621,39 +624,82 @@ class ItemsService {
           }
         });
       }
-      
-      // Enhanced error handling and data validation for requests
-      if (requestItems && Array.isArray(requestItems)) {
-        requestItems.forEach(request => {
-          try {
-            if (!request || !request.requests) return;
-            
-            const requestData = request.requests as any;
-            if (!requestData.status || requestData.status === 'cancelled') return;
-            
-            const quantity = request.approved_quantity || request.quantity;
-            if (typeof quantity !== 'number' || quantity <= 0) return;
 
-            const userName = userMap.get(requestData.requester_id) || 'Sistema';
-            
-            stockHistory.push({
-              id: `${request.id}_item`,
-              type: 'request',
-              quantity: quantity,
-              description: `Solicitação #${request.request_id}`,
-              created_by: userName,
-              created_at: request.created_at,
-              reference_id: request.request_id,
-              status: requestData.status
-            });
-          } catch (error) {
-            console.warn('Error processing request item:', error);
+      // ---------------------------------------------------------------
+      // Livro-razão (stock_movements) — SÓ FARMÁCIA.
+      //
+      // Sem isto a linha do tempo era cega para tudo que a farmácia faz de
+      // verdade: dispensação, devolução, transferência entre satélites,
+      // baixa avulsa e ajuste não apareciam em lugar nenhum. Quem dispensou
+      // um medicamento era informação que existia no banco e não na tela.
+      //
+      // Dois tipos ficam DE FORA de propósito, porque já estão na lista por
+      // outra fonte e entrariam em duplicidade:
+      //   SOLICITACAO  -> já vem de request_items acima
+      //   ENTRADA_NF   -> já vem de expiry_tracking acima
+      //
+      // O ramo 'warehouse' não é tocado: continua exatamente como estava.
+      // ---------------------------------------------------------------
+      if (type === 'pharmacy') {
+        try {
+          const { data: movs, error: movErr } = await supabase
+            .from('stock_movements')
+            .select(`
+              id, movement_type, direction, quantity, performed_at, notes,
+              performed_by,
+              expiry_tracking:expiry_tracking!stock_movements_expiry_tracking_id_fkey(batch_number, expiry_date),
+              origem:stock_locations!stock_movements_source_location_id_fkey(code),
+              destino:stock_locations!stock_movements_target_location_id_fkey(code)
+            `)
+            .eq('item_id', id)
+            .eq('item_type', 'pharmacy')
+            .not('movement_type', 'in', '("SOLICITACAO","ENTRADA_NF")')
+            .order('performed_at', { ascending: false })
+            .limit(300)
+
+          if (movErr) {
+            console.error('Error fetching stock movements:', movErr)
+          } else if (movs && movs.length > 0) {
+            const autorIds = [...new Set(movs.map((m: any) => m.performed_by).filter(Boolean))]
+            const autores = new Map<string, string>()
+            if (autorIds.length > 0) {
+              const { data: us } = await supabase
+                .from('users').select('id, full_name').in('id', autorIds)
+              ;(us || []).forEach((u: any) => autores.set(u.id, u.full_name))
+            }
+
+            const ACAO: Record<string, string> = {
+              PRESCRICAO: 'Dispensação',
+              DEVOLUCAO_INT: 'Devolução da enfermagem',
+              SAIDA_AVULSA: 'Baixa (quebra, vencimento, empréstimo)',
+              TRANSFERENCIA: 'Transferência entre estoques',
+              AJUSTE: 'Ajuste manual',
+              RETORNO_EMPRESTIMO: 'Retorno de empréstimo',
+            }
+
+            movs.forEach((m: any) => {
+              const local = m.direction === 'out' ? m.origem?.code : m.destino?.code
+              const acao = ACAO[m.movement_type] || m.movement_type
+              stockHistory.push({
+                id: `mov_${m.id}`,
+                type: 'movement',
+                quantity: m.quantity,
+                description: local ? `${acao} · ${local}` : acao,
+                created_by: autores.get(m.performed_by) || 'Sistema',
+                created_at: m.performed_at,
+                batch_number: m.expiry_tracking?.batch_number || undefined,
+                expiry_date: m.expiry_tracking?.expiry_date || undefined,
+                status: m.direction, // 'in' | 'out' — a tela usa pra cor e sinal
+              })
+            })
           }
-        });
+        } catch (e) {
+          console.error('Error building movement history:', e)
+        }
       }
 
       // Sort by date (newest first)
-      const uniqueHistory = stockHistory.filter((item, index, self) => 
+      const uniqueHistory = stockHistory.filter((item, index, self) =>
         index === self.findIndex(t => t.id === item.id)
       );
       
