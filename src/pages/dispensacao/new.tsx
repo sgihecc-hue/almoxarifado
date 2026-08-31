@@ -22,6 +22,10 @@ interface SelectedItem {
   unit: string
   is_mav: boolean
   medication_class: string | null
+  // Categoria do catálogo. É ela — e não medication_class, que está como
+  // 'uso_geral' até nos curativos — que diz se o item é MEDICAMENTO. Define a
+  // exigência de lote E validade (ver ehMedicamento abaixo).
+  category: string | null
   // lote escolhido (FEFO por padrão; pode trocar no seletor)
   expiry_tracking_id: string | null
   batch_number: string | null
@@ -43,6 +47,7 @@ interface PharmacyItemRow {
   current_stock: number
   is_mav: boolean
   medication_class: string | null
+  category: string | null
 }
 
 interface LotRow {
@@ -200,6 +205,23 @@ export function NewDispensation() {
   // sem lote/validade, e a baixa vai pela RPC criar_saida_material.
   const isMaterial = activeStock?.itemType === 'warehouse'
 
+  // MEDICAMENTO exige lote E validade para ser dispensado. Antes o lote já era
+  // obrigatório, mas a validade não: lote com validade em branco passava, e há
+  // 3 lotes assim com saldo. Material da farmácia (MAT/MED) e o Satélite Térreo
+  // (material) seguem sem a exigência. Categoria é o critério — medication_class
+  // está como 'uso_geral' até em curativo e não separa nada.
+  const ehMedicamento = (i: SelectedItem) =>
+    String(i.category ?? '').toUpperCase().startsWith('MEDICAMENTO')
+  // Itens que travam o avanço, com o motivo — usado na mensagem da tela.
+  const medsSemRastreio = useMemo(
+    () => selectedItems
+      .filter((i) => !isMaterial && ehMedicamento(i))
+      .filter((i) => !i.expiry_tracking_id || !i.expiry_date)
+      .map((i) => ({ nome: i.name, falta: !i.expiry_tracking_id ? 'lote' : 'validade' })),
+    [selectedItems, isMaterial]
+  )
+
+
   useEffect(() => {
     const t = setTimeout(async () => {
       const q = itemSearch.trim()
@@ -218,7 +240,7 @@ export function NewDispensation() {
             .limit(20)
         : await supabase
             .from('pharmacy_items')
-            .select('id, code, name, unit, current_stock, is_mav, medication_class')
+            .select('id, code, name, unit, current_stock, is_mav, medication_class, category')
             .eq('is_active', true)
             .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
             .order('name')
@@ -287,6 +309,7 @@ export function NewDispensation() {
         {
           item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
           is_mav: item.is_mav, medication_class: item.medication_class,
+          category: item.category,
           expiry_tracking_id: fefo?.id ?? null,
           batch_number: fefo?.batch_number ?? null,
           expiry_date: fefo?.expiry_date ?? null,
@@ -479,13 +502,13 @@ export function NewDispensation() {
   const canAdvance: boolean[] = isRequisicao
     ? [
         !!selectedSector,
-        selectedItems.length > 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
+        selectedItems.length > 0 && medsSemRastreio.length === 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
         true,
       ]
     : [
         !!selectedPatient,
         !!prescriptionDate && !!selectedPresc,
-        selectedItems.length > 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
+        selectedItems.length > 0 && medsSemRastreio.length === 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
         true,
       ]
 
@@ -944,6 +967,24 @@ export function NewDispensation() {
                   </div>
                 )
               })}
+            </div>
+          )}
+
+          {/* Sem isto o botão "Revisar Resumo" ficava cinza sem explicação. */}
+          {medsSemRastreio.length > 0 && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2 text-sm">
+              <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <div className="text-red-800">
+                <p><strong>Medicamento não é dispensado sem lote e validade.</strong> Falta:</p>
+                <ul className="mt-1 space-y-0.5">
+                  {medsSemRastreio.map((m, i) => (
+                    <li key={i}>• {m.nome} — falta <strong>{m.falta}</strong></li>
+                  ))}
+                </ul>
+                <p className="mt-1 text-xs text-red-700">
+                  Se o lote não tem validade cadastrada, corrija no estoque antes de dispensar.
+                </p>
+              </div>
             </div>
           )}
 
