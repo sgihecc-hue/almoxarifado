@@ -68,12 +68,20 @@ export function VencimentosABaixar() {
     setLoadingWriteoff(true)
     setError('')
     try {
+      // Resolucao de alerta: farmacia grava em expiry_alert_resolutions
+      // (chave real de expiry_tracking). Almoxarifado nao tem linha de lote
+      // propria — a view empresta warehouse_items.id — entao usa tabela
+      // propria (warehouse_expiry_resolutions), sem tocar na da farmacia.
+      const resQuery = isWarehouse
+        ? supabase.from('warehouse_expiry_resolutions').select('warehouse_item_id, color_band')
+        : supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band')
+
       const [alertData, writeoffData, locs, resData] = await Promise.all([
         // Só itens do módulo atual — a view junta farmácia + almoxarifado.
         supabase.from('v_itens_a_vencer').select('*').eq('item_type', itemType).order('expiry_date'),
         stockService.listExpiringToWriteoff(),
         stockService.getLocations(),
-        supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
+        resQuery,
       ])
 
       if (alertData.error) throw alertData.error
@@ -84,10 +92,11 @@ export function VencimentosABaixar() {
       const caf = locs.find((l) => l.code === 'CAF')
       if (caf) setCafLocationId(caf.id)
 
-      // Construir set de resolvidos: "expiry_tracking_id__color_band"
+      // Construir set de resolvidos: "id__color_band"
       const resolvedSet = new Set<string>()
       ;(resData.data || []).forEach((r: any) => {
-        resolvedSet.add(`${r.expiry_tracking_id}__${r.color_band}`)
+        const id = isWarehouse ? r.warehouse_item_id : r.expiry_tracking_id
+        resolvedSet.add(`${id}__${r.color_band}`)
       })
       setResolutions(resolvedSet)
     } catch (e: any) {
@@ -115,11 +124,19 @@ export function VencimentosABaixar() {
     if (!user?.id) return
     setResolvingId(row.expiry_tracking_id)
     try {
-      const { error: e } = await supabase.from('expiry_alert_resolutions').insert({
-        expiry_tracking_id: row.expiry_tracking_id,
-        color_band: row.color_band,
-        resolved_by: user.id,
-      })
+      // row.expiry_tracking_id aqui e o warehouse_items.id (view empresta
+      // esse id pro almoxarifado) — grava na tabela propria dele.
+      const { error: e } = isWarehouse
+        ? await supabase.from('warehouse_expiry_resolutions').insert({
+            warehouse_item_id: row.expiry_tracking_id,
+            color_band: row.color_band,
+            resolved_by: user.id,
+          })
+        : await supabase.from('expiry_alert_resolutions').insert({
+            expiry_tracking_id: row.expiry_tracking_id,
+            color_band: row.color_band,
+            resolved_by: user.id,
+          })
       if (e) throw e
       setResolutions((prev) => new Set([...prev, `${row.expiry_tracking_id}__${row.color_band}`]))
     } catch (e: any) {
