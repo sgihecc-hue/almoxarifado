@@ -107,12 +107,13 @@ export function AdminWarehouseConsumptionManagement() {
   async function loadItems() {
     try {
       setLoading(true)
-      const data = await itemsService.getAll()
-      
-      // Filter only warehouse items
-      const warehouseItems = data.filter(item => 
-        ['Material de Escritório', 'Material de Limpeza', 'Equipamentos', 'Outros'].includes(item.category)
-      )
+      // getByType('warehouse') consulta so warehouse_items — getAll() (usado
+      // antes) junta farmacia+almoxarifado, e o filtro de categoria abaixo
+      // usava nomes ficticios que nao existem no cadastro real (que e
+      // MATERIAL HOSPITALAR / MATERIAL DE EXPEDIENTE / EPI). Resultado: lista
+      // de itens sempre vazia, pra qualquer administrador, desde sempre.
+      const data = await itemsService.getByType('warehouse')
+      const warehouseItems = data
       
       setItems(warehouseItems)
     } catch (error) {
@@ -530,10 +531,9 @@ export function AdminWarehouseConsumptionManagement() {
               className="w-full mt-1 h-9 rounded-md border border-input px-3 py-1"
             >
               <option value="">Todas as Categorias</option>
-              <option value="Material de Escritório">Material de Escritório</option>
-              <option value="Material de Limpeza">Material de Limpeza</option>
-              <option value="Equipamentos">Equipamentos</option>
-              <option value="Outros">Outros</option>
+              <option value="MATERIAL HOSPITALAR">Material Hospitalar</option>
+              <option value="MATERIAL DE EXPEDIENTE">Material de Expediente</option>
+              <option value="EPI">EPI</option>
             </select>
           </div>
           <div>

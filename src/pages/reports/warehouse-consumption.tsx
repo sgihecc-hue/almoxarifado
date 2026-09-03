@@ -110,7 +110,9 @@ export function WarehouseConsumptionReport() {
     showValueData: true,
     includeLowStockWarnings: true,
     topItemsCount: 10,
-    categories: ['Material de Escritório', 'Material de Limpeza', 'Equipamentos', 'Outros'],
+    // Categorias reais do almoxarifado (conferido no banco). As antigas
+    // ('Material de Escritório' etc.) nao existem em nenhum item.
+    categories: ['MATERIAL HOSPITALAR', 'MATERIAL DE EXPEDIENTE', 'EPI'],
     showDepartmentBreakdown: true,
     showCategoryBreakdown: true
   })
@@ -187,13 +189,19 @@ export function WarehouseConsumptionReport() {
     try {
       setLoading(true)
       setError(null)
-      const data = await itemsService.getAll()
-      
-      // Filter only warehouse items
-      const warehouseItems = data.filter(item => 
-        settings.categories.includes(item.category)
-      )
-      
+      // getByType('warehouse') consulta so warehouse_items — getAll() (usado
+      // antes) junta farmacia+almoxarifado, e o filtro por categoria abaixo
+      // usava nomes ficticios ('Material de Escritorio' etc.) que nao existem
+      // no cadastro real (que e MATERIAL HOSPITALAR / MATERIAL DE EXPEDIENTE
+      // / EPI). Resultado: a lista de itens ficava sempre vazia — nenhum
+      // item pra filtrar e o relatorio inteiro (Visao Geral/Por Categoria)
+      // sem dados, pra qualquer usuario, desde sempre.
+      const data = await itemsService.getByType('warehouse')
+
+      const warehouseItems = settings.categories.length === 0
+        ? data
+        : data.filter(item => settings.categories.includes(item.category))
+
       setItems(warehouseItems)
       
     } catch (error) {
@@ -1169,65 +1177,49 @@ export function WarehouseConsumptionReport() {
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    id="category-escritorio"
-                    checked={settings.categories.includes('Material de Escritório')}
+                    id="category-hospitalar"
+                    checked={settings.categories.includes('MATERIAL HOSPITALAR')}
                     onChange={(e) => {
                       const newCategories = e.target.checked
-                        ? [...settings.categories, 'Material de Escritório']
-                        : settings.categories.filter(c => c !== 'Material de Escritório')
+                        ? [...settings.categories, 'MATERIAL HOSPITALAR']
+                        : settings.categories.filter(c => c !== 'MATERIAL HOSPITALAR')
                       setSettings({...settings, categories: newCategories})
                     }}
                     className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   />
-                  <Label htmlFor="category-escritorio">Material de Escritório</Label>
+                  <Label htmlFor="category-hospitalar">Material Hospitalar</Label>
                 </div>
-                
+
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    id="category-limpeza"
-                    checked={settings.categories.includes('Material de Limpeza')}
+                    id="category-expediente"
+                    checked={settings.categories.includes('MATERIAL DE EXPEDIENTE')}
                     onChange={(e) => {
                       const newCategories = e.target.checked
-                        ? [...settings.categories, 'Material de Limpeza']
-                        : settings.categories.filter(c => c !== 'Material de Limpeza')
+                        ? [...settings.categories, 'MATERIAL DE EXPEDIENTE']
+                        : settings.categories.filter(c => c !== 'MATERIAL DE EXPEDIENTE')
                       setSettings({...settings, categories: newCategories})
                     }}
                     className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   />
-                  <Label htmlFor="category-limpeza">Material de Limpeza</Label>
+                  <Label htmlFor="category-expediente">Material de Expediente</Label>
                 </div>
-                
+
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    id="category-equipamentos"
-                    checked={settings.categories.includes('Equipamentos')}
+                    id="category-epi"
+                    checked={settings.categories.includes('EPI')}
                     onChange={(e) => {
                       const newCategories = e.target.checked
-                        ? [...settings.categories, 'Equipamentos']
-                        : settings.categories.filter(c => c !== 'Equipamentos')
+                        ? [...settings.categories, 'EPI']
+                        : settings.categories.filter(c => c !== 'EPI')
                       setSettings({...settings, categories: newCategories})
                     }}
                     className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   />
-                  <Label htmlFor="category-equipamentos">Equipamentos</Label>
-                </div>
-                
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="category-outros"
-                    checked={settings.categories.includes('Outros')}
-                    onChange={(e) => {
-                      const newCategories = e.target.checked
-                        ? [...settings.categories, 'Outros']
-                        : settings.categories.filter(c => c !== 'Outros')
-                      setSettings({...settings, categories: newCategories})
-                    }}
-                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <Label htmlFor="category-outros">Outros</Label>
+                  <Label htmlFor="category-epi">EPI</Label>
                 </div>
               </div>
             </div>
