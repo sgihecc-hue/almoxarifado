@@ -225,39 +225,26 @@ export function WarehouseConsumptionReport() {
   async function loadConsumptionFromDatabase() {
     try {
       setError(null)
-      
-      // Get real warehouse consumption entries from database
-      const { data: consumptionEntries, error: consumptionError } = await supabase
-        .from('warehouse_consumption_entries')
-        .select(`
-          *,
-          item:warehouse_items!warehouse_consumption_entries_item_id_fkey(
-            id,
-            name,
-            code,
-            category,
-            unit,
-            price
-          ),
-          department:departments!warehouse_consumption_entries_department_id_fkey(
-            id,
-            name,
-            code
-          ),
-          created_by_user:users!warehouse_consumption_entries_created_by_fkey(
-            full_name
-          )
-        `)
-        .gte('date', format(dateRange.start, 'yyyy-MM-dd'))
-        .lte('date', format(dateRange.end, 'yyyy-MM-dd'))
-        .order('date', { ascending: true })
+
+      // v_warehouse_consumption une as 3 fontes reais de saida do almoxarifado:
+      // solicitacao entregue (a maioria — debitada por trigger, sem tabela de
+      // historico propria), saida avulsa/quebra (stock_movements) e lancamento
+      // manual (warehouse_consumption_entries, tela do admin). Essa ultima
+      // tabela sozinha (usada antes aqui) tinha 0 linhas desde que existe —
+      // o relatorio mostrava 0 pra qualquer item, qualquer periodo, sempre.
+      const { data: rows, error: consumptionError } = await supabase
+        .from('v_warehouse_consumption')
+        .select('item_id, quantity, department_id, consumption_date')
+        .gte('consumption_date', format(dateRange.start, 'yyyy-MM-dd'))
+        .lte('consumption_date', format(dateRange.end, 'yyyy-MM-dd'))
+        .order('consumption_date', { ascending: true })
 
       if (consumptionError) {
         console.error('Error fetching warehouse consumption data:', consumptionError)
         throw new Error('Erro ao carregar dados de consumo do banco')
       }
-      
-      if (!consumptionEntries || !Array.isArray(consumptionEntries)) {
+
+      if (!rows || !Array.isArray(rows)) {
         console.warn('No warehouse consumption data found')
         setConsumptionData([])
         setStats({
@@ -273,19 +260,20 @@ export function WarehouseConsumptionReport() {
         })
         return
       }
-      
-      // Convert to expected format
-      const processedEntries = consumptionEntries
-        .filter(entry => entry && entry.item && entry.department)
-        .map(entry => ({
-          item: entry.item,
-          department: entry.department,
-          quantity: entry.quantity,
-          date: entry.date,
-          notes: entry.notes,
-          created_by: entry.created_by_user?.full_name || 'Sistema',
-          created_at: entry.created_at
-        }))
+
+      // A view so devolve ids — resolve item/setor com o que ja esta
+      // carregado no componente (items ja filtrado por categoria valida).
+      const itemById = new Map(items.map(i => [i.id, i]))
+      const deptById = new Map(departments.map(d => [d.id, d]))
+
+      const processedEntries = rows
+        .map(row => {
+          const item = itemById.get(row.item_id)
+          const department = deptById.get(row.department_id)
+          if (!item || !department) return null
+          return { item, department, quantity: Number(row.quantity), date: row.consumption_date }
+        })
+        .filter((e): e is { item: Item; department: Department; quantity: number; date: string } => e !== null)
       
       // Filter by department if selected
       const departmentFilteredEntries = selectedDepartment !== 'all' 
@@ -418,7 +406,7 @@ export function WarehouseConsumptionReport() {
       }
     } catch (error) {
       console.error('Error processing consumption data:', error)
-      setError('Erro ao carregar dados de consumo do banco. Verifique se há registros na tabela warehouse_consumption_entries.')
+      setError('Erro ao carregar dados de consumo do banco.')
       // Set empty data on error
       setConsumptionData([])
       setStats({
