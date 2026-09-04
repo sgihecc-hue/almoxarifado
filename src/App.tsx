@@ -85,6 +85,7 @@ import { ChangePassword } from '@/pages/change-password'
 import { LivroControlados } from '@/pages/farmacia/livro-controlados'
 import { Talidomida } from '@/pages/farmacia/talidomida'
 import { Perdas } from '@/pages/farmacia/perdas'
+import { EtiquetasFarmacia } from '@/pages/farmacia/etiquetas'
 import { NotificacaoReceita } from '@/pages/farmacia/notificacao-receita'
 import { BMPO } from '@/pages/farmacia/bmpo'
 import { MovimentacaoDiaria } from '@/pages/farmacia/movimentacao-diaria'
@@ -590,6 +591,13 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <Perdas />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/farmacia/etiquetas" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <EtiquetasFarmacia />
                   </MainLayout>
                 </ProtectedRoute>
               } />

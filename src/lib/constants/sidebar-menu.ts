@@ -161,6 +161,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Devoluções', icon: Undo2, href: '/estoque/devolucao', show: () => true },
         { name: 'Empréstimos', icon: Handshake, href: '/estoque/emprestimos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Vencimentos', icon: CalendarX, href: '/estoque/vencimentos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Etiquetas de Lote', icon: Barcode, href: '/farmacia/etiquetas', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
       ],
     },
     {
