@@ -94,11 +94,23 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     }
   }
 
-  componentDidMount() {
-    // Check connection periodically
-    this.connectionCheckInterval = setInterval(() => {
+  // isSupabaseConnected so e lido no fallback de erro (linha do "Problema de
+  // conexao" abaixo). Antes o poll de 30s rodava sempre, em toda instancia
+  // de ErrorBoundary (3 no app inteiro, uma delas na raiz — ativa 24h, em
+  // toda aba aberta, painel de TV incluso), mesmo com o sistema saudavel:
+  // resultado ficava sem uso nenhum a maior parte do tempo. So faz sentido
+  // saber a conexao QUANDO ha erro pra mostrar; entao so verifica (e so
+  // repete a verificacao) enquanto o fallback esta na tela.
+  componentDidUpdate(_prevProps: ErrorBoundaryProps, prevState: ErrorBoundaryState) {
+    if (!prevState.hasError && this.state.hasError) {
       this.checkSupabaseConnection()
-    }, 30000) // Check every 30 seconds
+      this.connectionCheckInterval = setInterval(() => {
+        this.checkSupabaseConnection()
+      }, 30000)
+    } else if (prevState.hasError && !this.state.hasError && this.connectionCheckInterval) {
+      clearInterval(this.connectionCheckInterval)
+      this.connectionCheckInterval = undefined
+    }
   }
 
   handleRetry = () => {
