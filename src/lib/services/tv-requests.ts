@@ -49,9 +49,16 @@ export interface SuppliedItemData {
 }
 
 class TVRequestService {
-  async getAll(type: RequestType): Promise<TVRequest[]> {
+  // statuses: quando informado, filtra no BANCO em vez de trazer tudo e
+  // descartar no navegador. O painel de TV (autoRefresh a cada 60s, ligado
+  // 24h) so mostra pending/approved/processing mas buscava os 200 pedidos
+  // mais recentes de QUALQUER status pra depois jogar fora quase todos no
+  // cliente — medido em ~230-290 KB por chamada, por painel, todo minuto
+  // (~740 MB/dia so os dois paineis). tv-history.tsx precisa do historico
+  // completo, por isso o filtro e opcional, nao embutido direto na query.
+  async getAll(type: RequestType, statuses?: RequestStatus[]): Promise<TVRequest[]> {
     try {
-      const { data: requests, error } = await supabase
+      let query = supabase
         .from('requests')
         .select(`
           *,
@@ -70,6 +77,12 @@ class TVRequestService {
           )
         `)
         .eq('type', type)
+
+      if (statuses && statuses.length > 0) {
+        query = query.in('status', statuses)
+      }
+
+      const { data: requests, error } = await query
         .order('created_at', { ascending: false })
         .limit(200)
 

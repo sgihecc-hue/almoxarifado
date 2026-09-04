@@ -163,7 +163,7 @@ export default function WarehouseTVDashboard() {
     try {
       setLoading(true)
       setError(null)
-      const data = await tvRequestService.getAll('warehouse')
+      const data = await tvRequestService.getAll('warehouse', ['pending', 'approved', 'processing'])
       const activeRequests = data.filter(r => ['pending', 'approved', 'processing'].includes(r.status))
       if (prevCount !== null && activeRequests.length > prevCount) {
         playAlertSound()

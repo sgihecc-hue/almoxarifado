@@ -164,7 +164,7 @@ export default function PharmacyTVDashboard() {
     try {
       setLoading(true)
       setError(null)
-      const data = await tvRequestService.getAll('pharmacy')
+      const data = await tvRequestService.getAll('pharmacy', ['pending', 'approved', 'processing'])
       const activeRequests = data.filter(r => ['pending', 'approved', 'processing'].includes(r.status))
       // Play alert if new requests arrived
       if (prevCount !== null && activeRequests.length > prevCount) {
