@@ -15,6 +15,7 @@ import { RequestDetails, type RequestDetails as RequestDetailsType } from './com
 import { RequestItems, type RequestItem } from './components/request-items'
 import { RequestReview } from './components/request-review'
 import { InventoryNoticeAlmox } from '@/components/inventory-notice-almox'
+import { CampanhaUsoRacionalAlmox } from '@/components/campanha-uso-racional-almox'
 import { requestService } from '@/lib/services/requests'
 import { requestDraftsService } from '@/lib/services/request-drafts'
 import { useTheme } from '@/contexts/theme'
@@ -314,6 +315,10 @@ export function NewRequest() {
     <div className="max-w-5xl mx-auto space-y-8">
       {/* Aviso do Inventário Rotativo do Almoxarifado — só p/ pedido de almox */}
       <InventoryNoticeAlmox active={requestType === 'warehouse'} />
+
+      {/* Campanha de uso racional de materiais — só p/ pedido de almox,
+          toda vez, ate 10/10/2026 (a data mora no proprio componente) */}
+      <CampanhaUsoRacionalAlmox active={requestType === 'warehouse'} />
 
       {/* Pending Draft Banner - aguarda decisao do usuario */}
       {pendingDraft && draftSavedAt && !draftDismissed && (
