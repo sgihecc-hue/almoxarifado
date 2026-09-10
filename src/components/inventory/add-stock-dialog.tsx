@@ -26,7 +26,18 @@ const stockEntrySchema = z.object({
   invoice_number: z.string().min(1, 'Numero da nota fiscal e obrigatorio'),
   invoice_date: z.string().min(1, 'Data de emissao e obrigatoria'),
   invoice_total_value: z.number().min(0, 'Valor total deve ser maior ou igual a 0'),
-  expiry_date: z.string().optional(),
+  // Validade fora da faixa era escorregao de dedo no ano (0208, 0554, 8027) e
+  // tirava o lote do controle de vencimento — ele nunca mais caia na janela de
+  // alerta. Mesma faixa do gatilho trg_valida_validade_almox no banco; aqui e
+  // so para o usuario ver o erro no campo em vez de tomar erro do servidor.
+  expiry_date: z.string().optional().refine(
+    (v) => {
+      if (!v) return true
+      const ano = Number(v.slice(0, 4))
+      return ano >= 2015 && ano <= new Date().getFullYear() + 30
+    },
+    { message: 'Validade parece digitada errada. Confira o ano.' }
+  ),
   afm_number: z.string().min(1, 'Numero da AFM e obrigatorio'),
   supplier_cnpj: z.string().min(1, 'CNPJ do fornecedor e obrigatorio'),
   supplier_name: z.string().min(1, 'Nome do fornecedor e obrigatorio'),
@@ -152,23 +163,70 @@ export function AddStockDialog({ item, type, open, onOpenChange, onSuccess }: Ad
         }
 
         if (data.expiry_date && data.batch_number) {
-          await supabase
+          // NAO inserir as cegas: ate 10/09/2026 esta tela SEMPRE criava linha
+          // nova em expiry_tracking. Reentrada do mesmo lote (o caso comum:
+          // segunda caixa da mesma nota, ou nota parcelada) virava um segundo
+          // lote com o mesmo numero. A saida depois cai num deles e o outro
+          // afunda para negativo. Era a origem de boa parte dos 63 lotes
+          // negativos do almoxarifado.
+          //
+          // Aqui repetimos o que as RPCs do servidor ja fazem
+          // (registrar_entrada_material, saida_material_*): procura primeiro,
+          // soma no que existe, so cria se nao achar.
+          //
+          // O lote vai normalizado porque trg_normaliza_lote_almox reescreve na
+          // gravacao — mandamos ja em maiuscula/sem espaco para a BUSCA abaixo
+          // enxergar o que o gatilho gravou.
+          const loteNormalizado = data.batch_number.trim().toUpperCase().replace(/\s+/g, '')
+
+          // Lote de material vive todo no mesmo local (o default da coluna), por
+          // isso a busca nao filtra location_id. Entrada COM local escolhido
+          // passa pela RPC registrar_entrada_material, que trata local por local.
+          const { data: existente } = await supabase
             .from('expiry_tracking')
-            .insert({
-              item_id: item.id,
-              batch_number: data.batch_number,
-              expiry_date: data.expiry_date,
-              initial_quantity: data.quantity,
-              current_quantity: data.quantity,
-              created_by: user.id,
-              invoice_number: data.invoice_number,
-              invoice_date: data.invoice_date,
-              delivery_date: data.delivery_date,
-              afm_number: data.afm_number,
-              supplier_cnpj: data.supplier_cnpj,
-              supplier_name: data.supplier_name,
-              invoice_total_value: data.invoice_total_value,
-            })
+            .select('id, initial_quantity, current_quantity')
+            .eq('item_id', item.id)
+            .eq('batch_number', loteNormalizado)
+            .eq('expiry_date', data.expiry_date)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+
+          if (existente) {
+            // Soma nos dois: current_quantity e o saldo, initial_quantity e o
+            // total que ja entrou daquele lote (usado nos relatorios).
+            const { error: lotError } = await supabase
+              .from('expiry_tracking')
+              .update({
+                initial_quantity: (existente.initial_quantity || 0) + data.quantity,
+                current_quantity: (existente.current_quantity || 0) + data.quantity,
+              })
+              .eq('id', existente.id)
+            // Falha aqui NAO derruba a entrada: stock_entries e current_stock ja
+            // foram gravados acima. Lancar erro faria o usuario repetir a
+            // operacao e somar o estoque duas vezes — pior do que o lote torto.
+            if (lotError) console.error('Error updating existing lot:', lotError)
+          } else {
+            const { error: lotError } = await supabase
+              .from('expiry_tracking')
+              .insert({
+                item_id: item.id,
+                batch_number: loteNormalizado,
+                expiry_date: data.expiry_date,
+                initial_quantity: data.quantity,
+                current_quantity: data.quantity,
+                created_by: user.id,
+                invoice_number: data.invoice_number,
+                invoice_date: data.invoice_date,
+                delivery_date: data.delivery_date,
+                afm_number: data.afm_number,
+                supplier_cnpj: data.supplier_cnpj,
+                supplier_name: data.supplier_name,
+                invoice_total_value: data.invoice_total_value,
+              })
+            // Mesma razao do update acima: nao derruba a entrada ja gravada.
+            if (lotError) console.error('Error creating lot:', lotError)
+          }
         }
       }
 
