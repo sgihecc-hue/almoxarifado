@@ -13,6 +13,8 @@ import { tvRequestService } from '@/lib/services/tv-requests'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import type { TVRequest } from '@/lib/services/tv-requests'
+import { painelAlmoxNoHorario, JANELA_ALMOX_TEXTO } from '@/lib/constants/tv-panels'
+import { PainelDesligado } from '@/components/painel-tv-desligado'
 
 const THEME_A = {
   gradient: 'linear-gradient(135deg, #1a2a22 0%, #1e2e26 25%, #212f28 50%, #1c2b23 75%, #182720 100%)',
@@ -116,7 +118,9 @@ function TVPriorityBadge({ priority, theme }: { priority: string; theme: typeof 
   )
 }
 
-export default function WarehouseTVDashboard() {
+// Painel ligado. So e montado dentro da janela de funcionamento — assim
+// nenhum hook dele roda (e nenhuma consulta sai) fora do horario.
+function WarehouseTVDashboardAtivo() {
   const navigate = useNavigate()
   const [requests, setRequests] = useState<TVRequest[]>([])
   const [loading, setLoading] = useState(true)
@@ -395,6 +399,33 @@ export default function WarehouseTVDashboard() {
       </div>
     </>
   )
+}
+
+// Janela de funcionamento (12/09/2026): o painel so busca dado das 7h as 18h,
+// que e quando o almoxarifado trabalha. Fora disso a TV mostra a tela de
+// repouso e NAO consulta o banco — antes ficava de minuto em minuto a noite
+// inteira, de graca, pesando no plano free.
+//
+// O relogio e checado a cada minuto (custo zero, nao toca no banco), entao a
+// TV acende e apaga sozinha na virada do horario. Ninguem precisa ir ate la.
+export default function WarehouseTVDashboard() {
+  const [noHorario, setNoHorario] = useState(painelAlmoxNoHorario())
+
+  useEffect(() => {
+    const t = setInterval(() => setNoHorario(painelAlmoxNoHorario()), 60000)
+    return () => clearInterval(t)
+  }, [])
+
+  if (!noHorario) {
+    return (
+      <PainelDesligado
+        tipo="fora-de-horario"
+        titulo="Fora do horário de funcionamento"
+        detalhe={`O painel do Almoxarifado funciona das ${JANELA_ALMOX_TEXTO}. Ele volta sozinho no próximo expediente.`}
+      />
+    )
+  }
+  return <WarehouseTVDashboardAtivo />
 }
 
 export { WarehouseTVDashboard }

@@ -35,6 +35,7 @@ import {
   PackageCheck,
   Barcode,
 } from 'lucide-react'
+import { PAINEL_FARMACIA_ATIVO } from './tv-panels'
 import type { LucideIcon } from 'lucide-react'
 import type { PharmacyStock } from './stock-locations'
 
@@ -81,7 +82,11 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       title: 'Início',
       module: 'farmacia',
       items: [
-        { name: 'Painel TV', icon: Tv, href: '/tv/pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Painel da farmacia DESATIVADO em 12/09/2026 (setor nao usa). O item
+        // some do menu junto com o painel — nao adianta oferecer atalho pra
+        // uma tela de "desativado". Religar: PAINEL_FARMACIA_ATIVO em
+        // lib/constants/tv-panels.
+        { name: 'Painel TV', icon: Tv, href: '/tv/pharmacy', show: () => PAINEL_FARMACIA_ATIVO },
       ],
     },
     {

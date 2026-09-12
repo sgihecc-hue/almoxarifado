@@ -13,6 +13,8 @@ import { tvRequestService } from '@/lib/services/tv-requests'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import type { TVRequest } from '@/lib/services/tv-requests'
+import { PAINEL_FARMACIA_ATIVO } from '@/lib/constants/tv-panels'
+import { PainelDesligado } from '@/components/painel-tv-desligado'
 
 const THEME_A = {
   gradient: 'linear-gradient(135deg, #1a2a22 0%, #1e2e26 25%, #212f28 50%, #1c2b23 75%, #182720 100%)',
@@ -117,7 +119,9 @@ function TVPriorityBadge({ priority, theme }: { priority: string; theme: typeof 
   )
 }
 
-export default function PharmacyTVDashboard() {
+// Painel ligado. So e montado quando PAINEL_FARMACIA_ATIVO — assim nenhum
+// hook dele roda (e nenhuma consulta sai) com o painel desligado.
+function PharmacyTVDashboardAtivo() {
   const navigate = useNavigate()
   const [requests, setRequests] = useState<TVRequest[]>([])
   const [loading, setLoading] = useState(true)
@@ -397,6 +401,22 @@ export default function PharmacyTVDashboard() {
       </div>
     </>
   )
+}
+
+// DESATIVADO em 12/09/2026: o setor de farmacia nao usa este painel, e a TV
+// ligada fazia consulta de minuto em minuto, 24h por dia, pesando no banco
+// sem servir a ninguem. O codigo do painel continua inteiro logo acima —
+// para religar basta PAINEL_FARMACIA_ATIVO = true em lib/constants/tv-panels.
+export default function PharmacyTVDashboard() {
+  if (!PAINEL_FARMACIA_ATIVO) {
+    return (
+      <PainelDesligado
+        titulo="Painel da Farmácia desativado"
+        detalhe="Este painel não está em uso. As solicitações da farmácia continuam normalmente pelo sistema."
+      />
+    )
+  }
+  return <PharmacyTVDashboardAtivo />
 }
 
 export { PharmacyTVDashboard }
