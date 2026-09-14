@@ -19,10 +19,18 @@ import { getErrorMessage } from '@/lib/utils/error-messages'
 import type { UserRole } from '@/lib/types'
 import type { Department } from '@/lib/types/departments'
 
+// CPF é o padrão da casa: a tela de login monta CPF@hecc.local quando a pessoa
+// digita o CPF. Com CPF, a conta nasce nesse formato (e-mail é ignorado); sem
+// CPF, usa o e-mail informado. Pelo menos um dos dois é obrigatório.
 const userSchema = z.object({
+  cpf: z
+    .string()
+    .optional()
+    .refine((v) => !v || v.replace(/\D/g, '').length === 11, 'CPF deve ter 11 dígitos'),
   email: z
     .string()
-    .email('Digite um e-mail válido'),
+    .optional()
+    .refine((v) => !v || z.string().email().safeParse(v).success, 'Digite um e-mail válido'),
   full_name: z
     .string()
     .min(3, 'Nome deve ter no mínimo 3 caracteres'),
@@ -35,6 +43,9 @@ const userSchema = z.object({
 }).refine((data) => data.password === data.confirm_password, {
   message: "As senhas não coincidem",
   path: ["confirm_password"],
+}).refine((data) => Boolean(data.cpf?.trim() || data.email?.trim()), {
+  message: "Informe o CPF (padrão para login) ou o e-mail",
+  path: ["cpf"],
 })
 
 type UserFormData = z.infer<typeof userSchema>
@@ -87,7 +98,8 @@ export function NewUserDialog({ open, onOpenChange, onSuccess }: NewUserDialogPr
       setLoading(true)
       setError(null)
       await usersService.create({
-        email: data.email,
+        cpf: data.cpf ? data.cpf.replace(/\D/g, '') : undefined,
+        email: data.email || undefined,
         full_name: data.full_name,
         role: data.role as UserRole,
         password: data.password,
@@ -127,9 +139,27 @@ export function NewUserDialog({ open, onOpenChange, onSuccess }: NewUserDialogPr
               )}
             </div>
 
-            {/* Email */}
+            {/* CPF: padrão para login (a tela de login monta CPF@hecc.local) */}
             <div>
-              <Label htmlFor="email">E-mail</Label>
+              <Label htmlFor="cpf">CPF</Label>
+              <Input
+                id="cpf"
+                inputMode="numeric"
+                {...register('cpf')}
+                className="mt-1"
+                placeholder="000.000.000-00"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Com CPF, o usuário entra digitando o CPF na tela de login.
+              </p>
+              {errors.cpf && (
+                <p className="text-sm text-red-500 mt-1">{errors.cpf.message}</p>
+              )}
+            </div>
+
+            {/* Email: só se não houver CPF */}
+            <div>
+              <Label htmlFor="email">E-mail (se não tiver CPF)</Label>
               <Input
                 id="email"
                 type="email"

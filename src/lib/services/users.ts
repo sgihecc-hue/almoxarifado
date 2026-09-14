@@ -80,32 +80,35 @@ class UsersService {
     }
   }
 
-  async create(userData: CreateUserData): Promise<User> {
+  // Criar conta exige service_role, que o navegador não tem: antes isto chamava
+  // supabase.auth.admin.createUser com a chave anon e sempre falhava (e ainda
+  // gravava a coluna inexistente `status`). Agora vai pela Edge Function
+  // admin-create-user, que confere se quem chama é administrador.
+  async create(userData: CreateUserData & { cpf?: string }): Promise<User> {
     try {
-      const { data: { user }, error: signUpError } = await supabase.auth.admin.createUser({
-        email: userData.email!,
-        password: userData.password || 'ChangeMe123!',
-        email_confirm: true
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) throw new Error('Sessão expirada. Entre novamente.')
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-create-user`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          full_name: userData.full_name,
+          role: userData.role,
+          department_id: userData.department_id || null,
+          password: userData.password,
+          cpf: userData.cpf || '',
+          email: userData.email || '',
+        }),
       })
 
-      if (signUpError) throw signUpError
-      if (!user) throw new Error('Failed to create user')
-
-      const { data, error } = await supabase
-        .from('users')
-        .insert([{
-          id: user.id,
-          email: userData.email,
-          full_name: userData.full_name,
-          role: userData.role || 'usuario',
-          department_id: userData.department_id,
-          status: 'active'
-        }])
-        .select()
-        .single()
-
-      if (error) throw error
-      return data
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body?.error || 'Erro ao criar usuário. Tente novamente.')
+      return body.user as User
     } catch (error) {
       console.error('Error creating user:', error)
       throw error
@@ -163,27 +166,27 @@ class UsersService {
 
   async adminChangePassword(userId: string, newPassword: string): Promise<void> {
     try {
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-update-user-password`
+      // A função identifica o administrador pelo token da SESSÃO. Antes ia a
+      // chave anon no Authorization (getUser falhava -> 401) e os campos
+      // user_id/new_password, enquanto a função lê userId/newPassword.
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) throw new Error('Sessão expirada. Entre novamente.')
 
-      const response = await fetch(apiUrl, {
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-update-user-password`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          user_id: userId,
-          new_password: newPassword
-        })
+        body: JSON.stringify({ userId, newPassword })
       })
 
+      const body = await response.json().catch(() => ({}))
       if (!response.ok) {
-        const errorData = await response.json()
-        console.error('Admin password update error:', errorData)
-        throw new Error('Erro ao atualizar senha. Por favor, tente novamente.')
+        console.error('Admin password update error:', body)
+        throw new Error(body?.error || 'Erro ao atualizar senha. Por favor, tente novamente.')
       }
-
-      await response.json()
     } catch (error) {
       console.error('Error in adminChangePassword:', error)
       throw error instanceof Error ? error : new Error('Erro desconhecido ao alterar senha')
