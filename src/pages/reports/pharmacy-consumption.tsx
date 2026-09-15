@@ -154,18 +154,30 @@ export function PharmacyConsumptionReport() {
     setLoading(true)
     setErro(null)
     try {
-      let query = supabase
-        .from('v_farmacia_consumo')
-        .select('*')
-        .order('data', { ascending: false })
+      // A API devolve no máximo 1.000 linhas por pedido, qualquer que seja o
+      // range pedido. Com um pedido só, 30 dias (~12 mil saídas) chegavam
+      // cortados nas 1.000 mais recentes — sem aviso, porque 1.000 < MAX_ROWS.
+      // Busca em blocos até esgotar o período ou bater o teto.
+      const BLOCO = 1000
+      const lista: Consumo[] = []
+      for (let de = 0; de < MAX_ROWS; de += BLOCO) {
+        let query = supabase
+          .from('v_farmacia_consumo')
+          .select('*')
+          .order('data', { ascending: false })
+          .order('id', { ascending: true })
 
-      if (dataDe) query = query.gte('data', `${dataDe}T00:00:00`)
-      if (dataAte) query = query.lte('data', `${dataAte}T23:59:59`)
+        if (dataDe) query = query.gte('data', `${dataDe}T00:00:00`)
+        if (dataAte) query = query.lte('data', `${dataAte}T23:59:59`)
 
-      const { data, error } = await query.range(0, MAX_ROWS - 1)
-      if (error) throw error
+        const ate = Math.min(de + BLOCO, MAX_ROWS) - 1
+        const { data, error } = await query.range(de, ate)
+        if (error) throw error
 
-      const lista = (data ?? []) as Consumo[]
+        const bloco = (data ?? []) as Consumo[]
+        lista.push(...bloco)
+        if (bloco.length < ate - de + 1) break
+      }
       setRows(lista)
       setTruncado(lista.length >= MAX_ROWS)
 
