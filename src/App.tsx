@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from '@/contexts/auth'
 import { ThemeProvider } from '@/contexts/theme'
@@ -8,7 +8,6 @@ import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { Suspense } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Login } from '@/pages/login'
-import { Register } from '@/pages/register'
 import { MainLayout } from '@/pages/main-layout'
 import { MyRequests } from '@/pages/my-requests'
 import { PharmacyItems } from '@/pages/inventory/pharmacy-items'
@@ -129,7 +128,8 @@ export default function App() {
             <ConsentGate>
               <Routes>
                 <Route path="/login" element={<Login />} />
-                <Route path="/register" element={<Register />} />
+                {/* Autocadastro desligado (16/09/2026): link antigo volta ao login. */}
+                <Route path="/register" element={<Navigate to="/login" replace />} />
                 <Route path="/change-password" element={<ChangePassword />} />
                 <Route path="/tv/warehouse" element={<WarehouseTVDashboard />} />
                 <Route path="/tv/warehouse/history" element={<TVHistory type="warehouse" />} />

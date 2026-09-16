@@ -228,16 +228,12 @@ export function Login() {
                 )}
               </Button>
 
-              <div className="flex justify-center">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => navigate('/register')}
-                >
-                  Criar conta
-                </Button>
-              </div>
+              {/* Sem autocadastro (decisão de 16/09/2026): contas criadas pela
+                  tela nasciam sem setor e duplicavam quem já tinha conta pelo
+                  CPF. Usuário novo é criado pelo administrador. */}
+              <p className="text-center text-sm text-gray-500">
+                Não tem acesso ou esqueceu a senha? Procure o administrador do sistema.
+              </p>
             </div>
           </form>
         </div>
