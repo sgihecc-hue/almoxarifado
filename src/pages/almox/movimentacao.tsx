@@ -23,6 +23,7 @@ type Movimento = {
   usuario_id: string | null
   usuario: string | null
   origem_provavel: string | null
+  motivo: string | null
 }
 
 function fmt(d: string | null | undefined) {
@@ -260,7 +261,12 @@ export function AlmoxMovimentacao() {
                           <strong style={{ color: txt }}>{num(m.saldo_depois)}</strong>
                         </td>
                         <td style={{ padding: '10px 16px', color: txt }}>{m.usuario ?? '—'}</td>
-                        <td style={{ padding: '10px 16px', color: txtSec }}>{m.origem_provavel ?? '—'}</td>
+                        <td style={{ padding: '10px 16px', color: txtSec }}>
+                          {m.origem_provavel ?? '—'}
+                          {m.motivo && (
+                            <p style={{ color: txt, fontSize: 12, marginTop: 2 }}>Motivo: {m.motivo}</p>
+                          )}
+                        </td>
                       </tr>
                     )
                   })}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Loader2, FileText, Pencil, Barcode, Layers, Plus, Trash2 } from 'lucide-react'
+import { Loader2, FileText, Pencil, Barcode, Layers, Plus, Trash2, History, ShieldCheck } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -33,6 +33,54 @@ const LOT_LOCATIONS_WAREHOUSE = PHARMACY_STOCKS.filter((s) => s.itemType === 'wa
 
 function lotLocationsFor(type: 'pharmacy' | 'warehouse') {
   return type === 'pharmacy' ? LOT_LOCATIONS_PHARMACY : LOT_LOCATIONS_WAREHOUSE
+}
+
+// Edição de item do ALMOXARIFADO é auditável: motivo obrigatório, resumo
+// antes/depois e gravação pela RPC almox_editar_item (registro imutável em
+// almox_item_edicoes). Medicamento segue o caminho de sempre.
+const ROTULO_CAMPO: Record<string, string> = {
+  code: 'Código',
+  barcode: 'Código de barras',
+  name: 'Nome',
+  description: 'Descrição',
+  category: 'Categoria',
+  unit: 'Unidade',
+  min_stock: 'Estoque mínimo',
+  lead_time_days: 'Prazo de reposição (dias)',
+  avg_daily_consumption: 'Consumo médio diário',
+  current_stock: 'Estoque atual',
+  batch_number: 'Lote',
+  expiry_date: 'Validade',
+  last_purchase_price: 'Valor da última compra',
+  reference_price: 'Valor referencial',
+}
+const MOTIVO_MINIMO = 10
+
+type LinhaResumo = { campo: string; antes: unknown; depois: unknown }
+type EdicaoRegistrada = {
+  id: string
+  feito_em: string
+  usuario_nome: string | null
+  motivo: string
+  alteracoes: Record<string, { antes: unknown; depois: unknown }>
+  entrada: { quantity?: number } | null
+}
+
+function mostraValor(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '—'
+  return String(v)
+}
+
+function vazioParaNull(v: unknown): unknown {
+  if (v === '' || v === undefined || (typeof v === 'number' && Number.isNaN(v))) return null
+  return v
+}
+
+function mesmoValor(a: unknown, b: unknown): boolean {
+  if (a === null || a === undefined) return b === null || b === undefined
+  if (b === null || b === undefined) return false
+  if (typeof a === 'number' || typeof b === 'number') return Number(a) === Number(b)
+  return String(a) === String(b)
 }
 
 interface LotRow {
@@ -131,6 +179,10 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [scanningBarcode, setScanningBarcode] = useState(false)
+  const ehAlmox = type === 'warehouse'
+  const [motivo, setMotivo] = useState('')
+  const [resumo, setResumo] = useState<LinhaResumo[] | null>(null)
+  const [historico, setHistorico] = useState<EdicaoRegistrada[]>([])
   const barcodeInputRef = useRef<HTMLInputElement>(null)
 
   // Classes do medicamento (farmácia): lê do array medication_classes; se
@@ -181,6 +233,22 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id, open, type])
 
+  // Almoxarifado: motivo e resumo recomeçam a cada abertura; histórico do item.
+  useEffect(() => {
+    if (!open || !ehAlmox) return
+    setMotivo('')
+    setResumo(null)
+    let vivo = true
+    supabase
+      .from('almox_item_edicoes')
+      .select('id, feito_em, usuario_nome, motivo, alteracoes, entrada')
+      .eq('item_id', item.id)
+      .order('feito_em', { ascending: false })
+      .limit(20)
+      .then(({ data }) => { if (vivo) setHistorico((data ?? []) as EdicaoRegistrada[]) })
+    return () => { vivo = false }
+  }, [item.id, open, ehAlmox])
+
   const newKey = () => Math.random().toString(36).slice(2)
   function updateLot(key: string, patch: Partial<LotRow>) {
     setLots((prev) => prev.map((l) => (l._key === key ? { ...l, ...patch } : l)))
@@ -228,6 +296,11 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
       entry_quantity: 0,
     },
   })
+
+  useEffect(() => {
+    const sub = watch(() => setResumo(null))
+    return () => sub.unsubscribe()
+  }, [watch])
 
   // Recarrega valores quando trocar de item
   useEffect(() => {
@@ -281,10 +354,131 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
           { value: 'OUTROS', label: 'Outros' },
         ]
 
+  // Campos do item de almoxarifado que o usuário realmente mudou.
+  function camposAlterados(data: FormData): Record<string, unknown> {
+    const it = item as any
+    const candidatos: Record<string, [unknown, unknown]> = {
+      code: [it.code ?? null, vazioParaNull(data.code)],
+      barcode: [it.barcode || null, vazioParaNull(data.barcode?.trim())],
+      name: [it.name ?? null, vazioParaNull(data.name)],
+      description: [it.description || null, vazioParaNull(data.description)],
+      category: [it.category ?? null, vazioParaNull(data.category)],
+      unit: [it.unit ?? null, vazioParaNull(data.unit)],
+      min_stock: [it.min_stock ?? 0, vazioParaNull(data.min_stock) ?? 0],
+      lead_time_days: [it.lead_time_days ?? null, vazioParaNull(data.lead_time_days)],
+      current_stock: [it.current_stock ?? 0, vazioParaNull(data.current_stock) ?? 0],
+      batch_number: [it.batch_number || null, vazioParaNull(data.batch_number?.trim())],
+      expiry_date: [it.expiry_date || null, vazioParaNull(data.expiry_date)],
+      last_purchase_price: [it.last_purchase_price ?? null, vazioParaNull(data.last_purchase_price)],
+      reference_price: [it.reference_price ?? null, vazioParaNull(data.reference_price)],
+    }
+    const campos: Record<string, unknown> = {}
+    for (const [campo, [atual, novo]] of Object.entries(candidatos)) {
+      if (!mesmoValor(atual, novo)) campos[campo] = novo
+    }
+    // Consumo é digitado em Un/SEMANA e guardado como média diária (÷7).
+    const semanalAtual = it.avg_daily_consumption != null ? Math.round(Number(it.avg_daily_consumption) * 7 * 100) / 100 : null
+    const semanalNovo = vazioParaNull(data.avg_daily_consumption) as number | null
+    const semanalNovoArred = semanalNovo != null ? Math.round(Number(semanalNovo) * 100) / 100 : null
+    if (!mesmoValor(semanalAtual, semanalNovoArred)) {
+      campos.avg_daily_consumption = semanalNovo != null ? Number(semanalNovo) / 7 : null
+    }
+    return campos
+  }
+
+  // Almoxarifado: 1º clique mostra o resumo; 2º grava pela RPC auditada.
+  // Devolve true quando gravou (o diálogo fecha).
+  async function salvarAlmox(data: FormData): Promise<boolean> {
+    const campos = camposAlterados(data)
+    const hasEntry = (data.entry_quantity ?? 0) > 0
+    const mexeuNoItem = Object.keys(campos).length > 0 || hasEntry
+
+    if (!mexeuNoItem && !(podeEditarLotes && lotsDirty)) {
+      setError('Nenhuma alteração para salvar.')
+      return false
+    }
+    if (mexeuNoItem && motivo.trim().length < MOTIVO_MINIMO) {
+      setError(`Informe o motivo da alteração (mínimo ${MOTIVO_MINIMO} caracteres). Ele fica registrado no histórico do item.`)
+      return false
+    }
+    if (hasEntry && !data.acquisition_type) {
+      setError('Selecione o tipo de aquisição da nova entrada')
+      return false
+    }
+    if (mexeuNoItem && !resumo) {
+      const it = item as any
+      const linhas: LinhaResumo[] = Object.entries(campos).map(([campo, depois]) => ({
+        campo,
+        antes: it[campo],
+        depois,
+      }))
+      if (hasEntry) {
+        linhas.push({ campo: 'entrada', antes: null, depois: `+${data.entry_quantity} ${item.unit} (${data.acquisition_type})` })
+      }
+      setResumo(linhas)
+      return false
+    }
+
+    if (mexeuNoItem) {
+      const entrada = hasEntry
+        ? {
+            quantity: data.entry_quantity,
+            acquisition_type: data.acquisition_type,
+            invoice_number: data.invoice_number?.trim() || null,
+            invoice_date: data.invoice_date || null,
+            invoice_total_value: data.invoice_total_value ?? null,
+            unit_price: data.unit_price ?? data.last_purchase_price ?? null,
+            afm_number: data.afm_number?.trim() || null,
+            supplier_cnpj: data.supplier_cnpj?.trim() || null,
+            supplier_name:
+              data.supplier_name?.trim() ||
+              (data.acquisition_type === 'Doação' ? 'Doação' : data.acquisition_type === 'Devolução' ? 'Devolução de setor' : null),
+            batch_number: data.batch_number?.trim() || null,
+            expiry_date: data.expiry_date || null,
+          }
+        : null
+      const { error: rpcErr } = await supabase.rpc('almox_editar_item', {
+        p_item_id: item.id,
+        p_campos: campos,
+        p_motivo: motivo.trim(),
+        p_entrada: entrada,
+      })
+      if (rpcErr) throw rpcErr
+    }
+
+    // Lotes (só no satélite de material), pelo mesmo RPC de antes.
+    if (podeEditarLotes && lotsDirty) {
+      const semLocal = lots.find((l) => !l.deleted && !l.location_id)
+      if (semLocal) throw new Error('Selecione o estoque de cada lote.')
+      const payload = lots.map((l) => ({
+        id: l.id ?? null,
+        batch_number: l.batch_number?.trim() || null,
+        expiry_date: l.expiry_date || null,
+        quantity: Number(l.quantity) || 0,
+        location_id: l.location_id,
+        deleted: !!l.deleted,
+      }))
+      const { error: rpcErr } = await supabase.rpc('almox_editar_lotes', {
+        p_item_id: item.id,
+        p_lots: payload,
+      })
+      if (rpcErr) throw rpcErr
+    }
+    return true
+  }
+
   const onSubmit = async (data: FormData) => {
     try {
       setLoading(true)
       setError(null)
+
+      if (ehAlmox) {
+        if (await salvarAlmox(data)) {
+          onSuccess()
+          onOpenChange(false)
+        }
+        return
+      }
 
       const hasEntry = (data.entry_quantity ?? 0) > 0
 
@@ -852,6 +1046,73 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
             </div>
           </div>
 
+          {ehAlmox && (
+            <div className="rounded-lg border border-amber-300 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 border-b border-amber-200">
+                <ShieldCheck className="w-4 h-4 text-amber-700" />
+                <span className="text-sm font-medium text-amber-900">Motivo da alteração (obrigatório)</span>
+              </div>
+              <div className="p-4 space-y-3 bg-white">
+                <textarea
+                  value={motivo}
+                  onChange={(e) => { setMotivo(e.target.value); setResumo(null) }}
+                  rows={2}
+                  className="w-full rounded-md border border-input bg-white px-3 py-2 text-sm"
+                  placeholder="Ex.: saldo corrigido após contagem física de 16/09 com a Rafaela"
+                />
+                <p className="text-xs text-gray-500">
+                  Fica registrado com seu nome, data e hora, junto com cada campo alterado (antes → depois).
+                  O registro não pode ser editado nem apagado.
+                </p>
+
+                {resumo && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3">
+                    <p className="text-sm font-semibold text-amber-900 mb-2">Confira antes de salvar:</p>
+                    <ul className="space-y-1 text-sm">
+                      {resumo.map((l) => (
+                        <li key={l.campo} className="text-gray-800">
+                          <strong>{l.campo === 'entrada' ? 'Nova entrada' : (ROTULO_CAMPO[l.campo] ?? l.campo)}:</strong>{' '}
+                          {l.campo === 'entrada'
+                            ? mostraValor(l.depois)
+                            : <>{mostraValor(l.antes)} <span className="text-gray-400">→</span> <strong>{mostraValor(l.depois)}</strong></>}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-xs text-amber-800 mt-2">Clique em <strong>Confirmar e salvar</strong> para gravar.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {ehAlmox && historico.length > 0 && (
+            <details className="rounded-lg border border-gray-200 bg-white">
+              <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer text-sm font-medium text-gray-800">
+                <History className="w-4 h-4 text-gray-600" />
+                Histórico de edições deste item ({historico.length})
+              </summary>
+              <ul className="px-4 pb-4 space-y-3">
+                {historico.map((h) => (
+                  <li key={h.id} className="text-sm border-t border-gray-100 pt-3">
+                    <p className="text-gray-900">
+                      <strong>{h.usuario_nome ?? '—'}</strong>{' '}
+                      <span className="text-gray-500">em {new Date(h.feito_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                    </p>
+                    <p className="text-gray-700">Motivo: {h.motivo}</p>
+                    <ul className="text-gray-600 mt-1">
+                      {Object.entries(h.alteracoes ?? {}).map(([campo, v]) => (
+                        <li key={campo}>
+                          {ROTULO_CAMPO[campo] ?? campo}: {mostraValor(v?.antes)} → {mostraValor(v?.depois)}
+                        </li>
+                      ))}
+                      {h.entrada?.quantity ? <li>Entrada registrada junto: +{h.entrada.quantity}</li> : null}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
           {error && (
             <div className="p-3 text-sm text-red-500 bg-red-50 rounded-md border border-red-200">
               {error}
@@ -873,7 +1134,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
             </Button>
             <Button type="submit" disabled={loading}>
               {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Salvar
+              {ehAlmox && resumo ? 'Confirmar e salvar' : 'Salvar'}
             </Button>
           </DialogFooter>
         </form>

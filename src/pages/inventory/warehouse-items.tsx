@@ -63,8 +63,24 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
     setShowEditItemDialog(true)
   }
 
+  // Além de administrador e gestor, a edição pode ser concedida pessoa a
+  // pessoa (tabela almox_permissoes_edicao). A gravação passa pela RPC
+  // almox_editar_item, que confere a permissão de novo e exige motivo.
+  const [temPermissaoEdicao, setTemPermissaoEdicao] = useState(false)
+  useEffect(() => {
+    if (!user?.id) return
+    let vivo = true
+    supabase
+      .from('almox_permissoes_edicao')
+      .select('user_id')
+      .eq('user_id', user.id)
+      .maybeSingle()
+      .then(({ data }) => { if (vivo) setTemPermissaoEdicao(!!data) })
+    return () => { vivo = false }
+  }, [user?.id])
+
   const isAdmin = user?.role === 'administrador'
-  const canEdit = user?.role === 'administrador' || user?.role === 'gestor'
+  const canEdit = user?.role === 'administrador' || user?.role === 'gestor' || temPermissaoEdicao
 
   // Saldo do item NESTE location (quando prop presente). Fallback pro campo
   // global do cadastro — usado pela rota do almoxarifado central.
