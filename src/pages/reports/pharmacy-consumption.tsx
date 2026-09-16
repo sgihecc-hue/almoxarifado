@@ -142,7 +142,12 @@ export function PharmacyConsumptionReport() {
   const [soAltaVig, setSoAltaVig] = useState(false)
   const [soTalidomida, setSoTalidomida] = useState(false)
   const [soPadronizados, setSoPadronizados] = useState(false)
-  const [destino, setDestino] = useState('')
+  // Destinos: vários de uma vez. Nada marcado = todos.
+  const [destinosSel, setDestinosSel] = useState<string[]>([])
+  const [destinoAberto, setDestinoAberto] = useState(false)
+  // Lista fixa de quem JÁ recebeu da CAF (todo o histórico, view
+  // v_farmacia_destinos_caf): setor novo entra sozinho na primeira saída.
+  const [destinosCaf, setDestinosCaf] = useState<{ destino: string; grupo: string }[]>([])
   const [prontuario, setProntuario] = useState('')
   const [usuario, setUsuario] = useState('')
 
@@ -202,12 +207,21 @@ export function PharmacyConsumptionReport() {
     }
   }
 
+  useEffect(() => {
+    supabase
+      .from('v_farmacia_destinos_caf')
+      .select('destino, grupo')
+      .order('grupo', { ascending: true })
+      .order('destino', { ascending: true })
+      .then(({ data }) => setDestinosCaf((data ?? []) as { destino: string; grupo: string }[]))
+  }, [])
+
   // Carga inicial e toda vez que o período mudar — é o único filtro que vai ao banco.
   useEffect(() => { void carregar() }, [dataDe, dataAte])
   // Qualquer mudança de filtro reinicia a paginação do detalhado.
   useEffect(() => { setPage(0) }, [
     estoquesSel, tiposSel, busca, classe, soControlados, soAltaVig,
-    soTalidomida, soPadronizados, destino, prontuario, usuario, modo,
+    soTalidomida, soPadronizados, destinosSel, prontuario, usuario, modo,
   ])
 
   const filtradas = useMemo(() => {
@@ -216,7 +230,7 @@ export function PharmacyConsumptionReport() {
       if (tiposSel.length > 0 && !tiposSel.includes(r.tipo)) return false
       if (estoquesSel.length > 0 && !estoquesSel.includes(r.estoque_codigo ?? '')) return false
       if (classe && r.classe !== classe) return false
-      if (destino && r.destino !== destino) return false
+      if (destinosSel.length > 0 && !destinosSel.includes(r.destino ?? '')) return false
       if (usuario && r.usuario !== usuario) return false
       if (soControlados && !r.controlado) return false
       if (soAltaVig && !r.alta_vigilancia) return false
@@ -229,7 +243,7 @@ export function PharmacyConsumptionReport() {
       }
       return true
     })
-  }, [rows, tiposSel, estoquesSel, classe, destino, usuario, soControlados,
+  }, [rows, tiposSel, estoquesSel, classe, destinosSel, usuario, soControlados,
       soAltaVig, soTalidomida, soPadronizados, prontuario, busca])
 
   const totais = useMemo(() => {
@@ -284,17 +298,17 @@ export function PharmacyConsumptionReport() {
     if (soAltaVig) ativos.push({ rotulo: 'Só alta vigilância', limpar: () => setSoAltaVig(false) })
     if (soTalidomida) ativos.push({ rotulo: 'Só talidomida', limpar: () => setSoTalidomida(false) })
     if (soPadronizados) ativos.push({ rotulo: 'Só padronizados', limpar: () => setSoPadronizados(false) })
-    if (destino) ativos.push({ rotulo: `Destino: ${destino}`, limpar: () => setDestino('') })
+    if (destinosSel.length) ativos.push({ rotulo: `Destino: ${destinosSel.join(', ')}`, limpar: () => setDestinosSel([]) })
     if (prontuario.trim()) ativos.push({ rotulo: `Prontuário: ${prontuario.trim()}`, limpar: () => setProntuario('') })
     if (usuario) ativos.push({ rotulo: `Usuário: ${usuario}`, limpar: () => setUsuario('') })
     return ativos
   }, [estoquesSel, tiposSel, busca, classe, soControlados, soAltaVig,
-      soTalidomida, soPadronizados, destino, prontuario, usuario])
+      soTalidomida, soPadronizados, destinosSel, prontuario, usuario])
 
   function limparTudo() {
     setEstoquesSel([])
     setTiposSel(TIPOS_PADRAO)
-    setBusca(''); setClasse(''); setDestino(''); setProntuario(''); setUsuario('')
+    setBusca(''); setClasse(''); setDestinosSel([]); setProntuario(''); setUsuario('')
     setSoControlados(false); setSoAltaVig(false); setSoTalidomida(false); setSoPadronizados(false)
   }
 
@@ -498,11 +512,61 @@ export function PharmacyConsumptionReport() {
                 </select>
               </div>
               <div>
-                <label style={lbl}>Destino (setor/unidade)</label>
-                <select value={destino} onChange={(e) => setDestino(e.target.value)} style={inputStyle}>
-                  <option value="">Todos</option>
-                  {opcoes.destinos.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
+                <label style={lbl}>Destino (quem recebeu da CAF)</label>
+                <div style={{ position: 'relative' }}>
+                  <button
+                    type="button"
+                    onClick={() => setDestinoAberto((v) => !v)}
+                    style={{ ...inputStyle, textAlign: 'left', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                  >
+                    {destinosSel.length === 0
+                      ? 'Todos'
+                      : destinosSel.length === 1
+                        ? destinosSel[0]
+                        : `${destinosSel.length} destinos selecionados`}
+                  </button>
+                  {destinoAberto && (
+                    <div
+                      style={{
+                        position: 'absolute', zIndex: 30, top: '100%', left: 0, right: 0, marginTop: 4,
+                        maxHeight: 320, overflowY: 'auto', padding: 8, borderRadius: 10,
+                        background: mode === 'dark' ? 'rgba(10,15,20,0.97)' : 'rgba(255,255,255,0.98)',
+                        border: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)'}`,
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-2 px-1 pb-2">
+                        <button type="button" onClick={() => setDestinosSel([])} style={{ fontSize: 12, fontWeight: 600, color: '#059669', cursor: 'pointer' }}>
+                          Todos
+                        </button>
+                        <button type="button" onClick={() => setDestinoAberto(false)} style={{ fontSize: 12, color: txtSec, cursor: 'pointer' }}>
+                          Fechar
+                        </button>
+                      </div>
+                      {destinosCaf.length === 0 && (
+                        <p style={{ fontSize: 12, color: txtMut, padding: 4 }}>Nenhum destino registrado ainda.</p>
+                      )}
+                      {Array.from(new Set(destinosCaf.map((d) => d.grupo))).map((grupo) => (
+                        <div key={grupo} style={{ marginBottom: 6 }}>
+                          <p style={{ ...lbl, marginBottom: 2, padding: '4px 4px 0' }}>{grupo}</p>
+                          {destinosCaf.filter((d) => d.grupo === grupo).map((d) => {
+                            const marcado = destinosSel.includes(d.destino)
+                            return (
+                              <label key={d.destino} className="flex items-center gap-2" style={{ padding: '4px 4px', fontSize: 13, color: txt, cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={marcado}
+                                  onChange={() => setDestinosSel((prev) => marcado ? prev.filter((x) => x !== d.destino) : [...prev, d.destino])}
+                                />
+                                {d.destino}
+                              </label>
+                            )
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <div>
                 <label style={lbl}>Usuário que realizou</label>
