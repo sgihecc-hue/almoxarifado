@@ -75,6 +75,7 @@ import { Transferencia } from '@/pages/estoque/transferencia'
 import { EmprestimosAbertos } from '@/pages/estoque/emprestimos'
 import { VencimentosABaixar } from '@/pages/estoque/vencimentos'
 import { FarmaciaMultiEstoqueReport } from '@/pages/reports/farmacia-multi-estoque'
+import { FarmaciaDevolucoesReport } from '@/pages/reports/farmacia-devolucoes'
 import { MovementsReport } from '@/pages/reports/movimentacoes'
 import { PharmacyLoansList } from '@/pages/farmacia/movimentacoes/index'
 import { NewPharmacyLoan } from '@/pages/farmacia/movimentacoes/new'
@@ -387,6 +388,13 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <PharmacyConsumptionReport />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/reports/farmacia-devolucoes" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <FarmaciaDevolucoesReport />
                   </MainLayout>
                 </ProtectedRoute>
               } />
@@ -808,6 +816,7 @@ export default function App() {
                 <Route path="reports/pharmacy-consumption" element={<PharmacyConsumptionReport />} />
                 <Route path="reports/pharmacy-admin-consumption" element={<AdminConsumptionManagement />} />
                 <Route path="reports/farmacia-multi-estoque" element={<FarmaciaMultiEstoqueReport />} />
+                <Route path="reports/farmacia-devolucoes" element={<FarmaciaDevolucoesReport />} />
                 <Route path="reports/stock-expiry" element={<StockExpiryReport />} />
                 <Route path="reports/movimentacoes" element={<MovementsReport />} />
               </Route>
