@@ -44,10 +44,13 @@ type Consumo = {
   usuario: string | null
 }
 
-// Tipos de saída da view. Só os três primeiros são consumo assistencial de fato —
+// Tipos de saída da view. Só os quatro primeiros são consumo assistencial de fato —
 // transferência muda o material de lugar, ajuste e devolução interna corrigem saldo.
 const TIPOS = [
   { valor: 'PRESCRICAO', rotulo: 'Prescrição', consumo: true },
+  // Dispensação por requisição (pedido do setor). O estoque grava igual à
+  // prescrição; a view separa pelo tipo da dispensação (16/09/2026).
+  { valor: 'REQUISICAO', rotulo: 'Requisição', consumo: true },
   { valor: 'SOLICITACAO', rotulo: 'Solicitação', consumo: true },
   { valor: 'SAIDA_AVULSA', rotulo: 'Saída avulsa', consumo: true },
   { valor: 'TRANSFERENCIA', rotulo: 'Transferência', consumo: false },
@@ -238,7 +241,7 @@ export function PharmacyConsumptionReport() {
     return { saidas: filtradas.length, qtd, custo }
   }, [filtradas])
 
-  // Resumo agregado: consumo somado por item, do maior para o menor.
+  // Resumo agregado: consumo somado por item, em ordem alfabética (pedido da farmácia, 16/09/2026).
   // Não carrega prontuário nem paciente — esses só aparecem no detalhado.
   const resumo = useMemo(() => {
     const mapa = new Map<string, {
@@ -260,7 +263,7 @@ export function PharmacyConsumptionReport() {
       atual.saidas += 1
       mapa.set(chave, atual)
     }
-    return Array.from(mapa.values()).sort((a, b) => b.qtd - a.qtd)
+    return Array.from(mapa.values()).sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { sensitivity: 'base' }))
   }, [filtradas])
 
   const listaAtual: unknown[] = modo === 'resumo' ? resumo : filtradas
