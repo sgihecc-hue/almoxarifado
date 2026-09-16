@@ -5,9 +5,9 @@
 // da própria farmácia; o posto real não ficou registrado.
 // =====================================================================
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTheme } from '@/contexts/theme'
-import { Undo2, Loader2, Download, Search } from 'lucide-react'
+import { Undo2, Loader2, Download, Search, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
 import { MOTIVO_OPTIONS } from '@/pages/estoque/devolucao'
@@ -50,6 +50,26 @@ const dataBR = (d: string | null) => (d ? new Date(d).toLocaleDateString('pt-BR'
 const rotuloMotivo = (v: string | null) => MOTIVO_OPTIONS.find((o) => o.value === v)?.label ?? v ?? '—'
 const porNome = (a: string, b: string) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' })
 
+// Filtros ficam salvos no navegador (pedido da Andressa, 16/09/2026): recarregar
+// a página não apaga o que foi escolhido. "Limpar tudo" continua zerando.
+function lerFiltros(chave: string): Record<string, any> {
+  try {
+    const v = JSON.parse(localStorage.getItem(chave) || '{}')
+    return v && typeof v === 'object' ? v : {}
+  } catch {
+    return {}
+  }
+}
+function gravarFiltros(chave: string, valor: Record<string, unknown>) {
+  try { localStorage.setItem(chave, JSON.stringify(valor)) } catch { /* sem armazenamento: segue sem salvar */ }
+}
+// Data digitada pela metade (ou apagada) não dispara busca.
+function dataValida(d: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) && Number(d.slice(0, 4)) >= 2020
+}
+
+const CHAVE_FILTROS = 'relatorio-devolucoes-farmacia:filtros'
+
 export function FarmaciaDevolucoesReport() {
   const { mode } = useTheme()
   const txt = mode === 'dark' ? '#fff' : '#0d2e1c'
@@ -69,7 +89,7 @@ export function FarmaciaDevolucoesReport() {
   const lbl: React.CSSProperties = {
     color: txtSec, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 4,
   }
-  const th: React.CSSProperties = { ...lbl, padding: '10px 16px', marginBottom: 0, textAlign: 'left' }
+  const th: React.CSSProperties = { ...lbl, display: 'table-cell', padding: '10px 16px', marginBottom: 0, textAlign: 'left' }
   const td: React.CSSProperties = { padding: '10px 16px', color: txt, fontSize: 14 }
   const borda = `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`
   const chip = (ativo: boolean): React.CSSProperties => ({
@@ -79,22 +99,33 @@ export function FarmaciaDevolucoesReport() {
   })
 
   const hoje = new Date()
-  const [dataDe, setDataDe] = useState(iso(new Date(hoje.getTime() - 29 * 86400000)))
-  const [dataAte, setDataAte] = useState(iso(hoje))
+  const [salvo] = useState(() => lerFiltros(CHAVE_FILTROS))
+  const [dataDe, setDataDe] = useState<string>(salvo.dataDe ?? iso(new Date(hoje.getTime() - 29 * 86400000)))
+  const [dataAte, setDataAte] = useState<string>(salvo.dataAte ?? iso(hoje))
   const [rows, setRows] = useState<Linha[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
   const [truncado, setTruncado] = useState(false)
 
-  const [modo, setModo] = useState<'origem' | 'item' | 'detalhado'>('origem')
-  const [estoque, setEstoque] = useState('')
-  const [origem, setOrigem] = useState('')
-  const [motivo, setMotivo] = useState('')
-  const [status, setStatus] = useState<'todas' | 'confirmed' | 'pending'>('todas')
-  const [busca, setBusca] = useState('')
+  const [modo, setModo] = useState<'origem' | 'item' | 'detalhado'>(
+    ['origem', 'item', 'detalhado'].includes(salvo.modo) ? salvo.modo : 'origem')
+  const [estoque, setEstoque] = useState<string>(salvo.estoque ?? '')
+  const [origem, setOrigem] = useState<string>(salvo.origem ?? '')
+  const [motivo, setMotivo] = useState<string>(salvo.motivo ?? '')
+  const [status, setStatus] = useState<'todas' | 'confirmed' | 'pending'>(
+    ['todas', 'confirmed', 'pending'].includes(salvo.status) ? salvo.status : 'todas')
+  const [busca, setBusca] = useState<string>(salvo.busca ?? '')
+
+  useEffect(() => {
+    gravarFiltros(CHAVE_FILTROS, { dataDe, dataAte, modo, estoque, origem, motivo, status, busca })
+  }, [dataDe, dataAte, modo, estoque, origem, motivo, status, busca])
   const [page, setPage] = useState(0)
 
+  // Só a busca mais recente vale (a busca vai em vários blocos).
+  const cargaAtual = useRef(0)
+
   async function carregar() {
+    const minha = ++cargaAtual.current
     setLoading(true)
     setErro(null)
     try {
@@ -105,28 +136,35 @@ export function FarmaciaDevolucoesReport() {
         const { data, error } = await supabase
           .from('v_farmacia_devolucoes')
           .select('*')
-          .gte('data', `${dataDe}T00:00:00`)
-          .lte('data', `${dataAte}T23:59:59`)
+          .gte('data', `${dataDe}T00:00:00-03:00`)
+          .lte('data', `${dataAte}T23:59:59.999-03:00`)
           .order('data', { ascending: false })
           .order('id', { ascending: true })
           .range(de, ate)
+        if (minha !== cargaAtual.current) return
         if (error) throw error
         const bloco = (data ?? []) as Linha[]
         lista.push(...bloco)
         if (bloco.length < ate - de + 1) break
       }
+      if (minha !== cargaAtual.current) return
       setRows(lista)
       setTruncado(lista.length >= MAX_ROWS)
     } catch (e) {
+      if (minha !== cargaAtual.current) return
       console.error(e)
       setErro('Não foi possível carregar as devoluções. Tente novamente.')
       setRows([])
     } finally {
-      setLoading(false)
+      if (minha === cargaAtual.current) setLoading(false)
     }
   }
 
-  useEffect(() => { void carregar() }, [dataDe, dataAte])
+  useEffect(() => {
+    if (!dataValida(dataDe) || !dataValida(dataAte)) return
+    const t = setTimeout(() => { void carregar() }, 500)
+    return () => clearTimeout(t)
+  }, [dataDe, dataAte])
   useEffect(() => { setPage(0) }, [modo, estoque, origem, motivo, status, busca])
 
   const opcoes = useMemo(() => ({
@@ -205,9 +243,14 @@ export function FarmaciaDevolucoesReport() {
           </h1>
           <p className="text-sm" style={{ color: txtSec }}>Medicamentos devolvidos pela enfermagem às farmácias.</p>
         </div>
+        <div className="flex gap-2">
+        <Button variant="outline" onClick={() => void carregar()} disabled={loading} title="Buscar de novo, mantendo os filtros">
+          <RefreshCw size={14} className={`mr-1 ${loading ? 'animate-spin' : ''}`} /> Atualizar
+        </Button>
         <Button variant="outline" onClick={exportarCsv} disabled={loading || lista.length === 0}>
           <Download size={14} className="mr-1" /> Exportar CSV
         </Button>
+        </div>
       </div>
 
       <div className="p-5 space-y-4" style={card}>

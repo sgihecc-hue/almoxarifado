@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTheme } from '@/contexts/theme'
 import {
   Search, Loader2, Filter, Info, Download, X,
-  ChevronDown, ChevronUp, BarChart3, ListOrdered,
+  ChevronDown, ChevronUp, BarChart3, ListOrdered, RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
@@ -95,6 +95,26 @@ function rotuloTipo(t: string | null) {
   return TIPOS.find((x) => x.valor === t)?.rotulo ?? (t ?? '—')
 }
 
+// Filtros ficam salvos no navegador (pedido da Andressa, 16/09/2026): recarregar
+// a página não apaga o que foi escolhido. "Limpar tudo" continua zerando.
+function lerFiltros(chave: string): Record<string, any> {
+  try {
+    const v = JSON.parse(localStorage.getItem(chave) || '{}')
+    return v && typeof v === 'object' ? v : {}
+  } catch {
+    return {}
+  }
+}
+function gravarFiltros(chave: string, valor: Record<string, unknown>) {
+  try { localStorage.setItem(chave, JSON.stringify(valor)) } catch { /* sem armazenamento: segue sem salvar */ }
+}
+// Data digitada pela metade (ou apagada) não dispara busca.
+function dataValida(d: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) && Number(d.slice(0, 4)) >= 2020
+}
+
+const CHAVE_FILTROS = 'relatorio-consumo-farmacia:filtros'
+
 export function PharmacyConsumptionReport() {
   const { mode } = useTheme()
 
@@ -126,30 +146,37 @@ export function PharmacyConsumptionReport() {
   const [erro, setErro] = useState<string | null>(null)
   const [truncado, setTruncado] = useState(false)
 
-  const [modo, setModo] = useState<'resumo' | 'detalhado'>('resumo')
+  const [salvo] = useState(() => lerFiltros(CHAVE_FILTROS))
+  const [modo, setModo] = useState<'resumo' | 'detalhado'>(salvo.modo === 'detalhado' ? 'detalhado' : 'resumo')
   const [filtrosAbertos, setFiltrosAbertos] = useState(true)
   const [page, setPage] = useState(0)
 
   // ---- Filtros ----
   const hoje = new Date()
-  const [dataDe, setDataDe] = useState(iso(new Date(hoje.getTime() - 29 * 86400000)))
-  const [dataAte, setDataAte] = useState(iso(hoje))
-  const [estoquesSel, setEstoquesSel] = useState<string[]>([])
-  const [tiposSel, setTiposSel] = useState<string[]>(TIPOS_PADRAO)
-  const [busca, setBusca] = useState('')
-  const [classe, setClasse] = useState('')
-  const [soControlados, setSoControlados] = useState(false)
-  const [soAltaVig, setSoAltaVig] = useState(false)
-  const [soTalidomida, setSoTalidomida] = useState(false)
-  const [soPadronizados, setSoPadronizados] = useState(false)
+  const [dataDe, setDataDe] = useState<string>(salvo.dataDe ?? iso(new Date(hoje.getTime() - 29 * 86400000)))
+  const [dataAte, setDataAte] = useState<string>(salvo.dataAte ?? iso(hoje))
+  const [estoquesSel, setEstoquesSel] = useState<string[]>(Array.isArray(salvo.estoquesSel) ? salvo.estoquesSel : [])
+  const [tiposSel, setTiposSel] = useState<string[]>(Array.isArray(salvo.tiposSel) ? salvo.tiposSel : TIPOS_PADRAO)
+  const [busca, setBusca] = useState<string>(salvo.busca ?? '')
+  const [classe, setClasse] = useState<string>(salvo.classe ?? '')
+  const [soControlados, setSoControlados] = useState<boolean>(!!salvo.soControlados)
+  const [soAltaVig, setSoAltaVig] = useState<boolean>(!!salvo.soAltaVig)
+  const [soTalidomida, setSoTalidomida] = useState<boolean>(!!salvo.soTalidomida)
+  const [soPadronizados, setSoPadronizados] = useState<boolean>(!!salvo.soPadronizados)
   // Destinos: vários de uma vez. Nada marcado = todos.
-  const [destinosSel, setDestinosSel] = useState<string[]>([])
+  const [destinosSel, setDestinosSel] = useState<string[]>(Array.isArray(salvo.destinosSel) ? salvo.destinosSel : [])
   const [destinoAberto, setDestinoAberto] = useState(false)
   // Lista fixa de quem JÁ recebeu da CAF (todo o histórico, view
   // v_farmacia_destinos_caf): setor novo entra sozinho na primeira saída.
   const [destinosCaf, setDestinosCaf] = useState<{ destino: string; grupo: string }[]>([])
-  const [prontuario, setProntuario] = useState('')
-  const [usuario, setUsuario] = useState('')
+  const [prontuario, setProntuario] = useState<string>(salvo.prontuario ?? '')
+  const [usuario, setUsuario] = useState<string>(salvo.usuario ?? '')
+
+  useEffect(() => {
+    gravarFiltros(CHAVE_FILTROS, { dataDe, dataAte, estoquesSel, tiposSel, busca, classe, soControlados,
+      soAltaVig, soTalidomida, soPadronizados, destinosSel, prontuario, usuario, modo })
+  }, [dataDe, dataAte, estoquesSel, tiposSel, busca, classe, soControlados, soAltaVig,
+      soTalidomida, soPadronizados, destinosSel, prontuario, usuario, modo])
 
   // Listas de opções (classe/destino/usuário) saem dos próprios dados carregados.
   const [opcoes, setOpcoes] = useState<{ classes: string[]; destinos: string[]; usuarios: string[] }>(
@@ -158,7 +185,12 @@ export function PharmacyConsumptionReport() {
 
   // Só o período e o tipo vão para o servidor; o resto é refinado em memória,
   // assim mexer num filtro não custa uma ida ao banco.
+  // Só a busca mais recente vale: uma carga antiga que termine depois (a busca
+  // vai em vários blocos) não pode sobrescrever o resultado do filtro novo.
+  const cargaAtual = useRef(0)
+
   async function carregar() {
+    const minha = ++cargaAtual.current
     setLoading(true)
     setErro(null)
     try {
@@ -175,17 +207,19 @@ export function PharmacyConsumptionReport() {
           .order('data', { ascending: false })
           .order('id', { ascending: true })
 
-        if (dataDe) query = query.gte('data', `${dataDe}T00:00:00`)
-        if (dataAte) query = query.lte('data', `${dataAte}T23:59:59`)
+        if (dataDe) query = query.gte('data', `${dataDe}T00:00:00-03:00`)
+        if (dataAte) query = query.lte('data', `${dataAte}T23:59:59.999-03:00`)
 
         const ate = Math.min(de + BLOCO, MAX_ROWS) - 1
         const { data, error } = await query.range(de, ate)
+        if (minha !== cargaAtual.current) return
         if (error) throw error
 
         const bloco = (data ?? []) as Consumo[]
         lista.push(...bloco)
         if (bloco.length < ate - de + 1) break
       }
+      if (minha !== cargaAtual.current) return
       setRows(lista)
       setTruncado(lista.length >= MAX_ROWS)
 
@@ -199,11 +233,12 @@ export function PharmacyConsumptionReport() {
         usuarios: uniq(lista.map((r) => r.usuario)),
       })
     } catch (e) {
+      if (minha !== cargaAtual.current) return
       console.error(e)
       setErro('Não foi possível carregar o consumo. Tente novamente.')
       setRows([])
     } finally {
-      setLoading(false)
+      if (minha === cargaAtual.current) setLoading(false)
     }
   }
 
@@ -217,7 +252,12 @@ export function PharmacyConsumptionReport() {
   }, [])
 
   // Carga inicial e toda vez que o período mudar — é o único filtro que vai ao banco.
-  useEffect(() => { void carregar() }, [dataDe, dataAte])
+  // Espera a data ficar completa e o usuário parar de mexer antes de buscar.
+  useEffect(() => {
+    if (!dataValida(dataDe) || !dataValida(dataAte)) return
+    const t = setTimeout(() => { void carregar() }, 500)
+    return () => clearTimeout(t)
+  }, [dataDe, dataAte])
   // Qualquer mudança de filtro reinicia a paginação do detalhado.
   useEffect(() => { setPage(0) }, [
     estoquesSel, tiposSel, busca, classe, soControlados, soAltaVig,
@@ -366,7 +406,7 @@ export function PharmacyConsumptionReport() {
     fontWeight: ativo ? 600 : 500,
   })
 
-  const th: React.CSSProperties = { ...lbl, padding: '10px 16px', marginBottom: 0, textAlign: 'left' }
+  const th: React.CSSProperties = { ...lbl, display: 'table-cell', padding: '10px 16px', marginBottom: 0, textAlign: 'left' }
   const thR: React.CSSProperties = { ...th, textAlign: 'right' }
 
   return (
@@ -392,6 +432,9 @@ export function PharmacyConsumptionReport() {
             size="sm"
             onClick={() => setModo('detalhado')}>
             <ListOrdered size={14} className="mr-1" /> Detalhado
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void carregar()} disabled={loading} title="Buscar de novo, mantendo os filtros">
+            <RefreshCw size={14} className={`mr-1 ${loading ? 'animate-spin' : ''}`} /> Atualizar
           </Button>
           <Button variant="outline" size="sm" onClick={exportarCSV} disabled={filtradas.length === 0}>
             <Download size={14} className="mr-1" /> CSV
