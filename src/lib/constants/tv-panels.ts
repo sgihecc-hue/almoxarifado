@@ -17,7 +17,8 @@
 // inteiro, só não busca dado quando está desligado.
 // =====================================================================
 
-export const PAINEL_FARMACIA_ATIVO = false
+// Religado em 17/09/2026 (Adonias): o banco saiu do plano free para a VPS.
+export const PAINEL_FARMACIA_ATIVO = true
 
 // Janela do painel do almoxarifado, em hora cheia do relógio local.
 // INICIO inclusivo, FIM exclusivo: 7 e 18 significa das 07:00 às 17:59.

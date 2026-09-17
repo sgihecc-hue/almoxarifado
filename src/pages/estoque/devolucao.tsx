@@ -2,11 +2,11 @@
 // Devolução da Enfermagem — 2 etapas (decisão de 16/09/2026)
 // Enfermagem (setores em farmacia_setores_enfermagem): registra a devolução,
 //   que fica PENDENTE. Origem obrigatória: o posto/setor de onde voltou.
-// Farmácia (atendente/gestor/administrador/farmacêutico): só CONFIRMA o
-//   recebimento, item a item, com a quantidade que chegou.
-// As duas etapas gravam por RPC (farmacia_devolucao_enviar /
-// farmacia_devolucao_confirmar): lote, saldo, movimento e status numa
-// transação só. A farmácia não lança mais devolução direto.
+// Farmácia (atendente/gestor/administrador/farmacêutico): CONFIRMA as pendentes,
+//   item a item, e desde 17/09/2026 também REGISTRA devolução — que já nasce
+//   confirmada, porque é a própria farmácia que recebe. Origem obrigatória.
+// Tudo grava por RPC (farmacia_devolucao_enviar / farmacia_devolucao_confirmar):
+// lote, saldo, movimento e status numa transação só.
 // =====================================================================
 
 import { useState, useEffect, useMemo } from 'react'
@@ -282,7 +282,7 @@ export function DevolucaoInterna() {
   const removeLine = (uid: string) => setLines((prev) => prev.filter((l) => l.uid !== uid))
 
   const canSubmit =
-    isEnfermagem &&
+    (isEnfermagem || isPharmacy) &&
     !!targetLocationId &&
     !!sourceDepartmentId &&
     lines.length > 0 &&
@@ -312,7 +312,9 @@ export function DevolucaoInterna() {
       })
       if (e1) throw e1
       const numero = (data as any)?.numero
-      setSuccess(`Devolução ${numero ? `nº ${numero} ` : ''}enviada. Ela fica pendente até a farmácia confirmar o recebimento.`)
+      setSuccess((data as any)?.status === 'confirmed'
+        ? `Devolução ${numero ? `nº ${numero} ` : ''}registrada e confirmada. O estoque já foi atualizado.`
+        : `Devolução ${numero ? `nº ${numero} ` : ''}enviada. Ela fica pendente até a farmácia confirmar o recebimento.`)
       setPatientName('')
       setProntuario('')
       setMotivo('')
@@ -357,7 +359,8 @@ export function DevolucaoInterna() {
     }
   }
 
-  const mostraNova = isEnfermagem
+  // Farmácia também registra (17/09/2026): nasce confirmada, porque é ela quem recebe.
+  const mostraNova = isEnfermagem || isPharmacy
   const mostraPendentes = isPharmacy
 
   return (
@@ -381,9 +384,11 @@ export function DevolucaoInterna() {
             <Undo2 size={22} /> Devolução da Enfermagem
           </h1>
           <p className="text-sm" style={{ color: txtSec }}>
-            {mostraNova
+            {isEnfermagem
               ? 'Registre a devolução. Ela fica pendente até a farmácia confirmar o recebimento.'
-              : mostraPendentes
+              : isPharmacy
+                ? 'Registre devoluções recebidas na farmácia ou confirme as enviadas pela enfermagem.'
+                : mostraPendentes
                 ? 'Confirme o recebimento das devoluções enviadas pela enfermagem.'
                 : 'Devoluções são registradas pela enfermagem e confirmadas pela farmácia.'}
           </p>
@@ -617,7 +622,7 @@ export function DevolucaoInterna() {
                   <Button variant="outline" onClick={() => navigate(-1)}>Cancelar</Button>
                   <Button onClick={handleSubmit} disabled={!canSubmit || submitting} className="bg-emerald-600 hover:bg-emerald-700 text-white">
                     {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
-                    Enviar para a Farmácia
+                    {isEnfermagem ? 'Enviar para a Farmácia' : 'Registrar Devolução'}
                   </Button>
                 </div>
               </div>
