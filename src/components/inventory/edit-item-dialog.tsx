@@ -182,6 +182,11 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   const ehAlmox = type === 'warehouse'
   const [motivo, setMotivo] = useState('')
   const [resumo, setResumo] = useState<LinhaResumo[] | null>(null)
+  // Assinatura do que foi conferido no resumo (campos + motivo + entrada). O
+  // 2º clique só grava se nada mudou desde o resumo. NÃO usar watch(callback)
+  // para limpar o resumo: no react-hook-form 7.56 ele dispara no próprio
+  // submit e apagava o resumo na hora — o botão Salvar parecia não funcionar.
+  const [resumoAssinatura, setResumoAssinatura] = useState<string | null>(null)
   const [historico, setHistorico] = useState<EdicaoRegistrada[]>([])
   const barcodeInputRef = useRef<HTMLInputElement>(null)
 
@@ -274,11 +279,11 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   const { register, handleSubmit, formState: { errors }, reset, watch, setValue } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
-      code: item.code,
+      code: type === 'warehouse' ? (item.code ?? '') : item.code,
       barcode: (item as any).barcode || '',
       name: item.name,
       description: item.description || '',
-      category: item.category,
+      category: type === 'warehouse' ? (item.category ?? '') : item.category,
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
       avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
@@ -297,19 +302,14 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
     },
   })
 
-  useEffect(() => {
-    const sub = watch(() => setResumo(null))
-    return () => sub.unsubscribe()
-  }, [watch])
-
   // Recarrega valores quando trocar de item
   useEffect(() => {
     reset({
-      code: item.code,
+      code: type === 'warehouse' ? (item.code ?? '') : item.code,
       barcode: (item as any).barcode || '',
       name: item.name,
       description: item.description || '',
-      category: item.category,
+      category: type === 'warehouse' ? (item.category ?? '') : item.category,
       unit: item.unit,
       min_stock: item.min_stock ?? 0,
       avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
@@ -405,7 +405,12 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
       setError('Selecione o tipo de aquisição da nova entrada')
       return false
     }
-    if (mexeuNoItem && !resumo) {
+    const assinatura = JSON.stringify({
+      campos,
+      motivo: motivo.trim(),
+      entrada: hasEntry ? [data.entry_quantity, data.acquisition_type, data.invoice_number, data.unit_price] : null,
+    })
+    if (mexeuNoItem && (!resumo || resumoAssinatura !== assinatura)) {
       const it = item as any
       const linhas: LinhaResumo[] = Object.entries(campos).map(([campo, depois]) => ({
         campo,
@@ -416,6 +421,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
         linhas.push({ campo: 'entrada', antes: null, depois: `+${data.entry_quantity} ${item.unit} (${data.acquisition_type})` })
       }
       setResumo(linhas)
+      setResumoAssinatura(assinatura)
       return false
     }
 
