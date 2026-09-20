@@ -16,6 +16,7 @@ interface SaidaRow {
   quantity: number
   reason: string | null
   reason_detail: string | null
+  notes: string | null
   performed_at: string
   item_name: string
   item_code: string
@@ -29,6 +30,8 @@ const REASON_LABEL: Record<string, string> = {
   quebra: 'Quebra / Avaria', vencimento: 'Vencimento', transferencia: 'Transferência',
   devolucao_fornecedor: 'Devolução ao fornecedor', defeito_fabricacao: 'Defeito de fabricação',
   embalagem_violada: 'Embalagem violada', ajuste_inventario: 'Ajuste de inventário', outro: 'Outro',
+  emprestimo: 'Empréstimo', pagamento_emprestimo: 'Pagamento de empréstimo', permuta: 'Permuta',
+  consignado: 'Consignado', troca_validade: 'Troca por validade', doacao: 'Doação',
 }
 
 export function SaidasFarmacia() {
@@ -44,7 +47,7 @@ export function SaidasFarmacia() {
     try {
       const { data: mov, error: e1 } = await supabase
         .from('stock_movements')
-        .select('id, quantity, reason, reason_detail, performed_at, item_id, expiry_tracking_id, source_location_id, performed_by')
+        .select('id, quantity, reason, reason_detail, notes, performed_at, item_id, expiry_tracking_id, source_location_id, performed_by')
         .eq('item_type', 'pharmacy').eq('direction', 'out')
         .in('movement_type', ['SAIDA_AVULSA', 'TRANSFERENCIA'])
         .order('performed_at', { ascending: false })
@@ -77,6 +80,7 @@ export function SaidasFarmacia() {
         quantity: m.quantity,
         reason: m.reason,
         reason_detail: m.reason_detail,
+        notes: m.notes,
         performed_at: m.performed_at,
         item_name: itemMap.get(m.item_id)?.name || '(item removido)',
         item_code: itemMap.get(m.item_id)?.code || '',
@@ -167,7 +171,7 @@ export function SaidasFarmacia() {
                   <td className="px-3 py-2 text-right font-semibold">{r.quantity}</td>
                   <td className="px-3 py-2">{r.batch || <span className="text-gray-400">sem lote</span>}</td>
                   <td className="px-3 py-2">{r.loc}</td>
-                  <td className="px-3 py-2">{r.reason ? (REASON_LABEL[r.reason] || r.reason) : '—'}{r.reason_detail ? <span className="text-xs text-gray-400"> · {r.reason_detail}</span> : ''}</td>
+                  <td className="px-3 py-2">{r.reason ? (REASON_LABEL[r.reason] || r.reason) : '—'}{r.reason_detail ? <span className="text-xs text-gray-400"> · {r.reason_detail}</span> : ''}{r.notes ? <div className="text-xs text-gray-500">Obs.: {r.notes}</div> : ''}</td>
                   <td className="px-3 py-2">{r.by || '—'}</td>
                   <td className="px-3 py-2 text-right">
                     {r.reverted ? (

@@ -36,7 +36,8 @@ interface LineItem {
 
 // Tipos de entrada. 'Compra' exige NF/AFM; os demais não.
 // 'Inventário' = entrada por contagem/acerto de estoque (recontagem), sem NF.
-const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Permuta', 'Consignado', 'Troca de validade', 'Inventário'] as const
+// 'Pagamento de empréstimo' = eu emprestei e a outra unidade me devolveu.
+const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Pagamento de empréstimo', 'Doação', 'Permuta', 'Consignado', 'Troca de validade', 'Inventário'] as const
 
 // Rotulo mostrado na tela. O VALOR gravado continua 'Inventário' — a farmacia
 // chama de "Ajuste por inventário", mas ja existem 86 entradas gravadas com o
@@ -91,6 +92,7 @@ export function NfEntry({ type }: NfEntryProps) {
   const [afmNumber, setAfmNumber] = useState('')
   const [supplierCnpj, setSupplierCnpj] = useState('')
   const [supplierName, setSupplierName] = useState('')
+  const [notes, setNotes] = useState('')
 
   // Lista suspensa de origem (Suppliers + Unidades Externas + "Outro")
   interface OrigemOption { tipo: 'supplier' | 'external_unit' | 'outro'; nome: string; cnpj?: string }
@@ -211,8 +213,7 @@ export function NfEntry({ type }: NfEntryProps) {
     }
     setSubmitting(true)
     try {
-      const { data, error: rpcError } = await supabase.rpc('registrar_entrada_nf', {
-        p_item_type: type,
+      const payload = {
         p_invoice_number: invoiceNumber.trim() || null,
         p_invoice_date: invoiceDate || null,
         p_delivery_date: deliveryDate || null,
@@ -228,7 +229,12 @@ export function NfEntry({ type }: NfEntryProps) {
           batch_number: l.batch_number.trim() || null,
           expiry_date: l.expiry_date || null,
         })),
-      })
+      }
+      // Farmacia grava pela RPC propria (com observacao). registrar_entrada_nf
+      // fica intocada porque tambem atende o almoxarifado.
+      const { data, error: rpcError } = type === 'pharmacy'
+        ? await supabase.rpc('registrar_entrada_farmacia', { ...payload, p_notes: notes.trim() || null })
+        : await supabase.rpc('registrar_entrada_nf', { ...payload, p_item_type: type })
       if (rpcError) throw rpcError
       const n = (data as any)?.itens ?? lines.length
       setToast(`Entrada (${entryType}) registrada: ${n} ${n === 1 ? 'item' : 'itens'}.`)
@@ -326,6 +332,19 @@ export function NfEntry({ type }: NfEntryProps) {
               readOnly={!!origemKey && !isOutro}
             />
           </div>
+          {type === 'pharmacy' && (
+            <div className="md:col-span-3">
+              <Label htmlFor="obs">Observação (opcional)</Label>
+              <textarea
+                id="obs"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                placeholder="Ex.: Hospital X pagou o empréstimo de 10/09"
+                className="mt-1 w-full rounded-md border border-input bg-white px-3 py-2 text-sm"
+              />
+            </div>
+          )}
         </div>
       </div>
 

@@ -70,6 +70,8 @@ const CAF_ONLY_REASONS = [
   { value: 'consignado', label: 'Consignado' },
   { value: 'troca_validade', label: 'Troca por validade' },
   { value: 'doacao', label: 'Doação' },
+  // Eu peguei emprestado e estou devolvendo (pagando) a outra unidade.
+  { value: 'pagamento_emprestimo', label: 'Pagamento de empréstimo' },
 ] as const
 
 // Motivos que exigem informar um destino (quem recebe).
@@ -112,11 +114,13 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
   const REASONS = [
     ...BASE_REASONS,
     ...(isPharmacy ? PHARMACY_ONLY_REASONS : []),
-    ...(isCaf ? CAF_ONLY_REASONS : []),
+    ...(isPharmacy && isCaf ? CAF_ONLY_REASONS : []),
   ]
 
   const [reason, setReason] = useState<string>('quebra')
   const [reasonDetail, setReasonDetail] = useState('')
+  // Observacao livre — so farmacia. O almox continua mandando p_notes null.
+  const [notes, setNotes] = useState('')
   const [destino, setDestino] = useState('') // "tipo|nome"
   const [destinos, setDestinos] = useState<{ fornecedores: DestinoOption[]; externas: DestinoOption[]; setores: DestinoOption[] }>({
     fornecedores: [], externas: [], setores: [],
@@ -250,7 +254,7 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
         p_item_type: type,
         p_reason: reason,
         p_reason_detail: reasonDetail.trim() || null,
-        p_notes: null,
+        p_notes: isPharmacy ? (notes.trim() || null) : null,
         p_location_code: locationCode,
         p_destino_tipo: destinoTipo,
         p_destino_nome: destinoNome,
@@ -303,7 +307,7 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
             </select>
           </div>
           <div>
-            <Label htmlFor="detail">Detalhe / Observação {reason === 'outro' ? '*' : '(opcional)'}</Label>
+            <Label htmlFor="detail">{isPharmacy ? 'Detalhe do motivo' : 'Detalhe / Observação'} {reason === 'outro' ? '*' : '(opcional)'}</Label>
             <Input id="detail" value={reasonDetail} onChange={(e) => setReasonDetail(e.target.value)} placeholder="Descreva o motivo" className="mt-1" />
           </div>
           {/* Destino aparece SEMPRE (fornecedores + hospitais parceiros + setores
@@ -350,6 +354,19 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
               </p>
             )}
           </div>
+          {isPharmacy && (
+            <div className="md:col-span-2">
+              <Label htmlFor="obs">Observação (opcional)</Label>
+              <textarea
+                id="obs"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                placeholder="Ex.: pagamento do empréstimo feito ao Hospital X em 10/09"
+                className="mt-1 w-full rounded-md border border-input bg-white px-3 py-2 text-sm"
+              />
+            </div>
+          )}
         </div>
       </div>
 
