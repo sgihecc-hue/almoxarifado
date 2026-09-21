@@ -1,5 +1,5 @@
 // =====================================================================
-// ENTRADAS do almoxarifado — ver, completar e anular entradas existentes.
+// ENTRADAS (almoxarifado e farmacia) — ver, completar e anular entradas.
 //
 // Nasceu da mascara cirurgica (21/09/2026): a compra da NF 30641 chegou antes
 // da nota, entrou sem NF em 18/08 e, quando a nota chegou, a unica tela com
@@ -10,8 +10,10 @@
 //   - Anular: desfaz uma entrada lancada por engano, devolvendo o saldo do
 //     local e do lote, com motivo. A linha fica marcada, nunca apagada.
 // As entradas aparecem agrupadas por RODADA (tudo que foi gravado junto).
-// Backend: almox_completar_entrada / almox_anular_entrada
-// (migration 20260921180000_almox_entradas_seguras.sql).
+// Backend separado por modulo (regra do projeto):
+//   material -> almox_completar_entrada / almox_anular_entrada (20260921180000)
+//   farmacia -> farmacia_completar_entrada / farmacia_anular_entrada (20260921200000)
+//               — na farmacia anular lanca um AJUSTE de saida no livro-razao.
 // =====================================================================
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
@@ -59,13 +61,33 @@ interface Rodada {
 }
 
 type Filtro = 'todas' | 'pendentes' | 'anuladas'
+type Tipo = 'warehouse' | 'pharmacy'
+
+const CFG: Record<Tipo, {
+  titulo: string; tabelaItem: string; rpcCompletar: string; rpcAnular: string; papeis: string[]; oQue: string
+}> = {
+  warehouse: {
+    titulo: 'Entradas — Almoxarifado', tabelaItem: 'warehouse_items',
+    rpcCompletar: 'almox_completar_entrada', rpcAnular: 'almox_anular_entrada',
+    papeis: ['administrador', 'gestor', 'atendente', 'warehouse_manager'], oQue: 'material',
+  },
+  pharmacy: {
+    titulo: 'Entradas — Farmácia', tabelaItem: 'pharmacy_items',
+    rpcCompletar: 'farmacia_completar_entrada', rpcAnular: 'farmacia_anular_entrada',
+    papeis: ['administrador', 'gestor', 'atendente', 'pharmacist'], oQue: 'medicamento',
+  },
+}
 
 const semNF = (nf: string | null) => !nf || ['—', '-', 'SN', 'S/N'].includes(nf.trim())
 const MOTIVO_MINIMO = 10
 
-export function EntradasAlmox() {
+export function EntradasAlmox() { return <EntradasPage tipo="warehouse" /> }
+export function EntradasFarmacia() { return <EntradasPage tipo="pharmacy" /> }
+
+function EntradasPage({ tipo }: { tipo: Tipo }) {
+  const cfg = CFG[tipo]
   const { user } = useAuth()
-  const podeOperar = ['administrador', 'gestor', 'atendente', 'warehouse_manager'].includes(user?.role || '')
+  const podeOperar = cfg.papeis.includes(user?.role || '')
 
   const [linhas, setLinhas] = useState<Linha[]>([])
   const [usuarios, setUsuarios] = useState<Record<string, string>>({})
@@ -87,17 +109,17 @@ export function EntradasAlmox() {
       const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString()
       // NF pendente aparece sempre, mesmo fora do periodo: e pendencia a resolver.
       const [recentes, pendentes, locs] = await Promise.all([
-        supabase.from('stock_entries').select('*, item:warehouse_items(name, code, unit)')
-          .eq('item_type', 'warehouse').gte('created_at', desde)
+        supabase.from('stock_entries').select(`*, item:${cfg.tabelaItem}(name, code, unit)`)
+          .eq('item_type', tipo).gte('created_at', desde)
           .order('created_at', { ascending: false }).limit(2000),
-        supabase.from('stock_entries').select('*, item:warehouse_items(name, code, unit)')
-          .eq('item_type', 'warehouse').eq('nf_pendente', true),
+        supabase.from('stock_entries').select(`*, item:${cfg.tabelaItem}(name, code, unit)`)
+          .eq('item_type', tipo).eq('nf_pendente', true),
         supabase.from('stock_locations').select('id, code, name'),
       ])
       if (recentes.error) throw recentes.error
       if (pendentes.error) throw pendentes.error
       const mapa = new Map<string, Linha>()
-      for (const l of [...(recentes.data || []), ...(pendentes.data || [])] as Linha[]) mapa.set(l.id, l)
+      for (const l of [...(recentes.data || []), ...(pendentes.data || [])] as unknown as Linha[]) mapa.set(l.id, l)
       const todas = [...mapa.values()]
       setLinhas(todas)
       setLocais(Object.fromEntries(((locs.data || []) as any[]).map((l) => [l.id, l.code === 'ALMOX' ? 'Almoxarifado' : l.name])))
@@ -111,7 +133,7 @@ export function EntradasAlmox() {
     } finally {
       setLoading(false)
     }
-  }, [dias])
+  }, [dias, tipo, cfg.tabelaItem])
 
   useEffect(() => { carregar() }, [carregar])
   useEffect(() => {
@@ -158,7 +180,7 @@ export function EntradasAlmox() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <PackagePlus className="w-6 h-6 text-emerald-600" /> Entradas — Almoxarifado
+            <PackagePlus className="w-6 h-6 text-emerald-600" /> {cfg.titulo}
           </h1>
           <p className="text-sm text-gray-500 max-w-3xl">
             Nota fiscal que chegou depois da mercadoria? Use <strong>Completar NF</strong> na entrada que já existe —
@@ -265,11 +287,11 @@ export function EntradasAlmox() {
       )}
 
       {completar && (
-        <CompletarDialog rodada={completar} onClose={() => setCompletar(null)}
+        <CompletarDialog rodada={completar} rpc={cfg.rpcCompletar} onClose={() => setCompletar(null)}
           onDone={(msg) => { setCompletar(null); setToast(msg); carregar() }} />
       )}
       {anular && (
-        <AnularDialog rodada={anular} onClose={() => setAnular(null)}
+        <AnularDialog rodada={anular} rpc={cfg.rpcAnular} oQue={cfg.oQue} onClose={() => setAnular(null)}
           onDone={(msg) => { setAnular(null); setToast(msg); carregar() }} />
       )}
 
@@ -283,7 +305,7 @@ export function EntradasAlmox() {
 }
 
 // ---------------------------------------------------------------------------
-function CompletarDialog({ rodada, onClose, onDone }: { rodada: Rodada; onClose: () => void; onDone: (msg: string) => void }) {
+function CompletarDialog({ rodada, rpc, onClose, onDone }: { rodada: Rodada; rpc: string; onClose: () => void; onDone: (msg: string) => void }) {
   const l0 = rodada.linhas[0]
   const [nf, setNf] = useState(semNF(l0.invoice_number) ? '' : (l0.invoice_number || ''))
   const [dataNf, setDataNf] = useState(l0.invoice_date || '')
@@ -313,7 +335,7 @@ function CompletarDialog({ rodada, onClose, onDone }: { rodada: Rodada; onClose:
         supplier_cnpj: cnpj.trim() || null,
       }
       if (confirmar) dados.confirmar = true
-      const { error } = await supabase.rpc('almox_completar_entrada', {
+      const { error } = await supabase.rpc(rpc, {
         p_entry_ids: rodada.linhas.map((l) => l.id),
         p_dados: dados,
         p_motivo: motivo.trim(),
@@ -374,7 +396,7 @@ function CompletarDialog({ rodada, onClose, onDone }: { rodada: Rodada; onClose:
 }
 
 // ---------------------------------------------------------------------------
-function AnularDialog({ rodada, onClose, onDone }: { rodada: Rodada; onClose: () => void; onDone: (msg: string) => void }) {
+function AnularDialog({ rodada, rpc, oQue, onClose, onDone }: { rodada: Rodada; rpc: string; oQue: string; onClose: () => void; onDone: (msg: string) => void }) {
   const [marcadas, setMarcadas] = useState<Record<string, boolean>>(
     Object.fromEntries(rodada.linhas.map((l) => [l.id, true])))
   const [motivo, setMotivo] = useState('')
@@ -391,7 +413,7 @@ function AnularDialog({ rodada, onClose, onDone }: { rodada: Rodada; onClose: ()
     if (!trava.tentar()) return
     setSalvando(true)
     try {
-      const { data, error } = await supabase.rpc('almox_anular_entrada', {
+      const { data, error } = await supabase.rpc(rpc, {
         p_entry_ids: escolhidas.map((l) => l.id),
         p_motivo: motivo.trim(),
       })
@@ -411,8 +433,8 @@ function AnularDialog({ rodada, onClose, onDone }: { rodada: Rodada; onClose: ()
       <DialogContent className="max-w-xl">
         <DialogHeader><DialogTitle>Anular entrada de {dataBR(rodada.quando, true)}</DialogTitle></DialogHeader>
         <p className="text-sm text-gray-600">
-          Anular <strong>tira do estoque</strong> a quantidade que esta entrada somou. Use quando a entrada foi lançada por
-          engano ou em duplicidade. A entrada continua visível, marcada como anulada.
+          Anular <strong>tira do estoque</strong> a quantidade de {oQue} que esta entrada somou. Use quando a entrada foi
+          lançada por engano ou em duplicidade. A entrada continua visível, marcada como anulada.
         </p>
         <div className="border border-gray-100 rounded-md divide-y">
           {rodada.linhas.map((l) => (

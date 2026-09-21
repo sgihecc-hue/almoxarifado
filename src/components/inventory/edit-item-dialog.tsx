@@ -985,7 +985,20 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
             </div>
           </div>
 
-          {/* Nova entrada de estoque (opcional) */}
+          {/* Nova entrada de estoque (opcional) — SO ALMOXARIFADO.
+              Na farmacia esta secao gravava a entrada direto do navegador, FORA
+              do livro-razao (stock_movements): o saldo por estoque (item_stocks)
+              nao mudava e so a coluna legada subia. Nunca foi usada (as 214
+              entradas de medicamento vieram da Nova Entrada) e foi fechada em
+              21/09/2026 antes que alguem usasse. */}
+          {!ehAlmox && (
+            <div className="text-sm rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-900 p-4">
+              Para dar <strong>entrada de medicamento</strong>, use <strong>Nova Entrada</strong> no estoque — é ela que
+              registra lote, validade e o movimento no livro. Nota fiscal que chegou depois? Complete a entrada em
+              <strong> Farmácia → Entradas</strong>.
+            </div>
+          )}
+          {ehAlmox && (
           <div className="border border-emerald-200 rounded-lg overflow-hidden">
             <div className="flex items-center gap-2 px-4 py-3 bg-emerald-50 border-b border-emerald-200">
               <FileText className="w-4 h-4 text-emerald-700" />
@@ -1097,6 +1110,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
               </div>
             </div>
           </div>
+          )}
 
           {ehAlmox && (
             <div className="rounded-lg border border-amber-300 overflow-hidden">

@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { CurrencyInput } from '@/components/ui/currency-input'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, type EntradaParecida } from '@/lib/utils/entradas'
 import { suppliersService } from '@/lib/services/farmacia-cadastros'
 import { externalUnitsService } from '@/lib/services/external-units'
 import { useAuth } from '@/contexts/auth'
@@ -93,6 +94,14 @@ export function NfEntry({ type }: NfEntryProps) {
   const [supplierCnpj, setSupplierCnpj] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [notes, setNotes] = useState('')
+  // NF que chega depois do medicamento: entra como "NF pendente" e a nota e
+  // completada depois NA MESMA entrada (tela Entradas), sem lancar de novo.
+  const [nfPendente, setNfPendente] = useState(false)
+  // Rodada unica desta tela: o banco recusa o mesmo envio duas vezes. Foi um
+  // duplo clique aqui que gravou a NF 1599 em dobro (17/09/2026).
+  const [rodadaId] = useState(novaRodadaId)
+  const trava = useTravaEnvio()
+  const [parecida, setParecida] = useState<EntradaParecida | null>(null)
 
   // Lista suspensa de origem (Suppliers + Unidades Externas + "Outro")
   interface OrigemOption { tipo: 'supplier' | 'external_unit' | 'outro'; nome: string; cnpj?: string }
@@ -191,11 +200,11 @@ export function NfEntry({ type }: NfEntryProps) {
     // Fornecedor obrigatório em tudo, MENOS no Inventário (não tem fornecedor).
     (isInventario || supplierName.trim()) &&
     // Compra exige NF + data de emissão. AFM deixou de ser obrigatório.
-    (!isCompra || (invoiceNumber.trim() && invoiceDate)) &&
+    (!isCompra || nfPendente || (invoiceNumber.trim() && invoiceDate)) &&
     lines.length > 0 &&
     lines.every((l) => l.quantity > 0 && l.batch_number.trim() && l.expiry_date)
 
-  async function handleSubmit() {
+  async function handleSubmit(confirmarParecida = false) {
     setError(null)
     if (!canSubmit) {
       // Erro especifico se o problema for lote/validade em alguma linha
@@ -205,13 +214,16 @@ export function NfEntry({ type }: NfEntryProps) {
         return
       }
       setError(isCompra
-        ? 'Para Compra, preencha NF, data de emissão, fornecedor e ao menos uma linha válida.'
+        ? 'Para Compra, preencha NF, data de emissão, fornecedor e ao menos uma linha válida — ou marque "a NF ainda não chegou".'
         : isInventario
           ? 'Adicione ao menos uma linha com quantidade, lote e validade.'
           : 'Informe a origem/fornecedor e ao menos uma linha com quantidade válida.')
       return
     }
+    if (!trava.tentar()) return
+    setParecida(null)
     setSubmitting(true)
+    let gravou = false
     try {
       const payload = {
         p_invoice_number: invoiceNumber.trim() || null,
@@ -233,17 +245,34 @@ export function NfEntry({ type }: NfEntryProps) {
       // Farmacia grava pela RPC propria (com observacao). registrar_entrada_nf
       // fica intocada porque tambem atende o almoxarifado.
       const { data, error: rpcError } = type === 'pharmacy'
-        ? await supabase.rpc('registrar_entrada_farmacia', { ...payload, p_notes: notes.trim() || null })
+        ? await supabase.rpc('registrar_entrada_farmacia', {
+            ...payload,
+            p_notes: notes.trim() || null,
+            p_entry_group_id: rodadaId,
+            p_confirmar_parecida: confirmarParecida,
+            p_nf_pendente: isCompra && nfPendente,
+          })
         : await supabase.rpc('registrar_entrada_nf', { ...payload, p_item_type: type })
       if (rpcError) throw rpcError
       const n = (data as any)?.itens ?? lines.length
+      gravou = true
       setToast(`Entrada (${entryType}) registrada: ${n} ${n === 1 ? 'item' : 'itens'}.`)
       setTimeout(() => navigate(backTo), 1200)
     } catch (e: any) {
-      console.error('Entry error:', e)
-      setError(getErrorMessage(e))
+      const aviso = lerAvisoEntrada(e)
+      if (aviso?.tipo === 'ja_registrada') {
+        gravou = true
+        setToast('Esta entrada já tinha sido registrada — nada foi somado de novo.')
+        setTimeout(() => navigate(backTo), 1500)
+      } else if (aviso?.tipo === 'parecida') {
+        setParecida(aviso.info)
+      } else {
+        console.error('Entry error:', e)
+        setError(getErrorMessage(e))
+      }
     } finally {
       setSubmitting(false)
+      if (!gravou) trava.liberar()
     }
   }
 
@@ -280,11 +309,17 @@ export function NfEntry({ type }: NfEntryProps) {
             </select>
           </div>
           <div>
-            <Label htmlFor="nf">Número da NF {isCompra ? '*' : '(opcional)'}</Label>
+            <Label htmlFor="nf">Número da NF {isCompra && !nfPendente ? '*' : '(opcional)'}</Label>
             <Input id="nf" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Ex: NF-123456" className="mt-1" />
+            {isCompra && type === 'pharmacy' && (
+              <label className="flex items-start gap-2 mt-2 text-xs text-gray-600">
+                <input type="checkbox" checked={nfPendente} onChange={(e) => setNfPendente(e.target.checked)} className="mt-0.5" />
+                <span>A NF ainda não chegou. A entrada fica como <strong>NF pendente</strong> e a nota é completada depois em <strong>Entradas</strong>, sem lançar de novo.</span>
+              </label>
+            )}
           </div>
           <div>
-            <Label htmlFor="data">Data de Emissão da NF {isCompra ? '*' : ''}</Label>
+            <Label htmlFor="data">Data de Emissão da NF {isCompra && !nfPendente ? '*' : ''}</Label>
             <Input id="data" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="mt-1" />
           </div>
           <div>
@@ -467,11 +502,30 @@ export function NfEntry({ type }: NfEntryProps) {
         <div className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {error}</div>
       )}
 
+      {parecida && (
+        <div className="p-4 text-sm bg-amber-50 border border-amber-300 rounded-lg space-y-3">
+          <p className="flex items-start gap-2 text-amber-900">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span><strong>Esta entrada parece repetida.</strong> {descreverParecida(parecida)}</span>
+          </p>
+          <p className="text-amber-800 text-xs">
+            Se a nota só chegou agora para um medicamento que já entrou, <strong>não registre de novo</strong>: vá em
+            Entradas e complete a entrada que já existe.
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setParecida(null)}>Cancelar</Button>
+            <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" onClick={() => handleSubmit(true)} disabled={submitting}>
+              É outra entrada — registrar mesmo assim
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-gray-500 flex items-center gap-1"><Building2 className="w-4 h-4" /> Destino: {locationLabel}</p>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => navigate(backTo)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit || submitting} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+          <Button onClick={() => handleSubmit()} disabled={!canSubmit || submitting} className="bg-emerald-600 hover:bg-emerald-700 text-white">
             {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
             Registrar Entrada
           </Button>
