@@ -78,10 +78,15 @@ export function MyRequests() {
   // pede pro CAF -> aparece tanto na "Minhas Solicitacoes" da Sat 1 quanto na
   // do CAF. O filtro anterior era so por solicitante e escondia da farmacia
   // que precisava atender.
+  // Tambem entra o pedido ROTEADO pra este estoque (source_location_id), que e
+  // como os Postos chegam na Satelite Terreo: o setor se chama "Posto Terreo",
+  // nao "Farmacia Satelite Terreo", entao a comparacao por nome nao pega. Sem
+  // isto o pedido de kit da enfermagem nao apareceria pra quem vai atender.
   const scopedRequests = activeStock
     ? typeScopedRequests.filter(r =>
         departmentBelongsToStock(r.department, activeStock) ||
-        departmentBelongsToStock(r.destination_department, activeStock)
+        departmentBelongsToStock(r.destination_department, activeStock) ||
+        r.source_location_id === activeStock.id
       )
     : typeScopedRequests
 

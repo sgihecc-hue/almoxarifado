@@ -34,6 +34,7 @@ import {
   Shield,
   PackageCheck,
   Barcode,
+  Boxes,
 } from 'lucide-react'
 import { PAINEL_FARMACIA_ATIVO } from './tv-panels'
 import type { LucideIcon } from 'lucide-react'
@@ -100,6 +101,15 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
     //     Farmacia usa titulo "Solicitações" e item "Solicitações" (sem
     //     "Minhas"). Almox mantem "Minhas Solicitações" pra nao quebrar
     //     o hábito dos usuarios que ja conhecem esse fluxo. ---
+    // --- ENFERMAGEM: pedido de kit/avulso com paciente, atendido pela
+    //     Satelite Terreo. So os Postos (codigo ENF*) veem. ---
+    {
+      title: 'Enfermagem',
+      module: 'shared',
+      items: [
+        { name: 'Pedido de Enfermagem', icon: Boxes, href: '/enfermagem/novo-pedido', show: (f) => f.isEnfermagem },
+      ],
+    },
     {
       title: 'Solicitações',
       module: 'farmacia',
@@ -248,6 +258,10 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Unidades Internas', icon: Building2, href: '/farmacia/unidades-internas', show: (f) => isCaf && f.canManageRequests },
         { name: 'Prescritores', icon: Stethoscope, href: '/farmacia/prescritores', show: (f) => isCaf && f.canManageRequests },
         { name: 'Pacientes', icon: UsersRound, href: '/farmacia/pacientes', show: (f) => isCaf && f.canManageRequests },
+        // Kits da enfermagem (conjuntos de material atendidos pela Satelite
+        // Terreo). Fora do isCaf de proposito: quem opera a Satelite Terreo
+        // precisa enxergar a composicao do que vai separar.
+        { name: 'Kits', icon: Boxes, href: '/farmacia/kits', show: (f) => f.isManager || f.isAdmin },
         // Gestor ajusta setor e nível (Solicitante/Atendente/Farmacêutico) dos colaboradores.
         { name: 'Colaboradores', icon: Users, href: '/colaboradores', show: (f) => isCaf && (f.isManager || f.isAdmin) },
       ],

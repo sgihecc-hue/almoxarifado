@@ -20,6 +20,7 @@ import type { Request } from '@/lib/services/requests'
 import { formatRequestNumber } from '@/lib/utils/request'
 import { getDepartmentName } from '@/lib/constants/departments'
 import { supabase } from '@/lib/supabase'
+import { kitsService } from '@/lib/services/kits'
 
 interface LotOption { id: string; batch_number: string; expiry_date: string | null; current_quantity: number }
 
@@ -767,9 +768,20 @@ export function RequestDetails() {
   const [loading, setLoading] = useState(true)
   const [commenting, setCommenting] = useState(false)
   const [comment, setComment] = useState('')
+  // Pedido de enfermagem: kits e pacientes. Vem vazio nos demais pedidos, e o
+  // bloco nem aparece — nada muda pro almoxarifado nem pros pedidos de hoje.
+  const [kitsPedido, setKitsPedido] = useState<{
+    kits: Array<{ kit_name: string; patient_name: string; quantity: number }>
+    avulsos: Array<{ item_name: string; patient_name: string; quantity: number }>
+  }>({ kits: [], avulsos: [] })
 
   useEffect(() => {
     if (id) loadRequest(id)
+  }, [id])
+
+  useEffect(() => {
+    if (!id) return
+    kitsService.getKitsDoPedido(id).then(setKitsPedido).catch((e) => console.error(e))
   }, [id])
 
   // Add event listeners for print
@@ -1041,6 +1053,50 @@ export function RequestDetails() {
           quebrava palavra-por-palavra. Agora so vira coluna lateral em xl+ */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 print:grid-cols-1 print:gap-2">
         <div className="xl:col-span-2 space-y-6 print:space-y-2 print:col-span-1">
+          {/* Kits e pacientes (pedido de enfermagem) — so leitura. Os itens
+              somados aparecem na lista normal de itens, logo abaixo. */}
+          {(kitsPedido.kits.length > 0 || kitsPedido.avulsos.length > 0) && (
+            <div className="bg-white rounded-xl p-6 border border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Kits e pacientes</h2>
+              {kitsPedido.kits.length > 0 && (
+                <table className="w-full text-sm mb-4">
+                  <thead className="text-gray-500">
+                    <tr>
+                      <th className="text-left font-normal">Kit</th>
+                      <th className="text-left font-normal">Paciente</th>
+                      <th className="text-right font-normal w-20">Qtd</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {kitsPedido.kits.map((k, i) => (
+                      <tr key={`k${i}`} className="border-t border-gray-100">
+                        <td className="py-1.5">{k.kit_name}</td>
+                        <td className="py-1.5">{k.patient_name}</td>
+                        <td className="py-1.5 text-right">{k.quantity}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {kitsPedido.avulsos.length > 0 && (
+                <>
+                  <p className="text-xs text-gray-500 mb-1">Material avulso</p>
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {kitsPedido.avulsos.map((a, i) => (
+                        <tr key={`a${i}`} className="border-t border-gray-100">
+                          <td className="py-1.5">{a.item_name}</td>
+                          <td className="py-1.5">{a.patient_name}</td>
+                          <td className="py-1.5 text-right w-20">{a.quantity}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Request Info */}
           <div className="bg-white rounded-xl p-6 border border-gray-100 print:p-2 print:border-0 print:shadow-none">
             <div className="flex items-center justify-between mb-6 print:mb-2">

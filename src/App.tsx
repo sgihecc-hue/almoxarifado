@@ -63,6 +63,8 @@ import { PharmacyCatalogo } from '@/pages/farmacia/catalogo'
 import { HistoricoGlobal } from '@/pages/historico-global'
 import { Fornecedores } from '@/pages/farmacia/fornecedores'
 import { UnidadesExternas } from '@/pages/farmacia/unidades-externas'
+import { CadastroKits } from '@/pages/farmacia/kits'
+import { NovoPedidoEnfermagem } from '@/pages/enfermagem/novo-pedido'
 import { UnidadesInternas } from '@/pages/farmacia/unidades-internas'
 import { CarrosEmergencia } from '@/pages/farmacia/carros-emergencia'
 import { Prescritores } from '@/pages/farmacia/prescritores'
@@ -529,6 +531,20 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <Fornecedores />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/farmacia/kits" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <CadastroKits />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/enfermagem/novo-pedido" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <NovoPedidoEnfermagem />
                   </MainLayout>
                 </ProtectedRoute>
               } />

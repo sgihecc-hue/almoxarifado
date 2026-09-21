@@ -41,6 +41,13 @@ export function RequestInbox() {
       ? 'warehouse'
       : 'pharmacy'
 
+  // Satelite Terreo e satelite de MATERIAL: os pedidos dela sao type='warehouse'
+  // (Postos e, agora, os pedidos de kit da enfermagem). Sem isto, quem opera a
+  // Satelite Terreo pela farmacia nao via pedido nenhum — o filtro por modulo
+  // so deixava passar medicamento. Vale SO pra farmacia com SAT_T ativo; o
+  // modulo almoxarifado nao e afetado.
+  const satTerreoNaFarmacia = moduleRequestType === 'pharmacy' && activeStock?.code === 'SAT_T'
+
   useEffect(() => {
     loadRequests()
   }, [])
@@ -58,7 +65,8 @@ export function RequestInbox() {
   }
 
   const getRequestStats = () => {
-    const filteredByType = requests.filter(r => r.type === moduleRequestType)
+    const filteredByType = requests.filter(r =>
+      r.type === (satTerreoNaFarmacia ? 'warehouse' : moduleRequestType))
     const total = filteredByType.length
     const pending = filteredByType.filter(r => r.status === 'pending').length
     const urgent = filteredByType.filter(r => r.status === 'pending' && r.priority === 'high').length
@@ -89,7 +97,9 @@ export function RequestInbox() {
       (activeTab === 'today' && new Date(request.created_at).toDateString() === new Date().toDateString())
 
     const matchesDate = isWithinPeriod(request.created_at, dateRange.startDate, dateRange.endDate)
-    const matchesType = request.type === moduleRequestType
+    const matchesType = satTerreoNaFarmacia
+      ? request.type === 'warehouse'
+      : request.type === moduleRequestType
 
     // Filtro por estoque de origem: se o operador está trabalhando num estoque
     // específico (CAF/SAT_1/SAT_2/SAT_T), só vê solicitações que serão atendidas
