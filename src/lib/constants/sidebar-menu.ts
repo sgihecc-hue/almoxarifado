@@ -61,6 +61,11 @@ export interface VisibilityFlags {
   isManager: boolean
   isAtendente: boolean
   isEnfermagem: boolean
+  // Setor na lista oficial de enfermagem (farmacia_setores_enfermagem). Usado
+  // SO no Pedido de Enfermagem: isEnfermagem (codigo ENF*) tambem esconde
+  // Dashboard e Configuracoes, e mudar ele afetaria os 114 da Unidade de
+  // Internacao, que nao tem codigo ENF.
+  pedeKitEnfermagem: boolean
   canManageRequests: boolean
 }
 
@@ -102,12 +107,12 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
     //     "Minhas"). Almox mantem "Minhas Solicitações" pra nao quebrar
     //     o hábito dos usuarios que ja conhecem esse fluxo. ---
     // --- ENFERMAGEM: pedido de kit/avulso com paciente, atendido pela
-    //     Satelite Terreo. So os Postos (codigo ENF*) veem. ---
+    //     Satelite Terreo. So os setores de enfermagem veem. ---
     {
       title: 'Enfermagem',
       module: 'shared',
       items: [
-        { name: 'Pedido de Enfermagem', icon: Boxes, href: '/enfermagem/novo-pedido', show: (f) => f.isEnfermagem },
+        { name: 'Pedido de Enfermagem', icon: Boxes, href: '/enfermagem/novo-pedido', show: (f) => f.pedeKitEnfermagem },
       ],
     },
     {

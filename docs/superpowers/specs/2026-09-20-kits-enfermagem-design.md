@@ -34,9 +34,12 @@ a estrutura; os kits são cadastrados depois, pela tela de cadastro.
 6. **Fluxo:** pendente → aprovado → em separação → entregue. **Sem** confirmação
    de recebimento (`needs_receipt_confirmation = false`).
 7. **Cadastro de kits:** gestor e administrador.
-8. **Quem pede:** os setores já roteados para a Satélite Térreo por
-   `departments.default_warehouse_location_id` — hoje Posto Térreo, 1º e 2º Andar.
-   Não é preciso marcar "setor de enfermagem" em lugar nenhum.
+8. **Quem pede:** os 5 setores de `farmacia_setores_enfermagem` (Postos Térreo,
+   1º e 2º Andar, Coordenação de Enfermagem e Unidade de Internação) — a mesma
+   lista da devolução e da regra de pacientes. O pedido vai sempre para a
+   Satélite Térreo. *(Revisto em 21/09/2026: a primeira versão usava "setor
+   roteado para a Satélite Térreo", que deixava de fora os 114 usuários da
+   Unidade de Internação.)*
 9. **Quem atende:** quem estiver na Satélite Térreo. A caixa de entrada da
    farmácia, com a Satélite Térreo como estoque ativo, passa a listar os pedidos
    de material roteados para ela (hoje ela filtra só medicamento). Os pedidos

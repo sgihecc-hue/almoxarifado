@@ -122,16 +122,20 @@ class KitsService {
     if (error) throw new Error('Erro ao gravar itens do kit: ' + error.message)
   }
 
-  /** O setor do usuario e atendido pela Satelite Terreo? So esses pedem kit. */
-  async isSetorDaSatelite(departmentId: string | null | undefined): Promise<boolean> {
+  /**
+   * O setor e de enfermagem? So esses pedem kit. Usa farmacia_setores_enfermagem,
+   * a mesma lista da devolucao e da regra de pacientes (e a que a RPC confere).
+   * O pedido vai sempre pra Satelite Terreo, qualquer que seja o setor.
+   */
+  async isSetorEnfermagem(departmentId: string | null | undefined): Promise<boolean> {
     if (!departmentId) return false
     const { data, error } = await supabase
-      .from('departments')
-      .select('default_warehouse_location_id')
-      .eq('id', departmentId)
+      .from('farmacia_setores_enfermagem')
+      .select('department_id')
+      .eq('department_id', departmentId)
       .maybeSingle()
     if (error) return false
-    return data?.default_warehouse_location_id === SAT_T_ID
+    return !!data
   }
 
   /**

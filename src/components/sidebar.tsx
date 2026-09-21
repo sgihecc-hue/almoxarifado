@@ -43,11 +43,30 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   }, [user?.department_id])
 
   const isEnfermagem = !!deptCode && deptCode.startsWith('ENF') && !isAdmin
+
+  // Pode pedir kit: setor na lista oficial de enfermagem. Separado de
+  // isEnfermagem de proposito — ver VisibilityFlags.pedeKitEnfermagem.
+  const [pedeKitEnfermagem, setPedeKitEnfermagem] = useState(false)
+  useEffect(() => {
+    if (!user?.department_id) { setPedeKitEnfermagem(false); return }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { data } = await supabase
+          .from('farmacia_setores_enfermagem').select('department_id')
+          .eq('department_id', user.department_id!).maybeSingle()
+        if (!cancelled) setPedeKitEnfermagem(!!data)
+      } catch {
+        if (!cancelled) setPedeKitEnfermagem(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [user?.department_id])
   const canManageRequests = !isEnfermagem && (isAdmin || isManager || isPharmacyOperator)
 
   // isAtendente nos flags = "operador de farmácia" (atendente OU farmacêutico):
   // todos os itens de menu gated por f.isAtendente valem também pro farmacêutico.
-  const flags: VisibilityFlags = { isAdmin, isManager, isAtendente: isPharmacyOperator, isEnfermagem, canManageRequests }
+  const flags: VisibilityFlags = { isAdmin, isManager, isAtendente: isPharmacyOperator, isEnfermagem, pedeKitEnfermagem, canManageRequests }
 
   // Contador de solicitacoes pendentes para o setor que o user atende
   // (destination_department). Aparece como badge ao lado de "Solicitações".

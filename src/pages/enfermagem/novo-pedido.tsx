@@ -69,7 +69,7 @@ export function NovoPedidoEnfermagem() {
 
   useEffect(() => {
     if (!user?.department_id) { setPodePedir(false); return }
-    kitsService.isSetorDaSatelite(user.department_id).then(setPodePedir)
+    kitsService.isSetorEnfermagem(user.department_id).then(setPodePedir)
   }, [user?.department_id])
 
   useEffect(() => {
@@ -242,8 +242,8 @@ export function NovoPedidoEnfermagem() {
         <AlertCircle className="w-8 h-8 text-amber-500 mx-auto mb-3" />
         <h1 className="text-lg font-semibold text-gray-900">Pedido de enfermagem indisponível</h1>
         <p className="text-sm text-gray-500 mt-2">
-          Esta tela é dos setores atendidos pela Farmácia Satélite Térreo. Se o seu setor deveria estar
-          aqui, peça ao gestor para apontar o setor para a Satélite Térreo.
+          Esta tela é dos setores de enfermagem. Se o seu setor deveria estar aqui, peça ao
+          administrador para conferir o setor do seu usuário.
         </p>
       </div>
     )
