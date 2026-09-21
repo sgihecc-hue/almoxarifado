@@ -228,7 +228,7 @@ export function NovoPedidoEnfermagem() {
         justification,
       })
       setToast(`Pedido ${r.request_number} enviado para a Satélite Térreo.`)
-      setTimeout(() => navigate('/my-requests'), 1400)
+      setTimeout(() => navigate('/requests'), 1400)
     } catch (e) {
       setError(getErrorMessage(e))
     } finally {
