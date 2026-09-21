@@ -17,6 +17,7 @@ import { Label } from '@/components/ui/label'
 import { itemsService } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, type EntradaParecida } from '@/lib/utils/entradas'
 import type { Item, ItemCategory, UnitType } from '@/lib/services/items'
 import { MEDICATION_CLASS_LABEL, CONTROLLED_SUBCLASSES } from '@/lib/types/farmacia'
 import type { MedicationClass } from '@/lib/types/farmacia'
@@ -187,6 +188,21 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   // para limpar o resumo: no react-hook-form 7.56 ele dispara no próprio
   // submit e apagava o resumo na hora — o botão Salvar parecia não funcionar.
   const [resumoAssinatura, setResumoAssinatura] = useState<string | null>(null)
+  // Entrada pela edicao do item (almox): rodada unica por abertura do dialogo,
+  // trava de envio e aviso de entrada parecida. Foi por esta tela que a mesma
+  // compra de mascaras entrou duas vezes (18/08 e 28/08/2026).
+  const rodadaRef = useRef<string>(novaRodadaId())
+  const confirmarParecidaRef = useRef(false)
+  const trava = useTravaEnvio()
+  const [parecida, setParecida] = useState<EntradaParecida | null>(null)
+  const [nfPendente, setNfPendente] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    rodadaRef.current = novaRodadaId()
+    confirmarParecidaRef.current = false
+    setParecida(null)
+    setNfPendente(false)
+  }, [open, item.id])
   const [historico, setHistorico] = useState<EdicaoRegistrada[]>([])
   const barcodeInputRef = useRef<HTMLInputElement>(null)
 
@@ -441,6 +457,9 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
               (data.acquisition_type === 'Doação' ? 'Doação' : data.acquisition_type === 'Devolução' ? 'Devolução de setor' : null),
             batch_number: data.batch_number?.trim() || null,
             expiry_date: data.expiry_date || null,
+            entry_group_id: rodadaRef.current,
+            nf_pendente: data.acquisition_type === 'Compra' && nfPendente,
+            confirmar_parecida: confirmarParecidaRef.current,
           }
         : null
       const { error: rpcErr } = await supabase.rpc('almox_editar_item', {
@@ -474,11 +493,15 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   }
 
   const onSubmit = async (data: FormData) => {
+    // Almox: trava que fecha na hora do clique (o disabled do botao so vale
+    // depois do redesenho — um 2o clique nesse intervalo gravava de novo).
+    if (ehAlmox && !trava.tentar()) return
     try {
       setLoading(true)
       setError(null)
 
       if (ehAlmox) {
+        setParecida(null)
         if (await salvarAlmox(data)) {
           onSuccess()
           onOpenChange(false)
@@ -588,10 +611,20 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
       onSuccess()
       onOpenChange(false)
     } catch (e: any) {
-      console.error('Error editing item:', e)
-      setError(getErrorMessage(e))
+      const aviso = ehAlmox ? lerAvisoEntrada(e) : null
+      if (aviso?.tipo === 'ja_registrada') {
+        // O primeiro envio ja gravou; nada foi somado de novo.
+        onSuccess()
+        onOpenChange(false)
+      } else if (aviso?.tipo === 'parecida') {
+        setParecida(aviso.info)
+      } else {
+        console.error('Error editing item:', e)
+        setError(getErrorMessage(e))
+      }
     } finally {
       setLoading(false)
+      if (ehAlmox) trava.liberar()
     }
   }
 
@@ -967,6 +1000,13 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
                 Empréstimo, Permuta ou Devolução). O sistema vai somar a quantidade ao estoque e registrar a NF/fornecedor.
                 Estoque atual: <strong>{item.current_stock} {item.unit}</strong>
               </p>
+              {ehAlmox && (
+                <div className="text-xs rounded-md border border-amber-300 bg-amber-50 text-amber-900 p-3">
+                  <strong>Atenção: esta seção SOMA ao estoque.</strong> Se a nota fiscal só chegou agora para um material
+                  que <strong>já deu entrada</strong>, não preencha aqui — vá em <strong>Almoxarifado → Entradas</strong> e
+                  use <strong>Completar NF</strong> na entrada que já existe.
+                </div>
+              )}
 
               <div>
                 <Label htmlFor="acquisition_type">Como o material chegou?</Label>
@@ -1015,6 +1055,12 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
                 <div>
                   <Label htmlFor="invoice_number">Número da NF</Label>
                   <Input id="invoice_number" {...register('invoice_number')} className="mt-1" placeholder="Ex: NF-123456" />
+                  {ehAlmox && watch('acquisition_type') === 'Compra' && (
+                    <label className="flex items-start gap-2 mt-2 text-xs text-gray-600">
+                      <input type="checkbox" checked={nfPendente} onChange={(e) => setNfPendente(e.target.checked)} className="mt-0.5" />
+                      <span>A NF ainda não chegou — fica como <strong>NF pendente</strong> para completar depois em Entradas.</span>
+                    </label>
+                  )}
                 </div>
                 <div>
                   <Label htmlFor="afm_number">Número da AFM</Label>
@@ -1117,6 +1163,23 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
                 ))}
               </ul>
             </details>
+          )}
+
+          {parecida && (
+            <div className="p-3 text-sm bg-amber-50 rounded-md border border-amber-300 space-y-2">
+              <p className="text-amber-900"><strong>Esta entrada parece repetida.</strong> {descreverParecida(parecida)}</p>
+              <p className="text-xs text-amber-800">
+                Se a nota só chegou agora para esse material, não registre de novo: complete a entrada existente em
+                Almoxarifado → Entradas.
+              </p>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setParecida(null)}>Cancelar</Button>
+                <Button type="button" size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" disabled={loading}
+                  onClick={() => { confirmarParecidaRef.current = true; setParecida(null); handleSubmit(onSubmit)() }}>
+                  É outra entrada — registrar mesmo assim
+                </Button>
+              </div>
+            </div>
           )}
 
           {error && (

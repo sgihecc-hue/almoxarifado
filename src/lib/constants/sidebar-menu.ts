@@ -165,6 +165,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         // Entrada por leitor de codigo de barras: o almoxarife bipa a etiqueta
         // e so digita lote, validade e quantidade. Nao substitui a Nova Entrada.
         { name: 'Entrada por Leitor', icon: ScanLine, href: '/almox/entrada-leitor', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Entradas: completar NF de entrada ja feita e anular entrada lancada
+        // por engano (caso da mascara, 21/09/2026). Mostra as NF pendentes.
+        { name: 'Entradas', icon: FileText, href: '/almox/entradas', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         // Livro de movimentacao: toda entrada e saida de material, com saldo
         // antes/depois e autor. Le a view v_almox_movimentacao (so leitura).
         { name: 'Movimentação', icon: ArrowUpDown, href: '/almox/movimentacao', show: (f) => f.isManager || f.isAdmin || f.isAtendente },

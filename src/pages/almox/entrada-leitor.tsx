@@ -30,6 +30,7 @@ import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { itemsService } from '@/lib/services/items'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, type EntradaParecida } from '@/lib/utils/entradas'
 import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
 import type { Item } from '@/lib/services/items'
 
@@ -82,6 +83,10 @@ export function EntradaLeitor() {
   const [lookingUp, setLookingUp] = useState(false)
   const [notFound, setNotFound] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Rodada unica desta tela: duplo clique / reenvio nao somam de novo.
+  const [rodadaId] = useState(novaRodadaId)
+  const trava = useTravaEnvio()
+  const [parecida, setParecida] = useState<EntradaParecida | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
@@ -176,13 +181,16 @@ export function EntradaLeitor() {
   const totalQty = lines.reduce((s, l) => s + (l.quantity || 0), 0)
   const canSubmit = lines.length > 0 && lines.every((l) => l.quantity > 0)
 
-  async function handleSubmit() {
+  async function handleSubmit(confirmarParecida = false) {
     setError(null)
     if (!canSubmit) {
       setError('Leia ao menos um item e informe uma quantidade válida.')
       return
     }
+    if (!trava.tentar()) return
+    setParecida(null)
     setSubmitting(true)
+    let gravou = false
     try {
       const { data, error: rpcError } = await supabase.rpc('registrar_entrada_nf', {
         p_item_type: 'warehouse',
@@ -195,6 +203,8 @@ export function EntradaLeitor() {
         p_supplier_name: supplierName.trim() || 'Entrada por leitor',
         p_acquisition_type: entryType,
         p_location_code: LOCATION_CODE,
+        p_entry_group_id: rodadaId,
+        p_confirmar_parecida: confirmarParecida,
         p_items: lines.map((l) => ({
           item_id: l.item_id,
           quantity: l.quantity,
@@ -205,13 +215,24 @@ export function EntradaLeitor() {
       })
       if (rpcError) throw rpcError
       const n = (data as any)?.itens ?? lines.length
+      gravou = true
       setToast(`Entrada registrada: ${n} ${n === 1 ? 'linha' : 'linhas'}.`)
       setTimeout(() => navigate(backTo), 1200)
     } catch (e: any) {
-      console.error('Entrada por leitor:', e)
-      setError(getErrorMessage(e))
+      const aviso = lerAvisoEntrada(e)
+      if (aviso?.tipo === 'ja_registrada') {
+        gravou = true
+        setToast('Esta entrada já tinha sido registrada — nada foi somado de novo.')
+        setTimeout(() => navigate(backTo), 1500)
+      } else if (aviso?.tipo === 'parecida') {
+        setParecida(aviso.info)
+      } else {
+        console.error('Entrada por leitor:', e)
+        setError(getErrorMessage(e))
+      }
     } finally {
       setSubmitting(false)
+      if (!gravou) trava.liberar()
     }
   }
 
@@ -412,13 +433,28 @@ export function EntradaLeitor() {
         </div>
       )}
 
+      {parecida && (
+        <div className="p-4 text-sm bg-amber-50 border border-amber-300 rounded-lg space-y-3">
+          <p className="flex items-start gap-2 text-amber-900">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span><strong>Esta entrada parece repetida.</strong> {descreverParecida(parecida)}</span>
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setParecida(null)}>Cancelar</Button>
+            <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" onClick={() => handleSubmit(true)} disabled={submitting}>
+              É outra entrada — registrar mesmo assim
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-gray-500">
           {lines.length} {lines.length === 1 ? 'linha' : 'linhas'} · {totalQty} {totalQty === 1 ? 'unidade' : 'unidades'} · Destino: Almoxarifado
         </p>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => navigate(backTo)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit || submitting} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+          <Button onClick={() => handleSubmit()} disabled={!canSubmit || submitting} className="bg-emerald-600 hover:bg-emerald-700 text-white">
             {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
             Registrar Entrada
           </Button>
