@@ -16,9 +16,14 @@ a estrutura; os kits são cadastrados depois, pela tela de cadastro.
 
 1. **Kit é fechado para quem pede, aberto para quem atende.** O enfermeiro pede
    "5 × Kit Banho". A satélite recebe os itens somados (5 × 2A = 10A, etc.).
-2. **O pedido é gravado já somado** em `request_items`. A satélite separa, informa
-   lote e dá baixa com a tela e as RPCs que já existem. Kits e pacientes ficam em
+2. **O pedido é gravado já somado** em `request_items`. Kits e pacientes ficam em
    tabelas próprias, ligadas ao pedido, e aparecem no detalhe.
+   **A baixa sai do estoque da Satélite Térreo** (`item_stocks` SAT_T, com lote),
+   pela RPC `atender_pedido_enfermagem`, que usa `criar_saida_material` — a mesma
+   função que a satélite já usa para saída de material. *(Revisto em 21/09/2026: a
+   primeira versão atendia pelos botões genéricos de solicitação, cujo gatilho
+   abate do almoxarifado central. O banco agora recusa concluir pedido de
+   enfermagem por outro caminho.)*
 3. **Kit é só material** (`warehouse_items`), que é o que a Satélite Térreo tem
    (131 itens com saldo, contra 12 medicamentos com 1 a 8 unidades).
    Medicamento continua saindo por **dispensação**, que é o fluxo com prescritor,
@@ -63,7 +68,7 @@ renomeado ou recomposto depois, o histórico continua contando o que foi pedido.
 
 **RPC `criar_pedido_enfermagem`** (`SECURITY DEFINER`, transação única):
 recebe kits com seus pacientes e avulsos com seus pacientes; valida o setor
-(precisa estar roteado para a Satélite Térreo) e os itens; soma as quantidades por
+(precisa estar em `farmacia_setores_enfermagem`) e os itens; soma as quantidades por
 item; grava `requests` (type `warehouse`, `source_location_id` = SAT_T,
 `needs_receipt_confirmation` = false), `request_items`, `request_kits` e
 `request_item_patients`. Devolve o número do pedido.
@@ -72,10 +77,12 @@ item; grava `requests` (type `warehouse`, `source_location_id` = SAT_T,
 
 1. **Cadastro de Kits** (gestor/administrador): lista, criar, editar, inativar;
    itens do kit com quantidade.
-2. **Pedido de Enfermagem** (setores roteados para a Satélite Térreo):
+2. **Pedido de Enfermagem** (setores de enfermagem):
    kits → pacientes com quantidade → avulsos com paciente por linha → resumo,
    mostrando o total por item que a satélite vai receber.
-3. **Detalhe do pedido**: bloco "Kits e pacientes", só leitura, para a satélite.
+3. **Detalhe do pedido**: bloco "Kits e pacientes" e painel "Atender pela
+   Satélite Térreo" (saldo e lotes da satélite, atender ou recusar), no lugar dos
+   botões genéricos.
 4. **Caixa de entrada da farmácia**: lista os pedidos de material quando o estoque
    ativo é a Satélite Térreo.
 
@@ -94,9 +101,9 @@ Regra máxima do projeto. Nesta rodada:
 
 - `kits` e `kit_items`: leitura para autenticado; escrita só gestor/administrador.
 - `request_kits` e `request_item_patients`: leitura para quem já pode ver o pedido.
-- Hoje a política de `patients` é `Authenticated users can manage patients [ALL]`,
-  aberta para os 249 solicitantes. Antes de liberar a tela, restringir a enfermagem
-  a ler e criar, sem apagar.
+- `patients` e `patient_admissions` (feito em 21/09/2026): ver e cadastrar só
+  farmácia/gestão e enfermagem; editar e dar alta só farmácia/gestão; apagar só
+  administrador. Antes, qualquer usuário logado podia tudo.
 
 ## Fases
 
