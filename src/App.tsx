@@ -64,6 +64,7 @@ import { HistoricoGlobal } from '@/pages/historico-global'
 import { Fornecedores } from '@/pages/farmacia/fornecedores'
 import { UnidadesExternas } from '@/pages/farmacia/unidades-externas'
 import { CadastroKits } from '@/pages/farmacia/kits'
+import { ConsumoEnfermagemReport } from '@/pages/reports/consumo-enfermagem'
 import { NovoPedidoEnfermagem } from '@/pages/enfermagem/novo-pedido'
 import { UnidadesInternas } from '@/pages/farmacia/unidades-internas'
 import { CarrosEmergencia } from '@/pages/farmacia/carros-emergencia'
@@ -531,6 +532,13 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <Fornecedores />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/reports/consumo-enfermagem" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <ConsumoEnfermagemReport />
                   </MainLayout>
                 </ProtectedRoute>
               } />
