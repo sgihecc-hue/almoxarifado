@@ -21,6 +21,7 @@ import { formatRequestNumber } from '@/lib/utils/request'
 import { getDepartmentName } from '@/lib/constants/departments'
 import { supabase } from '@/lib/supabase'
 import { kitsService } from '@/lib/services/kits'
+import { AtenderPedidoEnfermagem } from '@/components/atender-pedido-enfermagem'
 
 interface LotOption { id: string; batch_number: string; expiry_date: string | null; current_quantity: number }
 
@@ -1329,11 +1330,21 @@ export function RequestDetails() {
       </div>
 
       {/* Request Actions - Below items, hide when printing */}
+      {/* Pedido de enfermagem tem atendimento proprio: os botoes genericos
+          levariam a baixa ao ALMOXARIFADO, e o material sai da Satelite
+          Terreo. Os demais pedidos seguem com RequestActions, sem mudanca. */}
       <div className="print:hidden">
-        <RequestActions
-          request={request}
-          onUpdate={() => { if (id) loadRequest(id, true) }}
-        />
+        {kitsPedido.kits.length > 0 || kitsPedido.avulsos.length > 0 ? (
+          <AtenderPedidoEnfermagem
+            request={request}
+            onDone={() => { if (id) loadRequest(id, true) }}
+          />
+        ) : (
+          <RequestActions
+            request={request}
+            onUpdate={() => { if (id) loadRequest(id, true) }}
+          />
+        )}
       </div>
 
       {/* Print Signature Section - Only visible when printing */}

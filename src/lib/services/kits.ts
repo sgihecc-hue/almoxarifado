@@ -165,6 +165,36 @@ class KitsService {
     return data as any
   }
 
+  /**
+   * Satelite Terreo atende: baixa do ESTOQUE DELA (item_stocks SAT_T, com lote),
+   * nunca do almoxarifado. Uma linha por lote; quantidade 0 = nao fornecido.
+   */
+  async atender(requestId: string, linhas: Array<{
+    request_item_id: string
+    quantity: number
+    expiry_tracking_id?: string | null
+  }>, notes?: string) {
+    const { data, error } = await supabase.rpc('atender_pedido_enfermagem', {
+      p_request_id: requestId,
+      p_items: linhas.map((l) => ({
+        request_item_id: l.request_item_id,
+        quantity: l.quantity,
+        expiry_tracking_id: l.expiry_tracking_id || null,
+      })),
+      p_notes: notes?.trim() || null,
+    })
+    if (error) throw error
+    return data as { numero: number; itens: number; quantidade_total: number }
+  }
+
+  async recusar(requestId: string, motivo: string) {
+    const { error } = await supabase.rpc('recusar_pedido_enfermagem', {
+      p_request_id: requestId,
+      p_reason: motivo,
+    })
+    if (error) throw error
+  }
+
   /** Kits e pacientes de um pedido — bloco de leitura no detalhe. */
   async getKitsDoPedido(requestId: string) {
     const [kits, avulsos] = await Promise.all([
