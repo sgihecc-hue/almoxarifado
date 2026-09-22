@@ -25,7 +25,13 @@ interface MovRow {
   saldo_antes: number
   movimentado: number
   saldo_depois: number
+  // Lote e validade do proprio movimento no livro-razao (22/09/2026).
+  lote: string | null
+  validade: string | null
 }
+
+// Validade vem como aaaa-mm-dd; sem fuso pra nao virar o dia anterior.
+const fmtValidade = (d: string | null) => (d ? d.split('-').reverse().join('/') : '')
 
 // Rótulos amigáveis dos tipos de saída (movement_type do stock_movements).
 const TIPO_LABEL: Record<string, string> = {
@@ -132,6 +138,8 @@ export function MovimentacaoDiaria() {
       'Data/Hora': fmtMomento(r.momento),
       Tipo: tipoLabel(r.tipo),
       Medicamento: r.item_name,
+      Lote: r.lote ?? '',
+      Validade: fmtValidade(r.validade),
       Classe: r.medication_class ? (MEDICATION_CLASS_LABEL[r.medication_class as MedicationClass] ?? r.medication_class) : '—',
       'Estoque anterior': r.saldo_antes,
       Movimentado: r.movimentado,
@@ -161,6 +169,8 @@ export function MovimentacaoDiaria() {
         <td>${fmtMomento(r.momento)}</td>
         <td>${tipoLabel(r.tipo)}</td>
         <td>${escapeHtml(r.item_name)}</td>
+        <td>${escapeHtml(r.lote ?? '')}</td>
+        <td>${fmtValidade(r.validade)}</td>
         <td style="text-align:right">${r.saldo_antes}</td>
         <td style="text-align:right">${r.movimentado}</td>
         <td style="text-align:right">${r.saldo_depois}</td>
@@ -180,7 +190,7 @@ export function MovimentacaoDiaria() {
       <p class="sub">Período: ${fmtBR(periodo.inicio)} a ${fmtBR(periodo.fim)}${classe ? ' · Classe: ' + escapeHtml(MEDICATION_CLASS_LABEL[classe as MedicationClass] ?? classe) : ''} · Emitido em ${new Date().toLocaleString('pt-BR')}</p>
       <table>
         <thead><tr>
-          <th>Data/Hora</th><th>Tipo</th><th>Medicamento</th>
+          <th>Data/Hora</th><th>Tipo</th><th>Medicamento</th><th>Lote</th><th>Validade</th>
           <th style="text-align:right">Estoque anterior</th><th style="text-align:right">Movim.</th><th style="text-align:right">Estoque atual</th>
         </tr></thead>
         <tbody>${linhas}</tbody>
@@ -304,6 +314,8 @@ export function MovimentacaoDiaria() {
                   <th className="text-left px-4 py-2 text-xs font-medium">Data/Hora</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Tipo</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Medicamento</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium">Lote</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium">Validade</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Classe</th>
                   <th className="text-right px-4 py-2 text-xs font-medium">Estoque anterior</th>
                   <th className="text-right px-4 py-2 text-xs font-medium">Movim.</th>
@@ -312,12 +324,14 @@ export function MovimentacaoDiaria() {
               </thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><td colSpan={7} className="text-center py-8 text-sm" style={{ color: txtMut }}>Nenhuma saída no período.</td></tr>
+                  <tr><td colSpan={9} className="text-center py-8 text-sm" style={{ color: txtMut }}>Nenhuma saída no período.</td></tr>
                 ) : rows.map((r, i) => (
                   <tr key={`${r.item_id}-${r.momento}-${i}`} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txt }}>{fmtMomento(r.momento)}</td>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{tipoLabel(r.tipo)}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txt }}>{r.item_name}</td>
+                    <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{r.lote ?? '—'}</td>
+                    <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{fmtValidade(r.validade) || '—'}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txtSec }}>
                       {r.medication_class ? (MEDICATION_CLASS_LABEL[r.medication_class as MedicationClass] ?? r.medication_class) : '—'}
                     </td>

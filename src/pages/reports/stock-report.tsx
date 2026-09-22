@@ -20,7 +20,20 @@ interface StockItem {
   min_stock: number
   price: number | null
   is_active: boolean
+  batch_number?: string | null
+  expiry_date?: string | null
 }
+
+// Lote com saldo, do MESMO estoque que o relatorio soma (CAF na farmacia,
+// almoxarifado central no almox) — senao a soma dos lotes nao bate com o
+// "Estoque Atual". Pedido de 22/09/2026: exportar lote e validade.
+interface LoteSaldo { lote: string; validade: string | null; qtd: number }
+
+const dataBR = (d: string | null | undefined) => (d ? d.slice(0, 10).split('-').reverse().join('/') : '')
+const textoLotes = (ls: LoteSaldo[]) =>
+  ls.map((l) => `${l.lote}${l.validade ? ` (${dataBR(l.validade)})` : ''}: ${l.qtd}`).join('; ')
+const validadeMaisProxima = (ls: LoteSaldo[]) =>
+  ls.map((l) => l.validade).filter(Boolean).sort()[0] ?? null
 
 type SortField = 'name' | 'code' | 'category' | 'current_stock' | 'min_stock' | 'status'
 type SortDir = 'asc' | 'desc'
@@ -46,6 +59,7 @@ export function StockReport({ type }: StockReportProps) {
   const [stockFilter, setStockFilter] = useState<StockFilter>('all')
   const [sortField, setSortField] = useState<SortField>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [lotes, setLotes] = useState<Map<string, LoteSaldo[]>>(new Map())
 
   const table = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
   const title = type === 'pharmacy' ? 'Relatorio de Estoque — Farmacia' : 'Relatorio de Estoque — Almoxarifado'
@@ -77,16 +91,56 @@ export function StockReport({ type }: StockReportProps) {
     try {
       const { data, error } = await supabase
         .from(table)
-        .select('id, code, name, category, unit, current_stock, min_stock, price, is_active')
+        .select('id, code, name, category, unit, current_stock, min_stock, price, is_active, batch_number, expiry_date')
         .eq('is_active', true)
         .order('name')
       if (error) throw error
       setItems(data || [])
+      await loadLotes()
     } catch (e) {
       console.error('Error loading items:', e)
     } finally {
       setLoading(false)
     }
+  }
+
+  // Lotes com saldo do estoque do relatorio. Paginado: o Supabase devolve no
+  // maximo 1000 linhas por consulta.
+  async function loadLotes() {
+    try {
+      const { data: loc } = await supabase.from('stock_locations').select('id')
+        .eq('code', type === 'pharmacy' ? 'CAF' : 'ALMOX').maybeSingle()
+      if (!loc) return
+      const mapa = new Map<string, LoteSaldo[]>()
+      for (let de = 0; ; de += 1000) {
+        const { data, error } = await supabase.from('expiry_tracking')
+          .select('item_id, batch_number, expiry_date, current_quantity')
+          .eq('location_id', (loc as any).id).gt('current_quantity', 0)
+          .order('expiry_date', { ascending: true, nullsFirst: false })
+          .range(de, de + 999)
+        if (error) throw error
+        for (const r of (data || []) as any[]) {
+          const lista = mapa.get(r.item_id) || []
+          lista.push({ lote: r.batch_number || 's/ lote', validade: r.expiry_date, qtd: Number(r.current_quantity) })
+          mapa.set(r.item_id, lista)
+        }
+        if (!data || data.length < 1000) break
+      }
+      setLotes(mapa)
+    } catch (e) {
+      console.error('Error loading lots:', e)
+    }
+  }
+
+  // Item sem lote cadastrado: usa o lote/validade gravados no proprio item
+  // (modelo antigo do almox), quando houver.
+  function lotesDoItem(item: StockItem): LoteSaldo[] {
+    const ls = lotes.get(item.id)
+    if (ls && ls.length) return ls
+    if (item.batch_number || item.expiry_date) {
+      return [{ lote: item.batch_number || 's/ lote', validade: item.expiry_date ?? null, qtd: item.current_stock }]
+    }
+    return []
   }
 
   const categories = useMemo(() => {
@@ -164,12 +218,30 @@ export function StockReport({ type }: StockReportProps) {
         'Preco Unit.': item.price || 0,
         'Valor Total': item.current_stock * (item.price || 0),
         'Status': status.label,
+        'Lotes': textoLotes(lotesDoItem(item)),
+        'Validade mais proxima': dataBR(validadeMaisProxima(lotesDoItem(item))),
       }
     })
 
     const ws = XLSX.utils.json_to_sheet(data)
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Estoque')
+
+    // Aba "Por lote": uma linha por lote com saldo, ordenada por validade.
+    const porLote = filteredItems.flatMap((item) =>
+      lotesDoItem(item).map((l) => ({
+        'Codigo': item.code,
+        'Nome': item.name,
+        'Unidade': item.unit,
+        'Lote': l.lote,
+        'Validade': dataBR(l.validade),
+        'Quantidade no lote': l.qtd,
+      })))
+    if (porLote.length) {
+      const wsLote = XLSX.utils.json_to_sheet(porLote)
+      wsLote['!cols'] = [{ wch: 18 }, { wch: 50 }, { wch: 8 }, { wch: 16 }, { wch: 12 }, { wch: 18 }]
+      XLSX.utils.book_append_sheet(wb, wsLote, 'Por lote')
+    }
 
     // Auto-size columns
     const colWidths = Object.keys(data[0] || {}).map(key => ({ wch: Math.max(key.length, 15) }))
@@ -182,10 +254,13 @@ export function StockReport({ type }: StockReportProps) {
   }
 
   function exportToCSV() {
-    const headers = ['Codigo', 'Nome', 'Categoria', 'Unidade', 'Estoque Atual', 'Estoque Minimo', 'Status']
+    const headers = ['Codigo', 'Nome', 'Categoria', 'Unidade', 'Estoque Atual', 'Estoque Minimo', 'Status', 'Lotes', 'Validade mais proxima']
+    const cel = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
     const rows = filteredItems.map(item => {
       const status = getStockStatus(item)
-      return [item.code, item.name, item.category, item.unit, item.current_stock, item.min_stock, status.label].join(';')
+      const ls = lotesDoItem(item)
+      return [item.code, item.name, item.category, item.unit, item.current_stock, item.min_stock, status.label,
+        textoLotes(ls), dataBR(validadeMaisProxima(ls))].map(cel).join(';')
     })
     const csv = [headers.join(';'), ...rows].join('\n')
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })

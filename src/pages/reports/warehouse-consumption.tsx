@@ -445,6 +445,61 @@ export function WarehouseConsumptionReport() {
     }
   }
 
+  // Exportacao DETALHADA: uma linha por saida, com item, setor, lote e
+  // validade (pedido de 22/09/2026). A exportacao de cima traz so o total do
+  // dia. Lote vem de v_warehouse_consumption: o informado no atendimento
+  // (quando o almox informou) ou o lote do movimento avulso.
+  const [exportandoDetalhe, setExportandoDetalhe] = useState(false)
+  const handleExportDetalhado = async () => {
+    setExportandoDetalhe(true)
+    try {
+      const { data: linhas, error: e1 } = await supabase
+        .from('v_warehouse_consumption')
+        .select('item_id, quantity, department_id, consumption_date, origem, lote, validade')
+        .gte('consumption_date', format(dateRange.start, 'yyyy-MM-dd'))
+        .lte('consumption_date', format(dateRange.end, 'yyyy-MM-dd'))
+        .order('consumption_date', { ascending: true })
+        .limit(20000)
+      if (e1) throw e1
+      const rows = (linhas || []) as Array<{ item_id: string; quantity: number; department_id: string | null;
+        consumption_date: string; origem: string; lote: string | null; validade: string | null }>
+      const itemIds = [...new Set(rows.map((r) => r.item_id))]
+      const depIds = [...new Set(rows.map((r) => r.department_id).filter(Boolean))] as string[]
+      const itens = new Map<string, { name: string; code: string | null; unit: string | null }>()
+      for (let i = 0; i < itemIds.length; i += 300) {
+        const { data } = await supabase.from('warehouse_items').select('id, name, code, unit').in('id', itemIds.slice(i, i + 300))
+        for (const it of (data || []) as any[]) itens.set(it.id, it)
+      }
+      const setores = new Map<string, string>()
+      if (depIds.length) {
+        const { data } = await supabase.from('departments').select('id, name').in('id', depIds)
+        for (const d of (data || []) as any[]) setores.set(d.id, d.name)
+      }
+      const dataBR = (d: string | null) => (d ? d.slice(0, 10).split('-').reverse().join('/') : '')
+      const origemLabel: Record<string, string> = { solicitacao: 'Solicitação', avulsa: 'Saída avulsa', manual: 'Lançamento manual' }
+      const cel = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
+      const cab = ['Data', 'Código', 'Item', 'Unidade', 'Quantidade', 'Setor', 'Origem', 'Lote', 'Validade']
+      const corpo = rows.map((r) => {
+        const it = itens.get(r.item_id)
+        return [dataBR(r.consumption_date), it?.code ?? '', it?.name ?? '', it?.unit ?? '', r.quantity,
+          r.department_id ? (setores.get(r.department_id) ?? '') : '', origemLabel[r.origem] ?? r.origem,
+          r.lote ?? '', dataBR(r.validade)].map(cel).join(';')
+      })
+      // ';' e BOM: e o que o Excel em portugues abre direto, com acento certo.
+      const csv = String.fromCharCode(0xfeff) + [cab.map(cel).join(';'), ...corpo].join('\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `consumo_almoxarifado_detalhado_${format(dateRange.start, 'dd-MM-yyyy')}_a_${format(dateRange.end, 'dd-MM-yyyy')}.csv`
+      document.body.appendChild(link); link.click(); document.body.removeChild(link)
+    } catch (error) {
+      console.error('Error exporting detailed data:', error)
+      setError('Erro ao exportar o detalhado.')
+    } finally {
+      setExportandoDetalhe(false)
+    }
+  }
+
   const handleExport = () => {
     try {
       // Create CSV content
@@ -544,6 +599,16 @@ export function WarehouseConsumptionReport() {
             >
               <Download className="w-4 h-4 mr-2" />
               Exportar
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportDetalhado}
+              disabled={exportandoDetalhe}
+              title="Uma linha por saída, com item, setor, lote e validade"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              {exportandoDetalhe ? 'Exportando…' : 'Exportar detalhado (lote/validade)'}
             </Button>
             {isAdmin && (
               <Button 
