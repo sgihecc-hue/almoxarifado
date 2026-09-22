@@ -7,7 +7,9 @@
 // completar uma entrada existente. Aqui tem:
 //   - Completar NF: grava nota, datas, AFM e fornecedor NA MESMA entrada
 //     (mesmo id), sem mexer na quantidade.
-//   - Anular: desfaz uma entrada lancada por engano, devolvendo o saldo do
+//   - Editar (22/09/2026): quantidade, lote, validade, preco e nota; o estoque
+//     acompanha a diferenca. Observacao opcional.
+//   - Excluir (= anular): desfaz uma entrada lancada por engano, devolvendo o saldo do
 //     local e do lote, com motivo. A linha fica marcada, nunca apagada.
 // As entradas aparecem agrupadas por RODADA (tudo que foi gravado junto).
 // Backend separado por modulo (regra do projeto):
@@ -17,7 +19,7 @@
 // =====================================================================
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { PackagePlus, Loader2, Search, RefreshCw, AlertCircle, CheckCircle2, FileCheck2, Undo2 } from 'lucide-react'
+import { PackagePlus, Loader2, Search, RefreshCw, AlertCircle, CheckCircle2, FileCheck2, Undo2, Pencil, History } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -64,16 +66,16 @@ type Filtro = 'todas' | 'pendentes' | 'anuladas'
 type Tipo = 'warehouse' | 'pharmacy'
 
 const CFG: Record<Tipo, {
-  titulo: string; tabelaItem: string; rpcCompletar: string; rpcAnular: string; papeis: string[]; oQue: string
+  titulo: string; tabelaItem: string; rpcCompletar: string; rpcAnular: string; rpcEditar: string; papeis: string[]; oQue: string
 }> = {
   warehouse: {
     titulo: 'Entradas — Almoxarifado', tabelaItem: 'warehouse_items',
-    rpcCompletar: 'almox_completar_entrada', rpcAnular: 'almox_anular_entrada',
+    rpcCompletar: 'almox_completar_entrada', rpcAnular: 'almox_anular_entrada', rpcEditar: 'almox_editar_entrada',
     papeis: ['administrador', 'gestor', 'atendente', 'warehouse_manager'], oQue: 'material',
   },
   pharmacy: {
     titulo: 'Entradas — Farmácia', tabelaItem: 'pharmacy_items',
-    rpcCompletar: 'farmacia_completar_entrada', rpcAnular: 'farmacia_anular_entrada',
+    rpcCompletar: 'farmacia_completar_entrada', rpcAnular: 'farmacia_anular_entrada', rpcEditar: 'farmacia_editar_entrada',
     papeis: ['administrador', 'gestor', 'atendente', 'pharmacist'], oQue: 'medicamento',
   },
 }
@@ -102,6 +104,8 @@ function EntradasPage({ tipo }: { tipo: Tipo }) {
   // Dialogos
   const [completar, setCompletar] = useState<Rodada | null>(null)
   const [anular, setAnular] = useState<Rodada | null>(null)
+  const [editar, setEditar] = useState<Linha | null>(null)
+  const [historico, setHistorico] = useState<Rodada | null>(null)
 
   const carregar = useCallback(async () => {
     setLoading(true); setErro(null)
@@ -184,7 +188,8 @@ function EntradasPage({ tipo }: { tipo: Tipo }) {
           </h1>
           <p className="text-sm text-gray-500 max-w-3xl">
             Nota fiscal que chegou depois da mercadoria? Use <strong>Completar NF</strong> na entrada que já existe —
-            não lance de novo. Entrada lançada por engano? Use <strong>Anular</strong>, que devolve o saldo.
+            não lance de novo. Quantidade, lote ou validade errados? Use <strong>Editar</strong> — o estoque acompanha.
+            Entrada lançada por engano? Use <strong>Excluir</strong>, que devolve o saldo. Tudo fica no <strong>Histórico</strong>.
           </p>
         </div>
         <Button variant="outline" onClick={carregar} disabled={loading} className="gap-2">
@@ -219,7 +224,7 @@ function EntradasPage({ tipo }: { tipo: Tipo }) {
           </select>
         </div>
         <div className="flex gap-1">
-          {([['todas', 'Todas'], ['pendentes', 'NF pendente'], ['anuladas', 'Anuladas']] as Array<[Filtro, string]>).map(([v, rot]) => (
+          {([['todas', 'Todas'], ['pendentes', 'NF pendente'], ['anuladas', 'Excluídas']] as Array<[Filtro, string]>).map(([v, rot]) => (
             <Button key={v} size="sm" variant={filtro === v ? 'default' : 'outline'} onClick={() => setFiltro(v)}>{rot}</Button>
           ))}
         </div>
@@ -249,18 +254,23 @@ function EntradasPage({ tipo }: { tipo: Tipo }) {
                   {local && <span className="text-gray-500">→ {local}</span>}
                   <span className="text-gray-500">por {r.autor}</span>
                   {pendente && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">NF pendente</span>}
-                  {todasAnuladas && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">Anulada</span>}
+                  {todasAnuladas && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">Excluída</span>}
                   {l0.completada_em && !todasAnuladas && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">NF completada</span>}
+                  <span className="ml-auto flex gap-2">
+                    <Button size="sm" variant="ghost" className="gap-1 h-8" onClick={() => setHistorico(r)}>
+                      <History className="w-3.5 h-3.5" /> Histórico
+                    </Button>
                   {podeOperar && !todasAnuladas && (
-                    <span className="ml-auto flex gap-2">
+                    <>
                       <Button size="sm" variant="outline" className="gap-1 h-8" onClick={() => setCompletar({ ...r, linhas: ativas })}>
                         <FileCheck2 className="w-3.5 h-3.5" /> Completar NF
                       </Button>
                       <Button size="sm" variant="outline" className="gap-1 h-8 text-red-700 hover:text-red-800" onClick={() => setAnular({ ...r, linhas: ativas })}>
-                        <Undo2 className="w-3.5 h-3.5" /> Anular
+                        <Undo2 className="w-3.5 h-3.5" /> Excluir
                       </Button>
-                    </span>
+                    </>
                   )}
+                  </span>
                 </div>
                 <table className="w-full text-sm">
                   <tbody>
@@ -271,11 +281,19 @@ function EntradasPage({ tipo }: { tipo: Tipo }) {
                         <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{l.batch_number ? `Lote ${l.batch_number}` : ''}</td>
                         <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{l.expiry_date ? `Val. ${dataBR(l.expiry_date)}` : ''}</td>
                         <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{l.unit_price ? `R$ ${Number(l.unit_price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : ''}</td>
+                        <td className="px-2 py-1 text-right w-10">
+                          {podeOperar && !l.anulada_em && (
+                            <button type="button" title="Editar esta entrada" onClick={() => setEditar(l)}
+                              className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-800">
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                     {r.linhas.filter((l) => l.anulada_em).slice(0, 1).map((l) => (
-                      <tr key={`m${l.id}`}><td colSpan={5} className="px-4 py-2 text-xs text-gray-500">
-                        Anulada em {dataBR(l.anulada_em, true)}{l.anulada_por && usuarios[l.anulada_por] ? ` por ${usuarios[l.anulada_por]}` : ''}: {l.anulada_motivo}
+                      <tr key={`m${l.id}`}><td colSpan={6} className="px-4 py-2 text-xs text-gray-500">
+                        Excluída em {dataBR(l.anulada_em, true)}{l.anulada_por && usuarios[l.anulada_por] ? ` por ${usuarios[l.anulada_por]}` : ''}: {l.anulada_motivo}
                       </td></tr>
                     ))}
                   </tbody>
@@ -293,6 +311,13 @@ function EntradasPage({ tipo }: { tipo: Tipo }) {
       {anular && (
         <AnularDialog rodada={anular} rpc={cfg.rpcAnular} oQue={cfg.oQue} onClose={() => setAnular(null)}
           onDone={(msg) => { setAnular(null); setToast(msg); carregar() }} />
+      )}
+      {editar && (
+        <EditarDialog linha={editar} rpc={cfg.rpcEditar} farmacia={tipo === 'pharmacy'} onClose={() => setEditar(null)}
+          onDone={(msg) => { setEditar(null); setToast(msg); carregar() }} />
+      )}
+      {historico && (
+        <HistoricoDialog rodada={historico} onClose={() => setHistorico(null)} />
       )}
 
       {toast && (
@@ -322,7 +347,6 @@ function CompletarDialog({ rodada, rpc, onClose, onDone }: { rodada: Rodada; rpc
   async function salvar(confirmar = false) {
     setErro(null)
     if (!nf.trim()) { setErro('Informe o número da NF.'); return }
-    if (motivo.trim().length < MOTIVO_MINIMO) { setErro(`Informe o motivo (mínimo ${MOTIVO_MINIMO} caracteres).`); return }
     if (!trava.tentar()) return
     setSalvando(true)
     try {
@@ -338,7 +362,7 @@ function CompletarDialog({ rodada, rpc, onClose, onDone }: { rodada: Rodada; rpc
       const { error } = await supabase.rpc(rpc, {
         p_entry_ids: rodada.linhas.map((l) => l.id),
         p_dados: dados,
-        p_motivo: motivo.trim(),
+        p_motivo: motivo.trim() || null,
       })
       if (error) throw error
       onDone(`NF ${nf.trim()} gravada na entrada de ${dataBR(rodada.quando)} — nada foi somado ao estoque.`)
@@ -368,7 +392,7 @@ function CompletarDialog({ rodada, rpc, onClose, onDone }: { rodada: Rodada; rpc
           <div><Label htmlFor="c-forn">Fornecedor</Label><Input id="c-forn" value={forn} onChange={(e) => setForn(e.target.value)} className="mt-1" /></div>
           <div><Label htmlFor="c-cnpj">CNPJ</Label><Input id="c-cnpj" value={cnpj} onChange={(e) => setCnpj(e.target.value)} className="mt-1" /></div>
         </div>
-        <div><Label htmlFor="c-mot">Motivo *</Label><Input id="c-mot" value={motivo} onChange={(e) => setMotivo(e.target.value)} className="mt-1" /></div>
+        <div><Label htmlFor="c-mot">Observação (opcional)</Label><Input id="c-mot" value={motivo} onChange={(e) => setMotivo(e.target.value)} className="mt-1" /></div>
 
         {nfUsada && (
           <div className="p-3 text-sm rounded-md border border-red-300 bg-red-50 text-red-900 space-y-2">
@@ -409,7 +433,7 @@ function AnularDialog({ rodada, rpc, oQue, onClose, onDone }: { rodada: Rodada; 
   async function salvar() {
     setErro(null)
     if (escolhidas.length === 0) { setErro('Marque ao menos um item.'); return }
-    if (motivo.trim().length < MOTIVO_MINIMO) { setErro(`Informe o motivo (mínimo ${MOTIVO_MINIMO} caracteres).`); return }
+    if (motivo.trim().length < MOTIVO_MINIMO) { setErro(`Informe a justificativa (mínimo ${MOTIVO_MINIMO} caracteres).`); return }
     if (!trava.tentar()) return
     setSalvando(true)
     try {
@@ -419,7 +443,7 @@ function AnularDialog({ rodada, rpc, oQue, onClose, onDone }: { rodada: Rodada; 
       })
       if (error) throw error
       const q = (data as any)?.quantidade ?? escolhidas.reduce((s, l) => s + l.quantity, 0)
-      onDone(`Entrada anulada: ${q} un devolvidas ao saldo anterior.`)
+      onDone(`Entrada excluída: ${q} un tiradas do estoque. Ficou registrada no histórico.`)
     } catch (e) {
       setErro(getErrorMessage(e))
     } finally {
@@ -431,10 +455,10 @@ function AnularDialog({ rodada, rpc, oQue, onClose, onDone }: { rodada: Rodada; 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-w-xl">
-        <DialogHeader><DialogTitle>Anular entrada de {dataBR(rodada.quando, true)}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Excluir entrada de {dataBR(rodada.quando, true)}</DialogTitle></DialogHeader>
         <p className="text-sm text-gray-600">
-          Anular <strong>tira do estoque</strong> a quantidade de {oQue} que esta entrada somou. Use quando a entrada foi
-          lançada por engano ou em duplicidade. A entrada continua visível, marcada como anulada.
+          Excluir <strong>tira do estoque</strong> a quantidade de {oQue} que esta entrada somou. Use quando a entrada foi
+          lançada por engano ou em duplicidade. A entrada continua visível, marcada como excluída, com a justificativa no histórico.
         </p>
         <div className="border border-gray-100 rounded-md divide-y">
           {rodada.linhas.map((l) => (
@@ -446,7 +470,7 @@ function AnularDialog({ rodada, rpc, oQue, onClose, onDone }: { rodada: Rodada; 
           ))}
         </div>
         <div>
-          <Label htmlFor="a-mot">Motivo *</Label>
+          <Label htmlFor="a-mot">Justificativa *</Label>
           <Input id="a-mot" value={motivo} onChange={(e) => setMotivo(e.target.value)} className="mt-1"
             placeholder="Ex.: mesma compra da NF 30641 já lançada em 18/08" />
         </div>
@@ -454,9 +478,197 @@ function AnularDialog({ rodada, rpc, oQue, onClose, onDone }: { rodada: Rodada; 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button onClick={salvar} disabled={salvando} className="gap-2 bg-red-600 hover:bg-red-700 text-white">
-            {salvando && <Loader2 className="w-4 h-4 animate-spin" />} Anular {escolhidas.length} {escolhidas.length === 1 ? 'item' : 'itens'}
+            {salvando && <Loader2 className="w-4 h-4 animate-spin" />} Excluir {escolhidas.length} {escolhidas.length === 1 ? 'item' : 'itens'}
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// EDITAR uma linha de entrada: quantidade, lote, validade, preco e nota. O
+// banco ajusta o estoque pela diferenca de quantidade e move a quantidade de
+// lote quando o lote muda. Observacao opcional (vai pro historico).
+function EditarDialog({ linha, rpc, farmacia, onClose, onDone }: {
+  linha: Linha; rpc: string; farmacia: boolean; onClose: () => void; onDone: (msg: string) => void
+}) {
+  const [qtd, setQtd] = useState(String(linha.quantity))
+  const [lote, setLote] = useState(linha.batch_number || '')
+  const [validade, setValidade] = useState(linha.expiry_date || '')
+  const [preco, setPreco] = useState(linha.unit_price != null ? String(linha.unit_price) : '')
+  const [nf, setNf] = useState(semNF(linha.invoice_number) ? '' : (linha.invoice_number || ''))
+  const [dataNf, setDataNf] = useState(linha.invoice_date || '')
+  const [entrega, setEntrega] = useState(linha.delivery_date || '')
+  const [afm, setAfm] = useState(semNF(linha.afm_number) ? '' : (linha.afm_number || ''))
+  const [forn, setForn] = useState(linha.supplier_name || '')
+  const [obs, setObs] = useState('')
+  const [nfUsada, setNfUsada] = useState<EntradaParecida | null>(null)
+  const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+  const trava = useTravaEnvio()
+
+  const novaQtd = Number(qtd)
+  const diferenca = Number.isFinite(novaQtd) ? novaQtd - linha.quantity : 0
+
+  async function salvar(confirmar = false) {
+    setErro(null)
+    if (!Number.isInteger(novaQtd) || novaQtd <= 0) {
+      setErro('Quantidade deve ser um número inteiro maior que zero. Para desfazer a entrada, use Excluir.')
+      return
+    }
+    if (farmacia && !lote.trim()) { setErro('Medicamento precisa de lote.'); return }
+    // So manda o que mudou: o historico registra exatamente o que foi alterado.
+    const dados: Record<string, unknown> = {}
+    const mudou = (a: unknown, b: unknown) => String(a ?? '') !== String(b ?? '')
+    if (novaQtd !== linha.quantity) dados.quantity = novaQtd
+    if (mudou(lote.trim(), linha.batch_number)) dados.batch_number = lote.trim()
+    if (mudou(validade, linha.expiry_date)) dados.expiry_date = validade || null
+    if (mudou(preco === '' ? null : Number(preco), linha.unit_price)) dados.unit_price = preco === '' ? null : Number(preco)
+    if (mudou(nf.trim(), semNF(linha.invoice_number) ? '' : linha.invoice_number)) dados.invoice_number = nf.trim()
+    if (mudou(dataNf, linha.invoice_date)) dados.invoice_date = dataNf || null
+    if (mudou(entrega, linha.delivery_date)) dados.delivery_date = entrega || null
+    if (mudou(afm.trim(), semNF(linha.afm_number) ? '' : linha.afm_number)) dados.afm_number = afm.trim()
+    if (mudou(forn.trim(), linha.supplier_name)) dados.supplier_name = forn.trim()
+    if (Object.keys(dados).length === 0) { setErro('Nada foi alterado.'); return }
+    if (confirmar) dados.confirmar = true
+    if (!trava.tentar()) return
+    setSalvando(true)
+    try {
+      const { data, error } = await supabase.rpc(rpc, { p_entry_id: linha.id, p_dados: dados, p_obs: obs.trim() || null })
+      if (error) throw error
+      const d = Number((data as any)?.diferenca ?? 0)
+      onDone(d === 0 ? 'Entrada editada. O estoque não mudou.'
+        : `Entrada editada. Estoque ${d > 0 ? 'aumentou' : 'diminuiu'} ${Math.abs(d)} ${linha.item?.unit || 'un'}.`)
+    } catch (e) {
+      const aviso = lerAvisoEntrada(e)
+      if (aviso?.tipo === 'nf_ja_usada') setNfUsada(aviso.info)
+      else setErro(getErrorMessage(e))
+    } finally {
+      setSalvando(false)
+      trava.liberar()
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader><DialogTitle>Editar entrada — {linha.item?.name || 'Item'}</DialogTitle></DialogHeader>
+        <p className="text-sm text-gray-500">Entrada de {dataBR(linha.created_at, true)}. Tudo o que mudar fica no histórico.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <Label htmlFor="e-qtd">Quantidade</Label>
+            <Input id="e-qtd" type="number" min={1} value={qtd} onChange={(e) => setQtd(e.target.value)} className="mt-1" />
+            {diferenca !== 0 && Number.isFinite(diferenca) && (
+              <p className={`text-xs mt-1 ${diferenca > 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                O estoque vai {diferenca > 0 ? 'aumentar' : 'diminuir'} {Math.abs(diferenca)} {linha.item?.unit || 'un'}.
+              </p>
+            )}
+          </div>
+          <div><Label htmlFor="e-lote">Lote</Label><Input id="e-lote" value={lote} onChange={(e) => setLote(e.target.value)} className="mt-1" /></div>
+          <div><Label htmlFor="e-val">Validade</Label><Input id="e-val" type="date" value={validade} onChange={(e) => setValidade(e.target.value)} className="mt-1" /></div>
+          <div><Label htmlFor="e-preco">Preço unitário</Label><Input id="e-preco" type="number" step="0.01" min={0} value={preco} onChange={(e) => setPreco(e.target.value)} className="mt-1" /></div>
+          <div><Label htmlFor="e-nf">Número da NF</Label><Input id="e-nf" value={nf} onChange={(e) => setNf(e.target.value)} className="mt-1" /></div>
+          <div><Label htmlFor="e-dnf">Data da NF</Label><Input id="e-dnf" type="date" value={dataNf} onChange={(e) => setDataNf(e.target.value)} className="mt-1" /></div>
+          <div><Label htmlFor="e-ent">Data de entrega</Label><Input id="e-ent" type="date" value={entrega} onChange={(e) => setEntrega(e.target.value)} className="mt-1" /></div>
+          <div><Label htmlFor="e-afm">AFM</Label><Input id="e-afm" value={afm} onChange={(e) => setAfm(e.target.value)} className="mt-1" /></div>
+          <div><Label htmlFor="e-forn">Fornecedor</Label><Input id="e-forn" value={forn} onChange={(e) => setForn(e.target.value)} className="mt-1" /></div>
+        </div>
+        <div><Label htmlFor="e-obs">Observação (opcional)</Label><Input id="e-obs" value={obs} onChange={(e) => setObs(e.target.value)} className="mt-1" /></div>
+
+        {nfUsada && (
+          <div className="p-3 text-sm rounded-md border border-red-300 bg-red-50 text-red-900 space-y-2">
+            <p><strong>Esta NF já está em outra entrada deste item:</strong> {nfUsada.quantidade} un em {dataBR(nfUsada.data, true)}.</p>
+            <p className="text-xs">Se é a mesma compra lançada duas vezes, exclua a entrada repetida.</p>
+            <Button size="sm" variant="outline" onClick={() => { setNfUsada(null); salvar(true) }} disabled={salvando}>
+              A nota veio em mais de uma remessa — gravar mesmo assim
+            </Button>
+          </div>
+        )}
+        {erro && <div className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md">{erro}</div>}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => salvar()} disabled={salvando} className="gap-2">
+            {salvando && <Loader2 className="w-4 h-4 animate-spin" />} Salvar alterações
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// HISTORICO da rodada: criacao + cada edicao/exclusao, com quem, quando, o
+// antes/depois e a justificativa. Vem de entrada_historico (gatilho no banco).
+const ROTULO_CAMPO: Record<string, string> = {
+  quantity: 'Quantidade', batch_number: 'Lote', expiry_date: 'Validade', unit_price: 'Preço unitário',
+  invoice_total_value: 'Valor total', invoice_number: 'NF', invoice_date: 'Data da NF', delivery_date: 'Entrega',
+  afm_number: 'AFM', supplier_name: 'Fornecedor', supplier_cnpj: 'CNPJ', acquisition_type: 'Tipo',
+}
+const valorHist = (k: string, v: unknown) => {
+  if (v == null || v === '') return '—'
+  if (['expiry_date', 'invoice_date', 'delivery_date'].includes(k)) return dataBR(String(v))
+  return String(v)
+}
+
+interface EventoHist {
+  id: string
+  entry_id: string
+  acao: 'editada' | 'anulada'
+  usuario_nome: string | null
+  feito_em: string
+  alteracoes: Record<string, { antes: unknown; depois: unknown }>
+  justificativa: string | null
+}
+
+function HistoricoDialog({ rodada, onClose }: { rodada: Rodada; onClose: () => void }) {
+  const [eventos, setEventos] = useState<EventoHist[] | null>(null)
+  const nomeItem = (id: string) => rodada.linhas.find((l) => l.id === id)?.item?.name || 'Item'
+
+  useEffect(() => {
+    supabase.from('entrada_historico').select('*').in('entry_id', rodada.linhas.map((l) => l.id))
+      .order('feito_em', { ascending: true })
+      .then(({ data }) => setEventos((data || []) as EventoHist[]))
+  }, [rodada])
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader><DialogTitle>Histórico da entrada de {dataBR(rodada.quando, true)}</DialogTitle></DialogHeader>
+        <ol className="space-y-3 max-h-[60vh] overflow-auto text-sm">
+          <li className="border-l-2 border-emerald-400 pl-3">
+            <div className="font-medium text-gray-900">Criada</div>
+            <div className="text-xs text-gray-500">{dataBR(rodada.quando, true)} · {rodada.autor}</div>
+            <div className="text-xs text-gray-600">
+              {rodada.linhas.map((l) => `${l.item?.name || 'Item'}: ${l.quantity}`).join(' · ')}
+            </div>
+          </li>
+          {eventos === null ? (
+            <li className="text-gray-400"><Loader2 className="w-4 h-4 animate-spin inline" /> carregando…</li>
+          ) : eventos.map((ev) => (
+            <li key={ev.id} className={`border-l-2 pl-3 ${ev.acao === 'anulada' ? 'border-red-400' : 'border-blue-300'}`}>
+              <div className="font-medium text-gray-900">
+                {ev.acao === 'anulada' ? 'Excluída' : 'Editada'} — {nomeItem(ev.entry_id)}
+              </div>
+              <div className="text-xs text-gray-500">{dataBR(ev.feito_em, true)} · {ev.usuario_nome || '—'}</div>
+              {Object.entries(ev.alteracoes || {}).length > 0 && (
+                <ul className="text-xs text-gray-700 mt-1">
+                  {Object.entries(ev.alteracoes).map(([k, v]) => (
+                    <li key={k}><strong>{ROTULO_CAMPO[k] ?? k}:</strong> {valorHist(k, v?.antes)} → {valorHist(k, v?.depois)}</li>
+                  ))}
+                </ul>
+              )}
+              {ev.justificativa && (
+                <div className="text-xs text-gray-600 mt-1">
+                  {ev.acao === 'anulada' ? 'Justificativa' : 'Observação'}: {ev.justificativa}
+                </div>
+              )}
+            </li>
+          ))}
+          {eventos && eventos.length === 0 && <li className="text-xs text-gray-400">Nenhuma alteração desde a criação.</li>}
+        </ol>
+        <DialogFooter><Button variant="outline" onClick={onClose}>Fechar</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   )

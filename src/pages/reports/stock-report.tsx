@@ -239,33 +239,30 @@ export function StockReport({ type }: StockReportProps) {
       })))
     if (porLote.length) {
       const wsLote = XLSX.utils.json_to_sheet(porLote)
-      wsLote['!cols'] = [{ wch: 18 }, { wch: 50 }, { wch: 8 }, { wch: 16 }, { wch: 12 }, { wch: 18 }]
+      wsLote['!cols'] = [{ wch: 20 }, { wch: 55 }, { wch: 8 }, { wch: 18 }, { wch: 12 }, { wch: 18 }]
+      if (wsLote['!ref']) wsLote['!autofilter'] = { ref: wsLote['!ref'] }
       XLSX.utils.book_append_sheet(wb, wsLote, 'Por lote')
     }
 
-    // Auto-size columns
-    const colWidths = Object.keys(data[0] || {}).map(key => ({ wch: Math.max(key.length, 15) }))
-    ws['!cols'] = colWidths
+    // Formatacao (queixa de 22/09/2026: planilha "mal formatada"): largura por
+    // coluna, filtro no cabecalho e dinheiro com 2 casas.
+    ws['!cols'] = [
+      { wch: 20 }, { wch: 55 }, { wch: 22 }, { wch: 8 }, { wch: 13 }, { wch: 13 },
+      { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 60 }, { wch: 20 },
+    ]
+    if (ws['!ref']) ws['!autofilter'] = { ref: ws['!ref'] }
+    const faixa = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+    for (let r = 1; r <= faixa.e.r; r++) {
+      for (const c of [6, 7]) {
+        const cel = ws[XLSX.utils.encode_cell({ r, c })]
+        if (cel && typeof cel.v === 'number') cel.z = '#,##0.00'
+      }
+    }
 
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
     const blob = new Blob([buf], { type: 'application/octet-stream' })
     const dateStr = format(new Date(), 'yyyy-MM-dd')
     saveAs(blob, `relatorio_estoque_${type}_${dateStr}.xlsx`)
-  }
-
-  function exportToCSV() {
-    const headers = ['Codigo', 'Nome', 'Categoria', 'Unidade', 'Estoque Atual', 'Estoque Minimo', 'Status', 'Lotes', 'Validade mais proxima']
-    const cel = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const rows = filteredItems.map(item => {
-      const status = getStockStatus(item)
-      const ls = lotesDoItem(item)
-      return [item.code, item.name, item.category, item.unit, item.current_stock, item.min_stock, status.label,
-        textoLotes(ls), dataBR(validadeMaisProxima(ls))].map(cel).join(';')
-    })
-    const csv = [headers.join(';'), ...rows].join('\n')
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
-    const dateStr = format(new Date(), 'yyyy-MM-dd')
-    saveAs(blob, `relatorio_estoque_${type}_${dateStr}.csv`)
   }
 
   const statCards = [
@@ -292,9 +289,9 @@ export function StockReport({ type }: StockReportProps) {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={exportToCSV}>
-            <Download size={14} className="mr-1" /> CSV
-          </Button>
+          {/* CSV removido daqui (22/09/2026): separado por ';', o Excel em
+              ingles jogava tudo numa coluna so. O .xlsx abre certo em qualquer
+              idioma e traz a aba "Por lote". */}
           <Button size="sm" className="bg-primary-500 hover:bg-primary-600 text-white" onClick={exportToExcel}>
             <Download size={14} className="mr-1" /> Excel
           </Button>
