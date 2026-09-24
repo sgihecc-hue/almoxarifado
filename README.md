@@ -1,63 +1,97 @@
 # SGI-HECC — Gestão de Insumos (Farmácia + Almoxarifado)
 
-Sistema de gestão de estoque, dispensação e suprimentos do **Hospital Estadual Costa dos Coqueiros (HECC)**. Cobre dois módulos — **Farmácia** e **Almoxarifado** — com controle multi-estoque, dispensação por prescrição/requisição, solicitações entre setores, e módulos de conformidade sanitária (ANVISA / Portaria 344/98).
+Sistema de estoque, dispensação e pedidos entre setores do **Hospital Estadual Costa dos Coqueiros (HECC / FESF-SUS)**. Dois módulos — **Farmácia** e **Almoxarifado** — mais o **Pedido de Enfermagem** (kits e avulsos por paciente) e os registros regulatórios da farmácia (Portaria 344/98, CCIH).
 
 ## Stack
 
-- **Frontend:** React 18 + TypeScript + Vite, Tailwind CSS + shadcn/ui (Radix), React Router, React Query, react-hook-form + zod.
-- **Backend:** Supabase — PostgreSQL (com RLS), Auth (PKCE), Storage. Lógica de negócio sensível em **funções RPC `SECURITY DEFINER`** (transações atômicas).
-
-## Módulos e papéis
-
-- **Farmácia** e **Almoxarifado** são escolhidos por usuários `administrador`/`gestor` num seletor inicial.
-- Na Farmácia, escolhe-se também **em qual estoque** entrar: **CAF** (central) ou satélites **SAT_1 / SAT_2 / SAT_T**. O estoque atual fica indicado no topo (com troca rápida).
-- Papéis: `administrador`, `gestor`, `atendente`, `solicitante`, e setores de enfermagem.
-
-## Modelo de estoque (multi-localização)
-
-- `stock_locations`: CAF, ALMOX, SAT_1, SAT_2, SAT_T.
-- `item_stocks(item, tipo, local)`: **saldo por local** — fonte de verdade da farmácia.
-- `stock_movements`: **livro-razão imutável** (entradas, prescrições, solicitações, transferências, saídas, ajustes). O trigger `fn_apply_stock_movement` atualiza `item_stocks`; `fn_sync_legacy_stock_columns` espelha em `pharmacy_items.current_stock` (CAF).
-- **Almoxarifado** opera no modelo legado (`warehouse_items.current_stock` direto).
-- `expiry_tracking`: lotes e validade (FEFO).
-
-> **Toda alteração de saldo passa por RPCs atômicas** — o cliente nunca escreve saldo direto.
-
-## Principais fluxos
-
-- **Cadastro de itens** (catálogo): identificação, classificação farmacêutica, estoque mín/máx, padronizado, e **setores que podem solicitar**. O cadastro é **separado da entrada de estoque**.
-- **Entradas em lote** (`registrar_entrada_nf`): tela "Nova Entrada" com tipo (Compra/NF, Empréstimo, Doação, Consignado, Troca de validade); lança vários itens de uma vez (lote/validade/valor) → credita `item_stocks` (farmácia) ou `current_stock` (almox) + grava `stock_entries`.
-- **Saídas em lote** (`registrar_saida_lote`): tela "Registrar Saída" com motivo (quebra, vencimento, transferência, doação, permuta, consignado, troca de validade, empréstimo, devolução…) e **Destino** (fornecedores / unidades externas / setores).
-- **Dispensação** (`criar_dispensacao` / `aprovar_dispensacao` / `cancelar_dispensacao`): dois tipos — **prescrição** (paciente + prescritor) e **requisição** (só setor solicitante). Itens **MAV / controlados / antimicrobianos** caem em **fila de aprovação farmacêutica**; baixa pelo ledger no CAF. Disponível nos estoques **satélites**.
-- **Solicitações** entre setores: criar → aprovar → processar → entregar → **confirmar recebimento** (qualquer usuário logado). Para farmácia, ao confirmar, move o estoque **CAF → satélite solicitante** (`confirmar_recebimento_solicitacao`).
-- **Conformidade (Farmácia):** Livro de Controlados, Notificação de Receita, BMPO, Perdas, Talidomida, Antimicrobianos (CCIH), Intervenção Farmacêutica — com auditoria em `audit_logs`.
+- **Frontend:** React 18 + TypeScript + Vite, Tailwind + shadcn/ui (Radix), React Router 6, React Query, react-hook-form + zod, Chart.js, xlsx.
+- **Backend:** Supabase — Postgres com RLS, Auth (PKCE) e Edge Functions. Toda regra que mexe em saldo roda em **funções RPC `SECURITY DEFINER`**, numa transação só. O navegador nunca grava saldo direto.
+- **Deploy:** Vercel, a partir da branch `main` deste repositório (`sgihecc-hue/almoxarifado`). Headers de segurança e CSP em `vercel.json`.
 
 ## Rodando localmente
 
 ```bash
 npm install
-# defina as variáveis de ambiente (.env) abaixo
-npm run dev            # http://localhost:5173
-npm run build          # tsc && vite build
+npm run dev      # http://localhost:5173
+npm run build    # tsc (checagem de tipos) + vite build
 ```
 
-Variáveis de ambiente (`.env`):
+`.env` na raiz:
 
 ```
 VITE_SUPABASE_URL=...        # URL do projeto Supabase
-VITE_SUPABASE_ANON_KEY=...   # anon key
+VITE_SUPABASE_ANON_KEY=...   # chave anon (pública)
 ```
 
-## Banco de dados (importante)
+## Acesso e navegação
 
-- O **schema canônico vive no banco de produção** (Supabase). As migrations versionadas em `supabase/migrations/` **não cobrem** todo o motor multi-estoque/RPCs — há *schema drift*. Para reproduzir, prefira `supabase db pull` / `pg_dump --schema-only` do projeto real.
-- RPCs principais: `registrar_entrada_nf`, `registrar_saida_lote`, `confirmar_recebimento_solicitacao`, `criar_dispensacao`, `aprovar_dispensacao`, `cancelar_dispensacao`, `registrar_entrada_estoque`.
+- **Papéis** (`users.role`): `administrador`, `gestor`, `atendente`, `solicitante`. O setor do usuário também conta: setores de enfermagem (código `ENF*` e a lista `farmacia_setores_enfermagem`) veem o Pedido de Enfermagem e não veem Dashboard/Configurações.
+- **Sem autocadastro:** usuários são criados pelo administrador (tela Usuários → Edge Function `admin-create-user`). Troca de senha obrigatória no primeiro acesso.
+- **Seletor de módulo:** Farmácia → escolhe o estoque (**CAF**, **Satélite 1º Andar**, **Satélite 2º Andar**, **Satélite Térreo**); Almoxarifado → `/almox/dashboard`. O estoque ativo fica no topo, com troca rápida. Menu lateral: `src/lib/constants/sidebar-menu.ts`.
+- **LGPD:** termo de consentimento no primeiro acesso; ficha de paciente só para farmácia, gestão e enfermagem (RLS).
 
-## Deploy (Vercel) — atenção ao repositório
+## Modelo de estoque
 
-A produção é publicada pela **Vercel** a partir do repositório **`github.com/sgihecc-hue/almoxarifado`** (branch `main`). Existe também o espelho `github.com/doni010520/sgi-hecc-almox`. **Para o deploy ocorrer, o push precisa chegar em `sgihecc-hue/almoxarifado`.** O build é `tsc && vite build` (com `noUnusedLocals` — imports não usados quebram o build).
+| Local | O que guarda | Onde fica o saldo |
+|---|---|---|
+| CAF, SAT_1, SAT_2 | medicamentos (`pharmacy_items`) | `item_stocks` por local, movido pelo livro-razão `stock_movements` |
+| SAT_T (Satélite Térreo) | **materiais** (`warehouse_items`) | `item_stocks` do SAT_T |
+| ALMOX | materiais (`warehouse_items`) | `warehouse_items.current_stock` (saldo global) |
+
+- IDs fixos dos locais: `src/lib/constants/stock-locations.ts`.
+- **Farmácia:** `stock_movements` é o livro-razão imutável; gatilhos aplicam cada movimento em `item_stocks` e espelham o CAF em `pharmacy_items.current_stock`. Saída abate lote por **FEFO** (ou lote escolhido).
+- **Almoxarifado:** o saldo muda por entrega de solicitação (gatilho sobre `supplied_quantity`), entrada, saída direta, estorno e edição auditável. O **livro de movimentação** é a view `v_almox_movimentacao`, montada a partir de `audit_logs`.
+- **Lotes e validade:** `expiry_tracking`, com lote normalizado e validade conferida (recusa datas impossíveis).
+- **Entradas** (`stock_entries`): lançadas em rodada única, com trava contra duplo clique e aviso de entrada repetida. Dá para completar a NF depois, **editar** (quantidade, lote, validade, preço) e **anular com justificativa**; tudo fica no histórico da entrada.
+
+## Funcionalidades
+
+### Farmácia
+- **Estoque** do local ativo, com Nova Entrada e Registrar Saída em lote (motivo + destino: fornecedor, unidade externa ou setor).
+- **Operações:** Saídas, Entradas, Devoluções (enviadas pela enfermagem, confirmadas pela farmácia), Empréstimos (inclusive pagamento), Vencimentos, Etiquetas de Lote (Code128), Movimentações entre estoques e Pendências.
+- **Dispensação:** por **prescrição** (paciente + prescritor) ou por **requisição** (setor), a partir de qualquer estoque da farmácia. Hoje todas concluem direto; a fila de aprovação farmacêutica existe, mas está desligada em `criar_dispensacao`. Cancelar estorna o estoque. Inclui alta do paciente e Carros de Emergência.
+- **Cadastros** (só no CAF): Medicamentos, Fornecedores, Unidades Externas e Internas, Prescritores, Pacientes, Colaboradores. **Kits** de enfermagem: gestor e administrador.
+- **Controlados e CCIH:** Livro de Controlados, BMPO, Perdas, Antimicrobianos, Intervenção Farmacêutica. Telas de Talidomida e Notificação de Receita existem nas rotas, mas estão fora do menu.
+- **Relatórios:** Estoque, Consumo (lê os movimentos reais), Devoluções, Consumo Enfermagem, Gestão de Consumo, Multi-Estoque, Validade, Movimentações, Movimentação Diária — com lote e validade e exportação `.xlsx`.
+
+### Almoxarifado
+- Estoque, Etiquetas (código de barras), **Entrada por Leitor**, Entradas, Movimentação, **Ressuprimento** (POP.ALMXEPRO.09: consumo diário médio, ponto de ressuprimento, estoque mínimo e compra sugerida).
+- Solicitações em sequência: Caixa de Entrada → Em Processamento → entrega → Confirmar Recebimento; Histórico e Pendências. Atendimento com vários lotes por item.
+- Operações: Quebras e Avarias, Devoluções, Estorno, Empréstimos, Vencimentos, Movimentações, Saída Direta.
+- Relatórios: Estoque, Consumo, Gestão de Consumo, Validade, Movimentações.
+- **Painel de TV** (`/tv/warehouse`), ativo das 7h às 18h. Liga/desliga e horário em `src/lib/constants/tv-panels.ts`.
+
+### Pedido de Enfermagem
+Os setores de enfermagem pedem **kits** e **materiais avulsos**, sempre por paciente. O pedido vai para a **Satélite Térreo**, que atende e dá baixa no próprio estoque (`criar_pedido_enfermagem` → `atender_pedido_enfermagem` / `recusar_pedido_enfermagem`). Desenho: `docs/superpowers/specs/2026-09-20-kits-enfermagem-design.md`.
+
+### Administração
+Usuários (administrador), Setores (gestor cria e edita; só administrador exclui), Histórico Global (administrador), Meu Perfil e Configurações.
+
+## Banco de dados
+
+- **Migrations:** `supabase/migrations/`, aplicadas em ordem. As mais recentes (a partir de 2026-06) documentam no cabeçalho o problema que resolvem.
+- **Schema drift:** parte do schema de produção (tabelas e RPCs antigas) nunca foi versionada. Para ter o schema completo, use `supabase db pull` ou `pg_dump --schema-only` do projeto real.
+- **Principais RPCs:** `registrar_entrada_nf`, `registrar_entrada_estoque`, `registrar_entrada_farmacia`, `registrar_saida_lote`, `criar_saida_material`, `farmacia_reverter_saida`, `criar_dispensacao`, `cancelar_dispensacao`, `confirmar_recebimento_solicitacao`, `confirmar_recebimento_material`, `farmacia_devolucao_enviar` / `_confirmar`, `estornar_estoque_almox`, `almox_editar_item`, `almox_editar_lotes`, `criar_pedido_enfermagem`, `atender_pedido_enfermagem`, `farmacia_movimentacao_diaria`, `warehouse_consumo_diario`.
+- **Auditoria:** `audit_logs`, alimentada por gatilhos nas tabelas regulatórias e operacionais.
+- **Edge Functions** em `supabase/functions/`.
+
+## Estrutura
+
+```
+src/
+  pages/          telas (uma pasta por área: farmacia, almox, estoque, dispensacao, requests, reports...)
+  components/     componentes compartilhados e ui/ (shadcn)
+  lib/services/   acesso ao Supabase por domínio (items, stock, requests, kits...)
+  lib/constants/  menu, locais de estoque, setores, painéis de TV
+  contexts/       auth, módulo ativo, tema
+supabase/
+  migrations/     SQL versionado
+  functions/      Edge Functions
+docs/             backlog, specs e resumos de rodadas
+```
 
 ## Documentação
 
-- `docs/RESUMO-2026-06-30.md` — resumo das alterações desta rodada.
-- `docs/BACKLOG.md` — próximas features.
+- `docs/BACKLOG.md` — pendências.
+- `docs/superpowers/specs/` — especificações de funcionalidades.
+- `PLANO_FARMACIA_V2.md` — plano da versão 2 da farmácia.
