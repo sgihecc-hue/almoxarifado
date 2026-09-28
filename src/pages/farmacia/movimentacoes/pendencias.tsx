@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Clock, CheckCircle2, Loader2, AlertCircle, ExternalLink, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,8 @@ export function LoansPendencias({ scope }: { scope: 'pharmacy' | 'warehouse' }) 
   const [loans, setLoans] = useState<PendingLoan[]>([])
   const [loading, setLoading] = useState(true)
   const [confirming, setConfirming] = useState<string | null>(null)
+  const [aviso, setAviso] = useState<string | null>(null)
+  const confirmandoRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -59,26 +61,34 @@ export function LoansPendencias({ scope }: { scope: 'pharmacy' | 'warehouse' }) 
   }
 
   async function confirmItem(loanId: string, itemId: string) {
-    setConfirming(itemId)
+    if (confirmandoRef.current) return
+    confirmandoRef.current = true
+    setConfirming(itemId); setError(null); setAviso(null)
     try {
-      await pharmacyLoanService.confirmItem(loanId, itemId)
+      const r = await pharmacyLoanService.confirmItem(loanId, itemId)
+      setAviso(r.concluido ? 'Item confirmado e estoque movimentado. Formulário concluído.' : 'Item confirmado e estoque movimentado.')
       await load()
     } catch (e: any) {
       setError(e?.message || 'Erro ao confirmar item')
     } finally {
+      confirmandoRef.current = false
       setConfirming(null)
     }
   }
 
   async function confirmAll(loanId: string) {
-    if (!confirm('Confirmar TODOS os itens deste formulário?')) return
-    setConfirming(loanId)
+    if (confirmandoRef.current) return
+    if (!confirm('Confirmar TODOS os itens deste formulário? Cada item confirmado movimenta o estoque.')) return
+    confirmandoRef.current = true
+    setConfirming(loanId); setError(null); setAviso(null)
     try {
       await pharmacyLoanService.confirmAll(loanId)
+      setAviso('Formulário concluído: todos os itens confirmados e estoque movimentado.')
       await load()
     } catch (e: any) {
       setError(e?.message || 'Erro ao aprovar todos')
     } finally {
+      confirmandoRef.current = false
       setConfirming(null)
     }
   }
@@ -103,6 +113,9 @@ export function LoansPendencias({ scope }: { scope: 'pharmacy' | 'warehouse' }) 
         </Button>
       </div>
 
+      {aviso && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">{aviso}</div>
+      )}
       {error && (
         <div className="p-4 rounded-xl bg-red-100 border border-red-200 flex items-center gap-2 text-red-800 text-sm">
           <AlertCircle size={16} /> {error}

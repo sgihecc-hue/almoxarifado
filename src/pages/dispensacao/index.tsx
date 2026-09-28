@@ -16,6 +16,7 @@ export function DispensationList() {
   const { activeStock } = useModule()
   const [dispensations, setDispensations] = useState<PharmacyDispensation[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -64,8 +65,10 @@ export function DispensationList() {
         ? await loadMaterialDispensations(activeStock.id, f)
         : await pharmacyDispensationService.getAll({ ...f, locationId: activeStock?.id })
       setDispensations(data)
+      setLoadError('')
     } catch (error) {
       console.error('Error:', error)
+      setLoadError('Erro ao carregar as dispensações: ' + ((error as any)?.message ?? 'falha de conexão'))
     } finally {
       setLoading(false)
     }
@@ -140,6 +143,11 @@ export function DispensationList() {
           <tbody>
             {loading ? (
               <tr><td colSpan={7} className="text-center py-12" style={{ color: txtMut }}>Carregando...</td></tr>
+            ) : loadError ? (
+              <tr><td colSpan={7} className="text-center py-12 text-sm text-red-600">
+                {loadError}{' '}
+                <button className="underline" onClick={() => loadData()}>Tentar de novo</button>
+              </td></tr>
             ) : dispensations.length === 0 ? (
               <tr><td colSpan={7} className="text-center py-12" style={{ color: txtMut }}>Nenhuma dispensacao encontrada</td></tr>
             ) : (

@@ -3,7 +3,8 @@
 // Cada paciente pode ter multiplas admissoes (historico).
 // =====================================================================
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
+import { hojeLocal } from '@/lib/utils/seguro'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import {
   Users, Plus, Edit2, Trash2, Search, Loader2, AlertCircle, X,
@@ -56,13 +57,13 @@ export function Pacientes() {
   const [fMother, setFMother] = useState('')
   // Todo paciente novo eh criado ja com uma admissao (regra de negocio).
   // Data default = hoje, mas o usuario pode mudar.
-  const [fAdmitDate, setFAdmitDate] = useState(new Date().toISOString().slice(0, 10))
+  const [fAdmitDate, setFAdmitDate] = useState(hojeLocal())
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
 
   // Discharge modal
   const [dischargingPatient, setDischargingPatient] = useState<PatientRow | null>(null)
-  const [dDate, setDDate] = useState(new Date().toISOString().slice(0, 10))
+  const [dDate, setDDate] = useState(hojeLocal())
   const [dReason, setDReason] = useState<DischargeReason>('melhora_clinica')
   const [dNotes, setDNotes] = useState('')
 
@@ -92,7 +93,7 @@ export function Pacientes() {
   function openNew() {
     setEditing(null)
     setFName(''); setFBirth(''); setFRecord(''); setFMother('')
-    setFAdmitDate(new Date().toISOString().slice(0, 10))
+    setFAdmitDate(hojeLocal())
     setFormError(''); setShowForm(true)
   }
 
@@ -130,25 +131,35 @@ export function Pacientes() {
     catch (e) { setError(getErrorMessage(e)) }
   }
 
+  // Duplo clique em "Internar"/"Dar alta" criava duas internacoes: trava no
+  // mesmo tick (o banco tambem tem indice unico de internacao aberta).
+  const acaoRef = useRef(false)
+  const [acaoId, setAcaoId] = useState<string | null>(null)
+
   async function admit(p: PatientRow) {
+    if (acaoRef.current) return
+    acaoRef.current = true; setAcaoId(p.id)
     try { await patientsService.openAdmission(p.id); await load() }
     catch (e) { alert(getErrorMessage(e)) }
+    finally { acaoRef.current = false; setAcaoId(null) }
   }
 
   function openDischarge(p: PatientRow) {
     setDischargingPatient(p)
-    setDDate(new Date().toISOString().slice(0, 10))
+    setDDate(hojeLocal())
     setDReason('melhora_clinica'); setDNotes('')
   }
 
   async function confirmDischarge() {
-    if (!dischargingPatient?.open_admission_id) return
+    if (!dischargingPatient?.open_admission_id || acaoRef.current) return
+    acaoRef.current = true; setAcaoId(dischargingPatient.id)
     try {
       await patientsService.dischargeAdmission(dischargingPatient.open_admission_id, {
         discharge_date: dDate, discharge_reason: dReason, discharge_notes: dNotes,
       })
       setDischargingPatient(null); await load()
     } catch (e) { alert(getErrorMessage(e)) }
+    finally { acaoRef.current = false; setAcaoId(null) }
   }
 
   async function openHistory(p: Patient) {
@@ -244,7 +255,7 @@ export function Pacientes() {
                         <ArrowUpFromLine size={14} />
                       </Button>
                     ) : (
-                      <Button variant="outline" size="sm" onClick={() => admit(p)} className="h-8 px-2 mr-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50" title="Internar">
+                      <Button variant="outline" size="sm" onClick={() => admit(p)} disabled={acaoId !== null} className="h-8 px-2 mr-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50" title="Internar">
                         <ArrowDownToLine size={14} />
                       </Button>
                     )}
@@ -343,7 +354,7 @@ export function Pacientes() {
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setDischargingPatient(null)}>Cancelar</Button>
-              <Button onClick={confirmDischarge} className="bg-amber-600 hover:bg-amber-700 text-white">
+              <Button onClick={confirmDischarge} disabled={acaoId !== null} className="bg-amber-600 hover:bg-amber-700 text-white">
                 <ArrowUpFromLine size={14} className="mr-2" /> Confirmar alta
               </Button>
             </div>

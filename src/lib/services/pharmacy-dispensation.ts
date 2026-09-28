@@ -1,3 +1,4 @@
+import { inicioDiaISO, fimDiaISO } from '@/lib/utils/seguro'
 import { supabase } from '../supabase'
 import type {
   PharmacyDispensation,
@@ -47,10 +48,10 @@ class PharmacyDispensationService {
         .order('created_at', { ascending: false })
 
       if (filters?.dateFrom) {
-        query = query.gte('created_at', `${filters.dateFrom}T00:00:00`)
+        query = query.gte('created_at', inicioDiaISO(filters.dateFrom))
       }
       if (filters?.dateTo) {
-        query = query.lte('created_at', `${filters.dateTo}T23:59:59`)
+        query = query.lte('created_at', fimDiaISO(filters.dateTo))
       }
       if (filters?.locationId) {
         query = query.eq('source_location_id', filters.locationId)
@@ -122,8 +123,9 @@ class PharmacyDispensationService {
 
       return results
     } catch (error) {
+      // Erro NAO vira lista vazia: a tela mostra a mensagem e "Tentar de novo".
       console.error('Error fetching dispensations:', error)
-      return []
+      throw error
     }
   }
 
@@ -149,7 +151,7 @@ class PharmacyDispensationService {
           )
         `)
         .eq('id', id)
-        .single()
+        .maybeSingle()
 
       if (error) throw error
       if (!data) return null
@@ -199,14 +201,15 @@ class PharmacyDispensationService {
         })),
       }
     } catch (error) {
+      // Falha de rede/permissao nao pode aparecer como "nao encontrada".
       console.error('Error fetching dispensation:', error)
-      return null
+      throw error
     }
   }
 
   async create(
     data: CreateDispensationData,
-    opts: { sourceLocationCode?: string } = {},
+    opts: { sourceLocationCode?: string; chave?: string } = {},
   ): Promise<{ id: string; needsApproval?: boolean } | null> {
     try {
       // Criação atômica no banco: a RPC criar_dispensacao insere cabeçalho +
@@ -231,7 +234,10 @@ class PharmacyDispensationService {
           expiry_tracking_id: i.expiry_tracking_id ?? null,
           batch_number: i.batch_number ?? null,
           expiry_date: i.expiry_date ?? null,
+          justificativa_vencido: i.justificativa_vencido ?? null,
         })),
+        // Chave da rodada: repetir o envio (timeout/duplo clique) nao duplica.
+        p_chave: opts.chave ?? null,
         p_patient_id: data.patient_id ?? null,
         p_admission_id: data.admission_id ?? null,
         p_prescriber_id: data.prescriber_id ?? null,

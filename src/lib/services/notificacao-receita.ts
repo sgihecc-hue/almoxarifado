@@ -3,6 +3,7 @@
 // Tabela notificacao_receita — registro de receituário controlado
 // =====================================================================
 
+import { exigirLinhas } from '@/lib/utils/seguro'
 import { supabase } from '@/lib/supabase'
 
 export type TipoNotificacao = 'A' | 'B' | 'C_ESPECIAL'
@@ -145,15 +146,18 @@ class NotificacaoReceitaService {
   }
 
   async remove(id: string): Promise<void> {
-    const { error } = await supabase
+    const r = await supabase
       .from('notificacao_receita')
       .delete()
       .eq('id', id)
+      .select('id')
 
-    if (error) {
-      console.error('Error deleting notificacao_receita:', error)
-      throw new Error(error.message)
+    if (r.error) {
+      console.error('Error deleting notificacao_receita:', r.error)
+      throw new Error(r.error.message)
     }
+    // RLS negando o DELETE devolve 0 linhas sem erro: avisa em vez de "sumir".
+    exigirLinhas(r, 'Não foi possível excluir: sem permissão ou registro não encontrado.')
   }
 }
 

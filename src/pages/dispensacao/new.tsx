@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useTheme } from '@/contexts/theme'
 import {
@@ -15,6 +15,7 @@ import type { Department } from '@/lib/types/departments'
 import type { DispensationType } from '@/lib/types/dispensation'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import { useModule } from '@/contexts/module'
+import { termoIlike, lerQuantidade, hojeLocal, dataBR, parseDataLocal } from '@/lib/utils/seguro'
 interface SelectedItem {
   item_id: string
   name: string
@@ -33,6 +34,11 @@ interface SelectedItem {
   available_in_batch: number
   item_stock: number // estoque agregado (para opção "sem lote")
   quantity: number
+  // Texto digitado no campo (quantity e derivado dele com lerQuantidade):
+  // parseInt(v)||1 num input controlado fazia "5" virar "15".
+  quantidade_texto: string
+  // Lote vencido so sai com justificativa (gravada na dispensacao).
+  justificativa_vencido?: string
   // MATERIAL: lote digitado na hora ("Outro lote"). Muito material do satélite
   // veio por solicitação do almoxarifado sem lote no sistema — a operadora está
   // com a caixa na mão e digita o que está impresso nela.
@@ -59,6 +65,12 @@ interface LotRow {
 
 // Valor sentinela do seletor de lote para "digitar o lote na hora" (só material).
 const MANUAL_LOT = '__manual__'
+
+// Lote vencido (validade antes de hoje, no fuso local). Nao e oferecido como
+// FEFO e, se escolhido, exige justificativa.
+function loteVencido(d: string | null | undefined): boolean {
+  return !!d && d < hojeLocal()
+}
 
 const STEPS_PRESCRICAO = [
   { label: 'Paciente', icon: UserCheck },
@@ -157,6 +169,10 @@ export function NewDispensation() {
   // Etapa 5 — Resumo / submit
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [searchError, setSearchError] = useState('')
+  // Duplo clique / timeout: trava no mesmo tick + chave da rodada no banco.
+  const enviandoRef = useRef(false)
+  const chaveRef = useRef<string>(crypto.randomUUID())
   const [showMavConfirm, setShowMavConfirm] = useState(false)
   const [mavConfirmText, setMavConfirmText] = useState('')
 
@@ -227,6 +243,7 @@ export function NewDispensation() {
       const q = itemSearch.trim()
       if (!q) { setItemResults([]); return }
       setSearchingItems(true)
+      setSearchError('')
       // Busca meds. current_stock aqui é o AGREGADO (soma de todos locais);
       // pra o valor CORRETO do estoque ativo, sobrescrevemos abaixo com
       // item_stocks(activeStockId).
@@ -235,17 +252,20 @@ export function NewDispensation() {
             .from('warehouse_items')
             .select('id, code, name, unit, current_stock')
             .eq('is_active', true)
-            .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+            .or(`name.ilike.${termoIlike(q)},code.ilike.${termoIlike(q)}`)
             .order('name')
             .limit(20)
         : await supabase
             .from('pharmacy_items')
             .select('id, code, name, unit, current_stock, is_mav, medication_class, category')
             .eq('is_active', true)
-            .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+            .or(`name.ilike.${termoIlike(q)},code.ilike.${termoIlike(q)}`)
             .order('name')
             .limit(20)
-      if (err) console.error(err)
+      if (err) {
+        console.error(err)
+        setSearchError('Erro na busca: ' + getErrorMessage(err))
+      }
       let items = (data || []) as PharmacyItemRow[]
 
       // Substitui current_stock pelo saldo do local ativo (multi-estoque).
@@ -281,7 +301,11 @@ export function NewDispensation() {
       .eq('location_id', activeStockId)
       .gt('current_quantity', 0)
       .order('expiry_date', { ascending: true, nullsFirst: false })
-    if (err) console.error(err)
+    if (err) {
+      console.error(err)
+      setError('Erro ao carregar os lotes: ' + getErrorMessage(err))
+      return []
+    }
     const lots = (data || []) as LotRow[]
     setLotsByItem((p) => ({ ...p, [lotKey(itemId)]: lots }))
     return lots
@@ -303,7 +327,7 @@ export function NewDispensation() {
       // lote informado, e o saldo do lote não limita a quantidade (pode estar
       // 0 até o inventário; FA5 permite).
       const lots = await loadLots(item.id)
-      const fefo = isMaterial ? lots[0] : undefined
+      const fefo = isMaterial ? lots.find((l) => !loteVencido(l.expiry_date)) : undefined
       setSelectedItems((prev) => [
         ...prev,
         {
@@ -316,6 +340,7 @@ export function NewDispensation() {
           available_in_batch: isMaterial ? Number.MAX_SAFE_INTEGER : item.current_stock,
           item_stock: item.current_stock,
           quantity: 1,
+          quantidade_texto: '1',
         },
       ])
       setItemSearch(''); setItemResults([])
@@ -338,7 +363,8 @@ export function NewDispensation() {
       if (!lotId) {
         // Material sem lote continua liberado (não trava a quantidade).
         const avail = isMaterial ? Number.MAX_SAFE_INTEGER : it.item_stock
-        return { ...it, manual_lot: false, expiry_tracking_id: null, batch_number: null, expiry_date: null, available_in_batch: avail, quantity: Math.min(it.quantity, Math.max(1, avail)) }
+        const q = Math.min(it.quantity, Math.max(1, avail))
+        return { ...it, manual_lot: false, expiry_tracking_id: null, batch_number: null, expiry_date: null, available_in_batch: avail, quantity: q, quantidade_texto: String(q), justificativa_vencido: '' }
       }
       const lot = (lotsByItem[lotKey(it.item_id)] || []).find((l) => l.id === lotId)
       if (!lot) return it
@@ -348,6 +374,8 @@ export function NewDispensation() {
         ...it, manual_lot: false, expiry_tracking_id: lot.id, batch_number: lot.batch_number,
         expiry_date: lot.expiry_date, available_in_batch: avail,
         quantity: Math.min(it.quantity, Math.max(1, avail)),
+        quantidade_texto: String(Math.min(it.quantity, Math.max(1, avail))),
+        justificativa_vencido: loteVencido(lot.expiry_date) ? (it.justificativa_vencido ?? '') : '',
       }
     }))
   }
@@ -370,6 +398,8 @@ export function NewDispensation() {
         expiry_date: null,
         available_in_batch: src.item_stock,
         quantity: 1,
+        quantidade_texto: '1',
+        justificativa_vencido: '',
       })
       return copy
     })
@@ -385,25 +415,33 @@ export function NewDispensation() {
     setSelectedItems((prev) => prev.map((it, i) => i === idx ? { ...it, expiry_date: date || null } : it))
   }
 
-  function setQty(idx: number, qty: number) {
+  function setQty(idx: number, texto: string) {
     setSelectedItems((prev) => prev.map((it, i) =>
-      i === idx ? { ...it, quantity: Math.max(1, qty) } : it
+      i === idx ? { ...it, quantidade_texto: texto, quantity: lerQuantidade(texto) ?? 0 } : it
     ))
   }
 
+  function setJustificativa(idx: number, texto: string) {
+    setSelectedItems((prev) => prev.map((it, i) => i === idx ? { ...it, justificativa_vencido: texto } : it))
+  }
+
   function fmt(d: string | null | undefined) {
-    if (!d) return '—'
-    return new Date(d + 'T00:00:00').toLocaleDateString('pt-BR')
+    return dataBR(d)
   }
 
   function expiryColor(d: string | null | undefined): string {
     if (!d) return mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'
-    const days = Math.floor((new Date(d + 'T00:00:00').getTime() - Date.now()) / 86400000)
+    const days = Math.floor(((parseDataLocal(d)?.getTime() ?? Date.now()) - Date.now()) / 86400000)
     if (days < 0) return 'rgba(239,68,68,0.15)'
     if (days <= 30) return 'rgba(239,68,68,0.10)'
     if (days <= 90) return 'rgba(245,158,11,0.10)'
     return 'rgba(16,185,129,0.10)'
   }
+
+  // Linhas com lote vencido escolhido e sem justificativa: o banco recusaria.
+  const vencidosSemJustificativa = selectedItems.filter(
+    (i) => !!i.expiry_tracking_id && loteVencido(i.expiry_date) && !(i.justificativa_vencido ?? '').trim(),
+  )
 
   async function trySubmit() {
     setError('')
@@ -412,6 +450,8 @@ export function NewDispensation() {
   }
 
   async function doSubmit() {
+    if (enviandoRef.current) return
+    enviandoRef.current = true
     setSubmitting(true); setError('')
     try {
       // MATERIAL (SAT_T): baixa própria, sem tabelas de medicamento. O trigger
@@ -437,6 +477,7 @@ export function NewDispensation() {
             return {
               item_id: i.item_id,
               quantity: Number(i.quantity),
+              justificativa_vencido: (i.justificativa_vencido ?? '').trim() || null,
               expiry_tracking_id: lote,
               // Lote digitado: a RPC reaproveita a linha se o lote já existir
               // nesse item/local, senão cria (podendo ficar negativa — FA5).
@@ -445,6 +486,7 @@ export function NewDispensation() {
             }
           }),
           p_notes: null,
+          p_chave: chaveRef.current,
         })
         if (matErr) throw matErr
         navigate('/dispensacao', { state: { successMsg: 'Dispensação de material registrada' } })
@@ -463,6 +505,7 @@ export function NewDispensation() {
                 item_id: i.item_id, quantity: i.quantity,
                 expiry_tracking_id: i.expiry_tracking_id,
                 batch_number: i.batch_number, expiry_date: i.expiry_date,
+                justificativa_vencido: (i.justificativa_vencido ?? '').trim() || null,
               })),
             }
           : {
@@ -479,11 +522,12 @@ export function NewDispensation() {
                 item_id: i.item_id, quantity: i.quantity,
                 expiry_tracking_id: i.expiry_tracking_id,
                 batch_number: i.batch_number, expiry_date: i.expiry_date,
+                justificativa_vencido: (i.justificativa_vencido ?? '').trim() || null,
               })),
             },
         // Estoque de origem: se o usuário está em CAF/satélite explícito, respeita.
         // Caso contrário (nenhum escolhido), CAF é o default no backend.
-        { sourceLocationCode: activeStock?.code }
+        { sourceLocationCode: activeStock?.code, chave: chaveRef.current }
       )
       const msg = result?.needsApproval
         ? 'Aguardando aprovação do farmacêutico'
@@ -491,7 +535,8 @@ export function NewDispensation() {
       navigate('/dispensacao', { state: { successMsg: msg } })
     } catch (e: unknown) {
       setError(getErrorMessage(e))
-    } finally {
+      // So reabilita em erro; no sucesso a tela sai.
+      enviandoRef.current = false
       setSubmitting(false); setShowMavConfirm(false)
     }
   }
@@ -502,13 +547,13 @@ export function NewDispensation() {
   const canAdvance: boolean[] = isRequisicao
     ? [
         !!selectedSector,
-        selectedItems.length > 0 && medsSemRastreio.length === 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
+        selectedItems.length > 0 && medsSemRastreio.length === 0 && vencidosSemJustificativa.length === 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
         true,
       ]
     : [
         !!selectedPatient,
         !!prescriptionDate && !!selectedPresc,
-        selectedItems.length > 0 && medsSemRastreio.length === 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
+        selectedItems.length > 0 && medsSemRastreio.length === 0 && vencidosSemJustificativa.length === 0 && selectedItems.every((i) => i.quantity > 0 && (isMaterial || (i.quantity <= i.available_in_batch && !!i.expiry_tracking_id))),
         true,
       ]
 
@@ -808,7 +853,9 @@ export function NewDispensation() {
             />
             {itemSearch.trim() && (
               <div style={dropdownStyle}>
-                {searchingItems ? (
+                {searchError ? (
+                  <div className="px-4 py-3 text-sm text-red-600">{searchError}</div>
+                ) : searchingItems ? (
                   <div className="flex items-center gap-2 text-sm px-4 py-3" style={{ color: txtMut }}>
                     <Loader2 size={14} className="animate-spin" /> Buscando...
                   </div>
@@ -883,13 +930,11 @@ export function NewDispensation() {
                         <p className="text-xs" style={{ color: txtMut }}>{it.code || 'sem código'}</p>
                       </div>
                       <input
-                        type="number"
-                        min={1}
-                        max={it.available_in_batch}
-                        value={it.quantity}
-                        onChange={(e) => setQty(idx, parseInt(e.target.value) || 1)}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        style={{ ...inputStyle, width: 80, borderColor: over ? '#dc2626' : (inputStyle.border as string) }}
+                        type="text"
+                        inputMode="numeric"
+                        value={it.quantidade_texto}
+                        onChange={(e) => setQty(idx, e.target.value)}
+                        style={{ ...inputStyle, width: 80, borderColor: over || it.quantity <= 0 ? '#dc2626' : (inputStyle.border as string) }}
                       />
                       <span className="text-xs" style={{ color: txtMut }}>{it.unit}</span>
                       {/* Lote: obrigatório no medicamento; no material vem com o
@@ -911,8 +956,8 @@ export function NewDispensation() {
                           {lots.length === 0 ? 'Sem lote registrado' : isMaterial ? '— Sem lote —' : '— Selecione o lote * —'}
                         </option>
                         {lots.map((l) => (
-                          <option key={l.id} value={l.id}>
-                            Lote {l.batch_number} · Val {fmt(l.expiry_date)} · {l.current_quantity} un
+                          <option key={l.id} value={l.id} style={loteVencido(l.expiry_date) ? { color: '#dc2626' } : undefined}>
+                            {loteVencido(l.expiry_date) ? '⚠ VENCIDO · ' : ''}Lote {l.batch_number} · Val {fmt(l.expiry_date)} · {l.current_quantity} un
                           </option>
                         ))}
                         {/* Material que veio do almoxarifado sem lote no
@@ -931,6 +976,21 @@ export function NewDispensation() {
                         </span>
                       )}
                     </div>
+                    {/* Lote VENCIDO escolhido: bloqueado por padrao; so passa com
+                        justificativa (fica gravada no item e no movimento). */}
+                    {!!it.expiry_tracking_id && loteVencido(it.expiry_date) && (
+                      <div className="flex items-center gap-2 flex-wrap p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)' }}>
+                        <AlertTriangle size={14} className="text-red-600" />
+                        <span className="text-xs text-red-700 font-semibold">Lote vencido em {fmt(it.expiry_date)}.</span>
+                        <input
+                          type="text"
+                          value={it.justificativa_vencido ?? ''}
+                          onChange={(e) => setJustificativa(idx, e.target.value)}
+                          placeholder="Justificativa obrigatória para dispensar lote vencido"
+                          style={{ ...inputStyle, flex: 1, minWidth: 260, padding: '6px 10px', borderColor: (it.justificativa_vencido ?? '').trim() ? undefined : '#ef4444' }}
+                        />
+                      </div>
+                    )}
                     {/* Campos do lote digitado. Só aparecem no material e só
                         quando "Outro lote (digitar)" está escolhido. */}
                     {isMaterial && it.manual_lot && (
@@ -967,6 +1027,13 @@ export function NewDispensation() {
                   </div>
                 )
               })}
+            </div>
+          )}
+
+          {vencidosSemJustificativa.length > 0 && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-800 flex items-start gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <p>Lote vencido selecionado sem justificativa: {vencidosSemJustificativa.map((v) => v.name).join(', ')}. Troque o lote ou justifique.</p>
             </div>
           )}
 

@@ -13,6 +13,7 @@ import { useTheme } from '@/contexts/theme'
 import { useAuth } from '@/contexts/auth'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { hojeLocal, dataBR, buscarTodas } from '@/lib/utils/seguro'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,29 +39,39 @@ interface LivroRow {
   responsavel_tecnico_crf: string | null
 }
 
+// Linha devolvida pela RPC livro_controlados_movimentos (filtra lista/item/
+// periodo no banco, pagina e calcula o saldo apos cada movimento).
 interface MovRow {
   id: string
-  created_at: string
+  performed_at: string
+  livro_seq: number | null
   movement_type: string
+  direction: 'in' | 'out'
   quantity: number
-  notes: string | null
-  reference_number: string | null
-  // joined
-  item_name: string
-  item_lote: string | null
-  item_validade: string | null
-  item_controlled_subclass: string | null
-  // computed
-  saldo_after: number | null
-  unit_cost: number | null
+  item_id: string
+  item_nome: string
+  item_codigo: string | null
+  subclasse: string | null
+  lote: string | null
+  validade: string | null
+  local_codigo: string | null
+  historico: string | null
+  saldo_depois: number | null
+  total: number
+}
+
+interface ItemOpt { id: string; name: string; medication_class: string | null; controlled_subclass: string | null }
+
+// Saida que e PERDA/inutilizacao no livro (coluna propria).
+function ehPerda(m: MovRow): boolean {
+  return m.direction === 'out' && m.movement_type === 'SAIDA_AVULSA' && /perda|vencimento|quebra/i.test(m.historico ?? '')
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 function fmtDate(d: string | null | undefined) {
-  if (!d) return '—'
-  return new Date(d.slice(0, 10) + 'T00:00:00').toLocaleDateString('pt-BR')
+  return dataBR(d)
 }
 
 function subclassMatchesList(subclass: string | null | undefined, lista: Lista): boolean {
@@ -106,6 +117,11 @@ export function LivroControlados() {
   const [selectedLista, setSelectedLista] = useState<Lista>('A1_A2')
   const [livros, setLivros]       = useState<LivroRow[]>([])
   const [movs, setMovs]           = useState<MovRow[]>([])
+  const [totalMovs, setTotalMovs] = useState(0)
+  const [itemFilter, setItemFilter] = useState('')
+  const [dataDe, setDataDe] = useState('')
+  const [dataAte, setDataAte] = useState('')
+  const [itensLista, setItensLista] = useState<ItemOpt[]>([])
   const [loading, setLoading]     = useState(false)
   const [error, setError]         = useState('')
 
@@ -120,13 +136,13 @@ export function LivroControlados() {
   const [livroError, setLivroError]           = useState('')
   const [abrirForm, setAbrirForm] = useState({
     numero_livro: '',
-    termo_abertura_data: new Date().toISOString().slice(0, 10),
+    termo_abertura_data: hojeLocal(),
     termo_abertura_texto: '',
     responsavel_tecnico_nome: '',
     responsavel_tecnico_crf: '',
   })
   const [encerrarForm, setEncerrarForm] = useState({
-    termo_encerramento_data: new Date().toISOString().slice(0, 10),
+    termo_encerramento_data: hojeLocal(),
     termo_encerramento_texto: '',
   })
 
@@ -137,12 +153,47 @@ export function LivroControlados() {
 
   useEffect(() => {
     void loadLivros()
+    void loadItens()
   }, [])
 
+  // Troca de lista zera o filtro de item e volta a pagina 1.
   useEffect(() => {
-    void loadMovs()
+    setItemFilter('')
     setPage(0)
   }, [selectedLista])
+
+  useEffect(() => {
+    void loadMovs(page)
+  }, [selectedLista, itemFilter, dataDe, dataAte, page])
+
+  async function loadItens() {
+    const { data, error: err } = await supabase
+      .from('pharmacy_items')
+      .select('id, name, medication_class, controlled_subclass')
+      .or('controlled_subclass.not.is.null,medication_class.eq.controlados,medication_class.eq.antimicrobianos')
+      .order('name')
+    if (err) { setError(getErrorMessage(err)); return }
+    setItensLista((data || []) as ItemOpt[])
+  }
+
+  const itensDaLista = useMemo(
+    () => itensLista.filter((i) =>
+      selectedLista === 'antimicrobianos'
+        ? i.medication_class === 'antimicrobianos'
+        : !!i.controlled_subclass && subclassMatchesList(i.controlled_subclass, selectedLista)),
+    [itensLista, selectedLista],
+  )
+
+  function rpcArgs(limite: number, offset: number) {
+    return {
+      p_lista: selectedLista,
+      p_item_id: itemFilter || null,
+      p_de: dataDe || null,
+      p_ate: dataAte || null,
+      p_limite: limite,
+      p_offset: offset,
+    }
+  }
 
   async function loadLivros() {
     const { data, error: err } = await supabase
@@ -153,76 +204,24 @@ export function LivroControlados() {
     setLivros((data || []) as LivroRow[])
   }
 
-  async function loadMovs() {
+  async function loadMovs(pagina: number) {
     setLoading(true); setError('')
     try {
-      // Query stock_movements joined with pharmacy_items filtered by subclass
-      const { data, error: err } = await supabase
-        .from('stock_movements')
-        .select(`
-          id,
-          created_at,
-          movement_type,
-          quantity,
-          notes,
-          reference_number,
-          balance_after,
-          unit_cost,
-          item:pharmacy_items!inner(
-            id,
-            name,
-            medication_class,
-            controlled_subclass
-          ),
-          lot:expiry_tracking(
-            batch_number,
-            expiry_date
-          )
-        `)
-        .order('created_at', { ascending: true })
-        .limit(2000)
-
+      const { data, error: err } = await supabase.rpc('livro_controlados_movimentos', rpcArgs(PAGE_SIZE, pagina * PAGE_SIZE))
       if (err) throw err
-
-      const filtered: MovRow[] = ((data || []) as any[])
-        .filter(r => {
-          const item = r.item
-          if (!item) return false
-          if (selectedLista === 'antimicrobianos') {
-            return item.medication_class === 'antimicrobianos'
-          }
-          return item.medication_class === 'controlados' &&
-            subclassMatchesList(item.controlled_subclass, selectedLista)
-        })
-        .map(r => ({
-          id: r.id,
-          created_at: r.created_at,
-          movement_type: r.movement_type,
-          quantity: r.quantity,
-          notes: r.notes,
-          reference_number: r.reference_number,
-          item_name: r.item?.name ?? '—',
-          item_lote: r.lot?.batch_number ?? null,
-          item_validade: r.lot?.expiry_date ?? null,
-          item_controlled_subclass: r.item?.controlled_subclass ?? null,
-          saldo_after: r.balance_after ?? null,
-          unit_cost: r.unit_cost ?? null,
-        }))
-
-      setMovs(filtered)
+      const rows = (data || []) as MovRow[]
+      setMovs(rows)
+      setTotalMovs(rows[0]?.total ?? 0)
     } catch (e: any) {
+      setMovs([]); setTotalMovs(0)
       setError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
   }
 
-  const pagedMovs = useMemo(() => {
-    const start = page * PAGE_SIZE
-    return movs.slice(start, start + PAGE_SIZE)
-  }, [movs, page])
-
-  const totalPages = Math.max(1, Math.ceil(movs.length / PAGE_SIZE))
+  const pagedMovs = movs
+  const totalPages = Math.max(1, Math.ceil(totalMovs / PAGE_SIZE))
 
   // ----- Abrir livro -----
   async function abrirLivro() {
@@ -283,23 +282,33 @@ export function LivroControlados() {
   }
 
   // ----- Print -----
-  function handlePrint() {
+  async function handlePrint() {
+    // Impressao leva TODAS as linhas do filtro (paginando no banco).
+    let todas: MovRow[] = []
+    try {
+      todas = await buscarTodas<MovRow>((de, ate) =>
+        supabase.rpc('livro_controlados_movimentos', rpcArgs(ate - de + 1, de)) as any, { tamanho: 500 })
+    } catch (e: any) {
+      setError(getErrorMessage(e))
+      return
+    }
     const listaInfo = LISTAS.find(l => l.value === selectedLista)!
     const term = livroAberto
       ? `Livro nº ${livroAberto.numero_livro} — Aberto em ${fmtDate(livroAberto.termo_abertura_data)}`
       : 'Sem livro aberto'
 
-    const rows = movs.map((m, i) => `
+    const esc = (t: string | null | undefined) => (t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const rows = todas.map((m, i) => `
       <tr style="border-bottom:1px solid #ccc">
-        <td style="padding:4px 6px;text-align:center">${i + 1}</td>
-        <td style="padding:4px 6px">${fmtDate(m.created_at)}</td>
-        <td style="padding:4px 6px">${m.item_name}${m.reference_number ? ' / NF ' + m.reference_number : ''}</td>
-        <td style="padding:4px 6px;text-align:right">${m.movement_type === 'entrada' ? m.quantity : ''}</td>
-        <td style="padding:4px 6px;text-align:right">${m.movement_type !== 'entrada' ? m.quantity : ''}</td>
-        <td style="padding:4px 6px">${m.notes ? m.notes.slice(0, 60) : '—'}</td>
-        <td style="padding:4px 6px;text-align:right">${m.saldo_after ?? '—'}</td>
-        <td style="padding:4px 6px">${m.item_lote ?? '—'}</td>
-        <td style="padding:4px 6px">${fmtDate(m.item_validade)}</td>
+        <td style="padding:4px 6px;text-align:center">${m.livro_seq ?? i + 1}</td>
+        <td style="padding:4px 6px">${fmtDate(m.performed_at)}</td>
+        <td style="padding:4px 6px">${esc(m.item_nome)}${m.historico ? ' — ' + esc(m.historico).slice(0, 80) : ''}</td>
+        <td style="padding:4px 6px;text-align:right">${m.direction === 'in' ? m.quantity : ''}</td>
+        <td style="padding:4px 6px;text-align:right">${m.direction === 'out' && !ehPerda(m) ? m.quantity : ''}</td>
+        <td style="padding:4px 6px">${ehPerda(m) ? m.quantity + ' — ' + esc(m.historico).slice(0, 60) : '—'}</td>
+        <td style="padding:4px 6px;text-align:right">${m.saldo_depois ?? '—'}</td>
+        <td style="padding:4px 6px">${esc(m.lote) || '—'}</td>
+        <td style="padding:4px 6px">${fmtDate(m.validade)}</td>
         <td style="padding:4px 6px"></td>
       </tr>
     `).join('')
@@ -378,7 +387,7 @@ export function LivroControlados() {
         <div className="flex gap-2 flex-wrap">
           {isAdminGestor && !livroAberto && (
             <Button
-              onClick={() => { setAbrirForm(f => ({ ...f, termo_abertura_data: new Date().toISOString().slice(0, 10) })); setLivroError(''); setShowAbrirModal(true) }}
+              onClick={() => { setAbrirForm(f => ({ ...f, termo_abertura_data: hojeLocal() })); setLivroError(''); setShowAbrirModal(true) }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white">
               <Unlock className="w-4 h-4 mr-2" /> Abrir Livro
             </Button>
@@ -386,12 +395,12 @@ export function LivroControlados() {
           {isAdminGestor && livroAberto && (
             <Button
               variant="outline"
-              onClick={() => { setEncerrarForm(f => ({ ...f, termo_encerramento_data: new Date().toISOString().slice(0, 10) })); setLivroError(''); setShowEncerrarModal(true) }}
+              onClick={() => { setEncerrarForm(f => ({ ...f, termo_encerramento_data: hojeLocal() })); setLivroError(''); setShowEncerrarModal(true) }}
               className="border-red-300 text-red-600 hover:bg-red-50">
               <Lock className="w-4 h-4 mr-2" /> Encerrar Livro
             </Button>
           )}
-          <Button variant="outline" onClick={handlePrint}>
+          <Button variant="outline" onClick={() => void handlePrint()}>
             <Printer className="w-4 h-4 mr-2" /> Gerar PDF
           </Button>
         </div>
@@ -451,6 +460,25 @@ export function LivroControlados() {
         ))}
       </div>
 
+      {/* Filtros (aplicados no banco) */}
+      <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-3" style={card}>
+        <div>
+          <label style={lbl}>Medicamento</label>
+          <select value={itemFilter} onChange={e => { setItemFilter(e.target.value); setPage(0) }} style={inp as any}>
+            <option value="">Todos da lista</option>
+            {itensDaLista.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={lbl}>De</label>
+          <input type="date" value={dataDe} onChange={e => { setDataDe(e.target.value); setPage(0) }} style={inp} />
+        </div>
+        <div>
+          <label style={lbl}>Até</label>
+          <input type="date" value={dataAte} onChange={e => { setDataAte(e.target.value); setPage(0) }} style={inp} />
+        </div>
+      </div>
+
       {/* Table */}
       <div style={card} ref={printRef}>
         {loading ? (
@@ -482,13 +510,9 @@ export function LivroControlados() {
                       </td>
                     </tr>
                   ) : pagedMovs.map((m, i) => {
-                    const seq = page * PAGE_SIZE + i + 1
-                    const isEntrada = m.movement_type === 'entrada'
-                    const isPerdaJust = m.notes && (
-                      m.movement_type === 'perda' ||
-                      m.movement_type === 'ajuste' ||
-                      m.movement_type === 'vencimento'
-                    )
+                    const seq = m.livro_seq ?? page * PAGE_SIZE + i + 1
+                    const isEntrada = m.direction === 'in'
+                    const isPerdaJust = ehPerda(m)
                     return (
                       <tr
                         key={m.id}
@@ -499,36 +523,36 @@ export function LivroControlados() {
                           {seq}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap" style={{ color: txtSec }}>
-                          {fmtDate(m.created_at)}
+                          {fmtDate(m.performed_at)}
                         </td>
                         <td className="px-3 py-2" style={{ color: txt, maxWidth: 220 }}>
-                          <p className="truncate font-medium">{m.item_name}</p>
-                          {m.reference_number && (
-                            <p className="text-xs truncate" style={{ color: txtMut }}>NF/Ref: {m.reference_number}</p>
+                          <p className="truncate font-medium">{m.item_nome}</p>
+                          {m.historico && !isPerdaJust && (
+                            <p className="text-xs truncate" style={{ color: txtMut }} title={m.historico}>{m.historico}</p>
                           )}
-                          {m.notes && !isPerdaJust && (
-                            <p className="text-xs truncate" style={{ color: txtMut }}>{m.notes}</p>
+                          {m.local_codigo && (
+                            <p className="text-xs" style={{ color: txtMut }}>{m.local_codigo}</p>
                           )}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums" style={{ color: '#10b981' }}>
                           {isEntrada ? m.quantity : ''}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums" style={{ color: '#ef4444' }}>
-                          {!isEntrada && m.movement_type !== 'perda' && m.movement_type !== 'ajuste' ? m.quantity : ''}
+                          {!isEntrada && !isPerdaJust ? m.quantity : ''}
                         </td>
                         <td className="px-3 py-2" style={{ color: txtSec, maxWidth: 180 }}>
                           {isPerdaJust ? (
-                            <span className="text-xs">{m.quantity} — {m.notes}</span>
+                            <span className="text-xs">{m.quantity} — {m.historico}</span>
                           ) : '—'}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums font-mono text-xs" style={{ color: txt }}>
-                          {m.saldo_after ?? '—'}
+                          {m.saldo_depois ?? '—'}
                         </td>
                         <td className="px-3 py-2 text-xs font-mono" style={{ color: txtSec }}>
-                          {m.item_lote ?? '—'}
+                          {m.lote ?? '—'}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs" style={{ color: txtSec }}>
-                          {fmtDate(m.item_validade)}
+                          {fmtDate(m.validade)}
                         </td>
                         <td className="px-3 py-2" style={{ width: 80 }} />
                       </tr>
@@ -539,11 +563,11 @@ export function LivroControlados() {
             </div>
 
             {/* Pagination */}
-            {movs.length > PAGE_SIZE && (
+            {totalMovs > PAGE_SIZE && (
               <div className="flex items-center justify-between px-4 py-3"
                 style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'}` }}>
                 <span className="text-xs" style={{ color: txtMut }}>
-                  {movs.length} registros · página {page + 1} de {totalPages}
+                  {totalMovs} registros · página {page + 1} de {totalPages}
                 </span>
                 <div className="flex gap-1">
                   <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>

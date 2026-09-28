@@ -68,5 +68,7 @@ export interface CreateDispensationData {
     expiry_date?: string | null
     medication_class?: string | null
     is_mav?: boolean
+    // Obrigatoria quando o lote escolhido esta vencido (fica gravada).
+    justificativa_vencido?: string | null
   }>
 }

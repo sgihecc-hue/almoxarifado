@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Loader2, Package2, Undo2, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
@@ -27,6 +27,9 @@ export function WarehouseDispatchList() {
 
   const [dispatches, setDispatches] = useState<WarehouseDispatchSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [aviso, setAviso] = useState<string | null>(null)
+  const cancelandoRef = useRef(false)
 
   // Estorno
   const [cancelTarget, setCancelTarget] = useState<WarehouseDispatchSummary | null>(null)
@@ -41,8 +44,11 @@ export function WarehouseDispatchList() {
   async function load() {
     try {
       setLoading(true)
+      setLoadError(null)
       const data = await warehouseDispatchService.list()
       setDispatches(data)
+    } catch (e: any) {
+      setLoadError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -63,16 +69,23 @@ export function WarehouseDispatchList() {
   }
 
   const confirmCancel = async () => {
-    if (!cancelTarget) return
+    if (!cancelTarget || cancelandoRef.current) return
+    cancelandoRef.current = true
     try {
       setCancelling(true)
       setCancelError(null)
-      await warehouseDispatchService.cancel(cancelTarget.id, cancelReason)
+      const r = await warehouseDispatchService.cancel(cancelTarget.id, cancelReason)
+      setAviso(
+        r.linhas_sem_baixa > 0
+          ? `Saída #${cancelTarget.dispatch_number} estornada: ${r.quantidade_devolvida} devolvido(s) ao estoque. ${r.linhas_sem_baixa} item(ns) não tinham baixado estoque e não foram devolvidos.`
+          : `Saída #${cancelTarget.dispatch_number} estornada: ${r.quantidade_devolvida} devolvido(s) ao estoque.`,
+      )
       setCancelTarget(null)
       await load()
     } catch (e: any) {
       setCancelError(getErrorMessage(e))
     } finally {
+      cancelandoRef.current = false
       setCancelling(false)
     }
   }
@@ -100,11 +113,26 @@ export function WarehouseDispatchList() {
         </Button>
       </div>
 
+      {aviso && (
+        <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm flex items-center justify-between gap-2">
+          <span>{aviso}</span>
+          <button onClick={() => setAviso(null)} className="text-emerald-700 underline text-xs">fechar</button>
+        </div>
+      )}
+      {loadError && (
+        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> {loadError}</span>
+          <Button variant="outline" size="sm" onClick={() => load()}>Tentar de novo</Button>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         {loading ? (
           <div className="text-center py-12 text-gray-500">
             <Loader2 className="w-6 h-6 animate-spin inline-block mr-2" /> Carregando...
           </div>
+        ) : loadError ? (
+          <div className="text-center py-12 text-gray-500 text-sm">Não foi possível carregar a lista.</div>
         ) : dispatches.length === 0 ? (
           <div className="text-center py-12">
             <Package2 className="w-12 h-12 mx-auto text-gray-300 mb-4" />

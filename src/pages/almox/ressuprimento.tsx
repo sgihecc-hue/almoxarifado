@@ -123,6 +123,7 @@ export function Ressuprimento() {
     }
   }
 
+  const [loadError, setLoadError] = useState<string | null>(null)
   async function load(targetPage: number, fSearch = search, fSituacao = situacao) {
     setLoading(true)
     try {
@@ -134,10 +135,12 @@ export function Ressuprimento() {
       setRows((data ?? []) as LinhaRessuprimento[])
       setTotal(count ?? 0)
       setPage(targetPage)
+      setLoadError(null)
     } catch (e) {
       console.error(e)
       setRows([])
       setTotal(0)
+      setLoadError('Erro ao carregar o ressuprimento: ' + ((e as any)?.message ?? 'falha de conexão'))
     } finally {
       setLoading(false)
     }
@@ -311,6 +314,12 @@ export function Ressuprimento() {
       </div>
 
       {/* Lista */}
+      {!loading && loadError && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm flex items-center justify-between gap-2">
+          <span>{loadError}</span>
+          <button className="underline text-xs" onClick={() => void load(page)}>Tentar de novo</button>
+        </div>
+      )}
       {loading ? (
         <div className="p-8 flex items-center justify-center gap-3" style={card}>
           <Loader2 size={20} className="animate-spin" style={{ color: txtMut }} />

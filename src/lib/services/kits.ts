@@ -103,22 +103,15 @@ class KitsService {
   }
 
   /**
-   * Regrava a composicao inteira (apaga e insere). O kit e pequeno e a tela
-   * edita a lista toda de uma vez — diff item a item so traria complexidade.
+   * Regrava a composicao inteira numa transacao no banco (RPC
+   * kit_definir_itens). Antes apagava e depois inseria pelo navegador: se o
+   * insert falhasse o kit ficava VAZIO.
    */
   async setItems(kitId: string, items: Array<{ item_id: string; quantity: number; unit?: string | null }>): Promise<void> {
-    const { error: delErr } = await supabase.from('kit_items').delete().eq('kit_id', kitId)
-    if (delErr) throw new Error('Erro ao limpar itens do kit: ' + delErr.message)
-    if (items.length === 0) return
-    const { error } = await supabase.from('kit_items').insert(
-      items.map((i) => ({
-        kit_id: kitId,
-        item_type: 'warehouse',
-        warehouse_item_id: i.item_id,
-        quantity: i.quantity,
-        unit: i.unit || null,
-      })),
-    )
+    const { error } = await supabase.rpc('kit_definir_itens', {
+      p_kit_id: kitId,
+      p_itens: items.map((i) => ({ item_id: i.item_id, quantity: i.quantity, unit: i.unit || null })),
+    })
     if (error) throw new Error('Erro ao gravar itens do kit: ' + error.message)
   }
 

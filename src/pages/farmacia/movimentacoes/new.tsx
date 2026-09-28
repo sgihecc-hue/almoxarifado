@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Loader2, Search, Trash2, AlertCircle, ArrowRightLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,7 @@ import {
   type LoanScope,
 } from '@/lib/services/pharmacy-loan'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { hojeLocal } from '@/lib/utils/seguro'
 import { externalUnitsService } from '@/lib/services/external-units'
 
 const HECC_NAME = 'HOSPITAL ESTADUAL COSTA DOS COQUEIROS'
@@ -48,7 +49,7 @@ export function NewPharmacyLoan({ scope }: { scope: LoanScope }) {
   const [destino, setDestino] = useState('')
   const [contatoOrigem, setContatoOrigem] = useState(user?.full_name || '')
   const [contatoDestino, setContatoDestino] = useState('')
-  const [formDate, setFormDate] = useState(new Date().toISOString().slice(0, 10))
+  const [formDate, setFormDate] = useState(hojeLocal())
   // Unidades externas cadastradas (parceiros) — carregadas do banco. Junto
   // com HECC formam as opcoes de origem/destino no dropdown.
   const [externalUnits, setExternalUnits] = useState<string[]>([])
@@ -86,6 +87,8 @@ export function NewPharmacyLoan({ scope }: { scope: LoanScope }) {
 
   // Submit
   const [submitting, setSubmitting] = useState(false)
+  const enviandoRef = useRef(false)
+  const chaveRef = useRef<string>(crypto.randomUUID())
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -196,6 +199,8 @@ export function NewPharmacyLoan({ scope }: { scope: LoanScope }) {
       setError(err)
       return
     }
+    if (enviandoRef.current) return
+    enviandoRef.current = true
     setSubmitting(true)
     setError('')
     try {
@@ -224,11 +229,11 @@ export function NewPharmacyLoan({ scope }: { scope: LoanScope }) {
           codigo_simpas: r.codigo_simpas || null,
           observation: r.observation || null,
         })),
-      })
+      }, chaveRef.current)
       navigate(`${baseRoute}/${result.id}`)
     } catch (e: any) {
       setError(getErrorMessage(e))
-    } finally {
+      enviandoRef.current = false
       setSubmitting(false)
     }
   }

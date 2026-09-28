@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft, PackageMinus, Building2, Search, Plus, Trash2, Loader2, CheckCircle2, AlertCircle,
@@ -12,6 +12,7 @@ import { suppliersService } from '@/lib/services/farmacia-cadastros'
 import { departmentsService } from '@/lib/services/departments'
 import { externalUnitsService } from '@/lib/services/external-units'
 import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
+import { termoIlike, lerQuantidade, hojeLocal, dataBR } from '@/lib/utils/seguro'
 interface SaidaBatchProps {
   type: 'pharmacy' | 'warehouse'
 }
@@ -34,7 +35,8 @@ interface LineItem {
   name: string
   code: string
   unit: string
-  quantity: number
+  // texto digitado; convertido com lerQuantidade so ao validar/enviar
+  quantity: string
   expiry_tracking_id: string | null
   // Lote digitado manualmente (ex.: lote que já não existe mais no sistema).
   manual?: boolean
@@ -79,9 +81,24 @@ const REQUIRES_DESTINO = new Set(['transferencia', 'devolucao_fornecedor'])
 
 interface DestinoOption { tipo: 'fornecedor' | 'unidade_externa' | 'setor_interno'; nome: string }
 
+// Motivos em que o lote VENCIDO pode sair (a propria saida e a baixa dele).
+// Para os demais o banco recusa — lote vencido nao e oferecido por padrao.
+const REASONS_ACEITAM_VENCIDO = new Set(['vencimento', 'troca_validade', 'devolucao_fornecedor'])
+
+// Setor com nome de ESTOQUE (satelite, CAF, almoxarifado) nao e destino de
+// consumo: a saida sairia da CAF e nao entraria em lugar nenhum. Para mandar a
+// um satelite a tela oferece "Estoque interno" (transferencia real).
+function setorEhEstoque(nome: string): boolean {
+  const n = nome.trim().toLowerCase()
+  return n === 'almoxarifado' || n.startsWith('caf') || /^farm.cia sat.lite/.test(n)
+}
+
 function fmt(d: string | null) {
-  if (!d) return '—'
-  return new Date(d + 'T00:00:00').toLocaleDateString('pt-BR')
+  return dataBR(d)
+}
+
+function vencido(d: string | null) {
+  return !!d && d < hojeLocal()
 }
 
 export function SaidaBatch({ type }: SaidaBatchProps) {
@@ -140,7 +157,9 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
         setDestinos({
           fornecedores: sup.map((s) => ({ tipo: 'fornecedor' as const, nome: s.name })),
           externas: ext.map((e) => ({ tipo: 'unidade_externa' as const, nome: e.name })),
-          setores: deps.map((d) => ({ tipo: 'setor_interno' as const, nome: d.name })),
+          setores: deps
+            .filter((d) => !setorEhEstoque(d.name ?? ''))
+            .map((d) => ({ tipo: 'setor_interno' as const, nome: d.name })),
         })
       } catch (e) { console.error(e) }
     })()
@@ -153,21 +172,30 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
   const [searching, setSearching] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // Trava de duplo clique + chave da rodada (idempotencia no banco): o
+  // Metronidazol de 10/08 foi gravado duas vezes em 0,85s.
+  const enviandoRef = useRef(false)
+  const chaveRef = useRef<string>(crypto.randomUUID())
 
   useEffect(() => {
     const t = setTimeout(async () => {
       const q = search.trim()
       if (!q) { setResults([]); return }
       setSearching(true)
+      setSearchError(null)
       const { data, error: err } = await supabase
         .from(table)
         .select('id, code, name, unit')
         .eq('is_active', true)
-        .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+        .or(`name.ilike.${termoIlike(q)},code.ilike.${termoIlike(q)}`)
         .order('name')
         .limit(20)
-      if (err) console.error(err)
+      if (err) {
+        console.error(err)
+        setSearchError('Erro na busca: ' + getErrorMessage(err))
+      }
       setResults((data || []) as ItemRow[])
       setSearching(false)
     }, 200)
@@ -183,7 +211,11 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
       .gt('current_quantity', 0)
     // Isola por estoque: só os lotes DESTE local (CAF/Satélite ativo).
     if (locationId) query = query.eq('location_id', locationId)
-    const { data } = await query.order('expiry_date', { ascending: true, nullsFirst: false })
+    const { data, error: err } = await query.order('expiry_date', { ascending: true, nullsFirst: false })
+    if (err) {
+      setError('Erro ao carregar os lotes: ' + getErrorMessage(err))
+      return []
+    }
     const lots = (data || []) as LotRow[]
     setLotsByItem((p) => ({ ...p, [itemId]: lots }))
     return lots
@@ -196,12 +228,13 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
     let fefo: LotRow | undefined
     if (type === 'pharmacy') {
       const lots = await loadLots(item.id)
-      fefo = lots[0]
+      // FEFO: o de validade mais proxima que NAO esta vencido
+      fefo = lots.find((l) => !vencido(l.expiry_date))
     }
     setLines((prev) => [...prev, {
       _key: newKey(),
       item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
-      quantity: 1, expiry_tracking_id: fefo?.id ?? null,
+      quantity: '1', expiry_tracking_id: fefo?.id ?? null,
     }])
     setSearch(''); setResults([])
   }
@@ -211,7 +244,7 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
       const base = prev[idx]
       const novo: LineItem = {
         _key: newKey(), item_id: base.item_id, name: base.name, code: base.code,
-        unit: base.unit, quantity: 1, expiry_tracking_id: null,
+        unit: base.unit, quantity: '1', expiry_tracking_id: null,
       }
       const arr = [...prev]; arr.splice(idx + 1, 0, novo); return arr
     })
@@ -223,7 +256,11 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
     setLines((prev) => prev.filter((_, i) => i !== idx))
   }
 
-  const totalQty = lines.reduce((s, l) => s + (l.quantity || 0), 0)
+  const qtd = (l: LineItem) => lerQuantidade(l.quantity)
+  const totalQty = lines.reduce((s, l) => s + (qtd(l) ?? 0), 0)
+  const lotOf = (l: LineItem) => (lotsByItem[l.item_id] || []).find((lo) => lo.id === l.expiry_tracking_id)
+  const lotVencido = (l: LineItem) => { const lo = lotOf(l); return !!lo && vencido(lo.expiry_date) }
+  const linhasVencidasNaoPermitidas = lines.some((l) => lotVencido(l) && !REASONS_ACEITAM_VENCIDO.has(reason))
   // Farmacia: lote OBRIGATORIO em cada linha (rastreio de baixa por lote).
   // Vale um lote SELECIONADO ou um lote DIGITADO (batch_number). Almox: opcional.
   const linhasSemLote = type === 'pharmacy'
@@ -231,13 +268,23 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
   const canSubmit =
     reason &&
     lines.length > 0 &&
-    lines.every((l) => l.quantity > 0) &&
+    lines.every((l) => { const q = qtd(l); return q !== null && q > 0 }) &&
     (!needsDestino || !!destino) &&
-    !linhasSemLote
+    !linhasSemLote &&
+    !linhasVencidasNaoPermitidas
 
   async function handleSubmit() {
     setError(null)
+    if (enviandoRef.current) return
     if (!canSubmit) {
+      if (linhasVencidasNaoPermitidas) {
+        setError('Há lote VENCIDO selecionado. Lote vencido só sai com o motivo Vencimento, Troca por validade ou Devolução ao fornecedor.')
+        return
+      }
+      if (lines.some((l) => { const q = qtd(l); return q === null || q <= 0 })) {
+        setError('Informe quantidades inteiras maiores que zero em todas as linhas.')
+        return
+      }
       if (linhasSemLote) {
         setError('Selecione o lote em todas as linhas — obrigatório pra farmácia.')
         return
@@ -248,6 +295,7 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
       return
     }
     const [destinoTipo, destinoNome] = destino ? destino.split('|') : [null, null]
+    enviandoRef.current = true
     setSubmitting(true)
     try {
       const { data, error: rpcError } = await supabase.rpc('registrar_saida_lote', {
@@ -258,9 +306,10 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
         p_location_code: locationCode,
         p_destino_tipo: destinoTipo,
         p_destino_nome: destinoNome,
+        p_chave: chaveRef.current,
         p_items: lines.map((l) => ({
           item_id: l.item_id,
-          quantity: l.quantity,
+          quantity: qtd(l),
           expiry_tracking_id: l.manual ? null : l.expiry_tracking_id,
           batch_number: l.manual ? (l.batch_number || '').trim() : null,
           expiry_date: l.manual ? (l.expiry_date || null) : null,
@@ -269,11 +318,13 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
       if (rpcError) throw rpcError
       const n = (data as any)?.itens ?? lines.length
       setToast(`Saída registrada: ${n} ${n === 1 ? 'item' : 'itens'}.`)
+      // Nao reabilita o botao: limpa as linhas e sai da tela.
+      setLines([])
       setTimeout(() => navigate(backTo), 1200)
     } catch (e: any) {
       console.error('Saida error:', e)
       setError(getErrorMessage(e))
-    } finally {
+      enviandoRef.current = false
       setSubmitting(false)
     }
   }
@@ -331,8 +382,14 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
                       {destinos.externas.map((d) => <option key={'e'+d.nome} value={`${d.tipo}|${d.nome}`}>{d.nome}</option>)}
                     </optgroup>
                   )}
+                  {isPharmacy && (
+                    <optgroup label="Estoque interno (transferência — credita o destino)">
+                      <option value="estoque_interno|SAT_1">Farmácia Satélite 1º Andar</option>
+                      <option value="estoque_interno|SAT_2">Farmácia Satélite 2º Andar</option>
+                    </optgroup>
+                  )}
                   {destinos.setores.length > 0 && (
-                    <optgroup label="Setores (internos)">
+                    <optgroup label="Setores (consumo interno)">
                       {destinos.setores.map((d) => <option key={'s'+d.nome} value={`${d.tipo}|${d.nome}`}>{d.nome}</option>)}
                     </optgroup>
                   )}
@@ -381,7 +438,9 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar item por nome ou código para adicionar..." className="pl-9" />
           {search.trim() && (
             <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
-              {searching ? (
+              {searchError ? (
+                <div className="px-4 py-3 text-sm text-red-600">{searchError}</div>
+              ) : searching ? (
                 <div className="px-4 py-3 text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Buscando...</div>
               ) : results.length === 0 ? (
                 <div className="px-4 py-3 text-sm text-gray-400">Nenhum item encontrado.</div>
@@ -426,14 +485,13 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
                       </td>
                       <td className="py-2 px-2">
                         <Input
-                          type="number"
-                          min={1}
-                          value={l.quantity === 0 ? '' : l.quantity}
+                          type="text"
+                          inputMode="numeric"
+                          value={l.quantity}
                           placeholder="0"
                           onFocus={(e) => e.target.select()}
-                          onChange={(e) => updateLine(idx, { quantity: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
-                          onWheel={(e) => e.currentTarget.blur()}
-                          className="w-20 text-right"
+                          onChange={(e) => updateLine(idx, { quantity: e.target.value })}
+                          className={`w-20 text-right ${(qtd(l) ?? 0) <= 0 ? 'border-red-300' : ''}`}
                         />
                       </td>
                       {type === 'pharmacy' && (
@@ -463,16 +521,21 @@ export function SaidaBatch({ type }: SaidaBatchProps) {
                                 if (e.target.value === '__manual__') { updateLine(idx, { manual: true, expiry_tracking_id: null, batch_number: '', expiry_date: '' }); return }
                                 updateLine(idx, { expiry_tracking_id: e.target.value || null })
                               }}
+                              title={lotVencido(l) ? 'Lote vencido: só sai com motivo Vencimento, Troca por validade ou Devolução ao fornecedor' : undefined}
                               className={`w-full h-9 rounded-md border px-2 py-1 bg-white text-xs ${
-                                l.expiry_tracking_id ? 'border-input' : 'border-red-300'
+                                !l.expiry_tracking_id || lotVencido(l) ? 'border-red-400 text-red-700' : 'border-input'
                               }`}
                             >
                               <option value="">— Selecione o lote —</option>
-                              {lots.map((lo, li) => (
-                                <option key={lo.id} value={lo.id}>
-                                  {li === 0 ? '★ ' : ''}Lote {lo.batch_number} · Val {fmt(lo.expiry_date)} · {lo.current_quantity} un
-                                </option>
-                              ))}
+                              {lots.map((lo) => {
+                                const venc = vencido(lo.expiry_date)
+                                const fefoId = lots.find((x) => !vencido(x.expiry_date))?.id
+                                return (
+                                  <option key={lo.id} value={lo.id} style={venc ? { color: '#dc2626' } : undefined}>
+                                    {venc ? '⚠ VENCIDO · ' : lo.id === fefoId ? '★ ' : ''}Lote {lo.batch_number} · Val {fmt(lo.expiry_date)} · {lo.current_quantity} un
+                                  </option>
+                                )
+                              })}
                               <option value="__manual__">➕ Digitar lote…</option>
                             </select>
                           )}

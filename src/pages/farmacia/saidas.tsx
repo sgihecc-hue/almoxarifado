@@ -4,7 +4,7 @@
 // A reversão cria um movimento de entrada de compensação (o histórico é
 // imutável — nada é apagado). Só farmácia.
 // =====================================================================
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PackageMinus, Undo2, Search, Loader2, AlertCircle, CheckCircle2, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -41,6 +41,9 @@ export function SaidasFarmacia() {
   const [search, setSearch] = useState('')
   const [toast, setToast] = useState('')
   const [revertingId, setRevertingId] = useState<string | null>(null)
+  // Duplo clique no "Reverter": a RPC ja trava e recusa a 2a vez, mas nem
+  // chegamos a chamar de novo.
+  const revertendoRef = useRef(false)
 
   async function load() {
     setLoading(true); setError('')
@@ -67,8 +70,13 @@ export function SaidasFarmacia() {
         lotIds.length ? supabase.from('expiry_tracking').select('id, batch_number').in('id', lotIds) : Promise.resolve({ data: [] }),
         locIds.length ? supabase.from('stock_locations').select('id, code, name').in('id', locIds) : Promise.resolve({ data: [] }),
         userIds.length ? supabase.from('users').select('id, full_name').in('id', userIds) : Promise.resolve({ data: [] }),
-        supabase.from('stock_movements').select('linked_movement_id').in('linked_movement_id', ids),
+        // Reversao = DEVOLUCAO_INT ligada a saida. A entrada da transferencia
+        // interna tambem aponta para a saida (linked_movement_id) e NAO e reversao.
+        supabase.from('stock_movements').select('linked_movement_id').eq('movement_type', 'DEVOLUCAO_INT').in('linked_movement_id', ids),
       ])
+      for (const r of [items, lotes, locs, users, reversals] as Array<{ error?: any }>) {
+        if (r.error) throw r.error
+      }
       const itemMap = new Map((items.data || []).map((x: any) => [x.id, x]))
       const lotMap = new Map((lotes.data || []).map((x: any) => [x.id, x.batch_number]))
       const locMap = new Map((locs.data || []).map((x: any) => [x.id, x]))
@@ -99,17 +107,22 @@ export function SaidasFarmacia() {
   useEffect(() => { load() }, [])
 
   async function reverter(r: SaidaRow) {
-    if (!confirm(`Reverter a saída de ${r.quantity} × ${r.item_name}? A quantidade volta ao estoque (${r.loc}).`)) return
+    if (revertendoRef.current) return
+    if (!confirm(`Reverter a saída de ${r.quantity} × ${r.item_name}? A quantidade volta ao estoque (${r.loc}).${r.reason === 'transferencia' ? ' Se foi transferência para outro estoque, ela também sai do destino.' : ''}`)) return
+    revertendoRef.current = true
     setRevertingId(r.id); setError('')
     try {
-      const { error: e } = await supabase.rpc('farmacia_reverter_saida', { p_movement_id: r.id })
+      const { data, error: e } = await supabase.rpc('farmacia_reverter_saida', { p_movement_id: r.id })
       if (e) throw e
-      setToast('Saída revertida — item devolvido ao estoque.')
+      setToast((data as any)?.destino_desfeito
+        ? 'Transferência revertida — saiu do destino e voltou à origem.'
+        : 'Saída revertida — item devolvido ao estoque.')
       setTimeout(() => setToast(''), 3000)
       await load()
     } catch (e) {
       setError(getErrorMessage(e))
     } finally {
+      revertendoRef.current = false
       setRevertingId(null)
     }
   }
@@ -179,7 +192,7 @@ export function SaidasFarmacia() {
                         <RotateCcw className="w-3 h-3" /> Revertida
                       </span>
                     ) : (
-                      <Button variant="outline" size="sm" onClick={() => reverter(r)} disabled={revertingId === r.id}
+                      <Button variant="outline" size="sm" onClick={() => reverter(r)} disabled={revertingId !== null}
                         className="h-8 text-amber-700 border-amber-200 hover:bg-amber-50">
                         {revertingId === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Undo2 className="w-3.5 h-3.5 mr-1" /> Reverter</>}
                       </Button>

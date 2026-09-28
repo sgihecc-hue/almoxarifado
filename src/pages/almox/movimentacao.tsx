@@ -4,6 +4,8 @@ import { useTheme } from '@/contexts/theme'
 import { ArrowLeft, Search, Loader2, Filter, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
+import { termoIlike, inicioDiaISO, fimDiaISO } from '@/lib/utils/seguro'
+import { getErrorMessage } from '@/lib/utils/error-messages'
 
 const PAGE_SIZE = 25
 
@@ -66,6 +68,7 @@ export function AlmoxMovimentacao() {
   const [rows, setRows] = useState<Movimento[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -83,12 +86,13 @@ export function AlmoxMovimentacao() {
         .select('*', { count: 'exact' })
         .order('data', { ascending: false })
 
-      if (dateFrom) query = query.gte('data', `${dateFrom}T00:00:00`)
-      if (dateTo) query = query.lte('data', `${dateTo}T23:59:59`)
+      // Dia no fuso da Bahia (sem o -03:00 o filtro cortava 3h do dia).
+      if (dateFrom) query = query.gte('data', inicioDiaISO(dateFrom))
+      if (dateTo) query = query.lte('data', fimDiaISO(dateTo))
       if (tipo !== 'todos') query = query.eq('tipo', tipo)
       if (search.trim()) {
         const t = search.trim()
-        query = query.or(`item.ilike.%${t}%,codigo.ilike.%${t}%`)
+        query = query.or(`item.ilike.${termoIlike(t)},codigo.ilike.${termoIlike(t)}`)
       }
 
       const from = targetPage * PAGE_SIZE
@@ -98,10 +102,12 @@ export function AlmoxMovimentacao() {
       setRows((data ?? []) as Movimento[])
       setTotal(count ?? 0)
       setPage(targetPage)
+      setLoadError(null)
     } catch (e) {
       console.error(e)
       setRows([])
       setTotal(0)
+      setLoadError('Erro ao carregar a movimentação: ' + getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -190,7 +196,12 @@ export function AlmoxMovimentacao() {
       </div>
 
       {/* Lista */}
-      {loading ? (
+      {!loading && loadError ? (
+        <div className="p-6 text-center text-sm text-red-600" style={card}>
+          {loadError}{' '}
+          <button className="underline" onClick={() => void load(page)}>Tentar de novo</button>
+        </div>
+      ) : loading ? (
         <div className="p-8 flex items-center justify-center gap-3" style={card}>
           <Loader2 size={20} className="animate-spin" style={{ color: txtMut }} />
           <span style={{ color: txtMut }}>Carregando movimentação...</span>

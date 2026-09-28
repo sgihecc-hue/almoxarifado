@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Boxes, Plus, Loader2, Pencil, Power, AlertCircle, CheckCircle2, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,6 +9,7 @@ import {
 import { supabase } from '@/lib/supabase'
 import { kitsService, type Kit } from '@/lib/services/kits'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { termoIlike } from '@/lib/utils/seguro'
 
 // Cadastro de kits (gestor/administrador). O kit e um conjunto fixo de MATERIAL
 // que a enfermagem pede pronto: "5 x Kit Banho". Quem atende recebe os itens
@@ -40,6 +41,8 @@ export function CadastroKits() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const salvandoRef = useRef(false)
   const [busca, setBusca] = useState('')
   const [resultados, setResultados] = useState<ItemBusca[]>([])
 
@@ -49,7 +52,8 @@ export function CadastroKits() {
       const lista = await kitsService.list(true)
       setKits(lista)
       // Quantos itens cada kit tem — so pra mostrar na lista.
-      const { data } = await supabase.from('kit_items').select('kit_id')
+      const { data, error: errCont } = await supabase.from('kit_items').select('kit_id')
+      if (errCont) throw errCont
       const cont: Record<string, number> = {}
       for (const r of (data || []) as Array<{ kit_id: string }>) {
         cont[r.kit_id] = (cont[r.kit_id] || 0) + 1
@@ -57,6 +61,8 @@ export function CadastroKits() {
       setContagem(cont)
     } catch (e) {
       console.error(e)
+      setToast(null)
+      setLoadError('Erro ao carregar os kits: ' + getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -73,13 +79,14 @@ export function CadastroKits() {
     const t = setTimeout(async () => {
       const q = busca.trim()
       if (!q) { setResultados([]); return }
-      const { data } = await supabase
+      const { data, error: err } = await supabase
         .from('warehouse_items')
         .select('id, name, code, unit')
         .eq('is_active', true)
-        .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+        .or(`name.ilike.${termoIlike(q)},code.ilike.${termoIlike(q)}`)
         .order('name')
         .limit(20)
+      if (err) setError('Erro na busca: ' + getErrorMessage(err))
       setResultados((data || []) as ItemBusca[])
     }, 200)
     return () => clearTimeout(t)
@@ -95,6 +102,8 @@ export function CadastroKits() {
 
   async function openEdit(kit: Kit) {
     setEditing(kit); setName(kit.name); setDescription(kit.description || '')
+    // limpa as linhas do kit anterior enquanto carrega as deste
+    setLinhas([])
     setError(null); setBusca(''); setResultados([]); setShowDialog(true)
     try {
       const itens = await kitsService.listItems(kit.id)
@@ -124,12 +133,14 @@ export function CadastroKits() {
   }
 
   async function save() {
+    if (salvandoRef.current) return
     setError(null)
     if (!name.trim()) { setError('Nome do kit é obrigatório.'); return }
     if (linhas.length === 0) { setError('O kit precisa de pelo menos um item.'); return }
     if (linhas.some((l) => !l.quantity || l.quantity <= 0)) {
       setError('Quantidade tem que ser maior que zero em todas as linhas.'); return
     }
+    salvandoRef.current = true
     setSaving(true)
     try {
       const kit = editing
@@ -144,6 +155,7 @@ export function CadastroKits() {
     } catch (e) {
       setError(getErrorMessage(e))
     } finally {
+      salvandoRef.current = false
       setSaving(false)
     }
   }
@@ -176,6 +188,13 @@ export function CadastroKits() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
         <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar kit pelo nome..." className="pl-9" />
       </div>
+
+      {loadError && (
+        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {loadError}</span>
+          <Button variant="outline" size="sm" onClick={() => { setLoadError(null); load() }}>Tentar de novo</Button>
+        </div>
+      )}
 
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
         {loading ? (
