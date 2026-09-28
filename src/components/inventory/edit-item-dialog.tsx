@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Loader2, FileText, Pencil, Barcode, Layers, Plus, Trash2, History, ShieldCheck } from 'lucide-react'
+import { Loader2, FileText, Pencil, Barcode, Layers, Plus, Trash2, History, ShieldCheck, PackagePlus, ListChecks, AlertCircle } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -17,11 +18,12 @@ import { Label } from '@/components/ui/label'
 import { itemsService } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
-import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, type EntradaParecida } from '@/lib/utils/entradas'
+import { useTravaEnvio } from '@/lib/utils/entradas'
+import { lerQuantidade } from '@/lib/utils/seguro'
 import type { Item, ItemCategory, UnitType } from '@/lib/services/items'
 import { MEDICATION_CLASS_LABEL, CONTROLLED_SUBCLASSES } from '@/lib/types/farmacia'
 import type { MedicationClass } from '@/lib/types/farmacia'
-import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
+import { PHARMACY_STOCKS, pharmacyStockById } from '@/lib/constants/stock-locations'
 
 // Estoques de farmácia que guardam lotes de medicamento (o Satélite Térreo é
 // material/almoxarifado, então não entra na edição de lotes de remédio).
@@ -39,6 +41,13 @@ function lotLocationsFor(type: 'pharmacy' | 'warehouse') {
 // Edição de item do ALMOXARIFADO é auditável: motivo obrigatório, resumo
 // antes/depois e gravação pela RPC almox_editar_item (registro imutável em
 // almox_item_edicoes). Medicamento segue o caminho de sempre.
+//
+// 28/09/2026: o Editar Item NÃO registra mais entrada de estoque. A seção
+// "Registrar nova entrada de estoque" que ficava aqui criava lançamentos novos
+// quando a pessoa queria CORRIGIR um lançamento (22 entradas de material desde
+// 21/09 vieram por ali, uma NF de 10 linhas com o total da nota em cada linha,
+// lote/validade antigos apagados). No lugar: botões para a Nova Entrada e para
+// a tela Entradas.
 const ROTULO_CAMPO: Record<string, string> = {
   code: 'Código',
   barcode: 'Código de barras',
@@ -89,7 +98,8 @@ interface LotRow {
   id?: string
   batch_number: string
   expiry_date: string
-  quantity: number
+  // Texto do campo (vazio fica vazio); validado como inteiro ao salvar.
+  quantity: string
   location_id: string
   deleted?: boolean
 }
@@ -107,14 +117,17 @@ const schema = z.object({
   name: z.string().min(3, 'Nome deve ter no mínimo 3 caracteres'),
   description: z.string().optional(),
   category: z.string(),
-  unit: z.string(),
+  // Opcional: com o campo travado (item com movimentação) o valor pode vir
+  // vazio; as gravações usam a unidade atual do item nesse caso.
+  unit: z.string().optional(),
   min_stock: z.preprocess(
     (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? 0 : Number(v)),
     z.number().min(0),
   ),
+  // Só o Almoxarifado central edita o saldo aqui (com motivo). Inteiro.
   current_stock: z.preprocess(
     (v) => (v === '' || v === null || v === undefined || (typeof v === 'number' && isNaN(v)) ? 0 : Number(v)),
-    z.number().min(0, 'Estoque deve ser maior ou igual a 0'),
+    z.number().int('Estoque deve ser um número inteiro').min(0, 'Estoque deve ser maior ou igual a 0'),
   ),
   // Consumo médio mensal informado (un/mês). Vazio => volta a calcular pelo histórico.
   avg_monthly_consumption: z.preprocess(
@@ -138,31 +151,24 @@ const schema = z.object({
   controlled_subclass: z.enum(['A1', 'A2', 'A3', 'B1', 'B2', 'C1', 'C2', 'C3', 'C4']).optional(),
   // Farmácia: item faz parte da padronização da farmácia.
   padronizado: z.boolean().optional(),
-  // Nova entrada (opcional)
-  entry_quantity: optionalNumber,
-  acquisition_type: z.preprocess(
-    (v) => (v === '' ? undefined : v),
-    z.enum(['Compra', 'Empréstimo', 'Doação', 'Permuta', 'Devolução', 'Inventário']).optional(),
-  ),
-  invoice_number: z.string().optional(),
-  invoice_date: z.string().optional(),
-  invoice_total_value: optionalNumber,
-  unit_price: optionalNumber,
-  afm_number: z.string().optional(),
-  supplier_cnpj: z.string().optional(),
-  supplier_name: z.string().optional(),
 })
 
 type FormData = z.infer<typeof schema>
 
 interface EditItemDialogProps {
   item: Item
+  /**
+   * Catálogo do item: 'pharmacy' = pharmacy_items, 'warehouse' = warehouse_items.
+   * Material aberto numa tela de farmácia (Satélite Térreo) é 'warehouse'.
+   */
   type: 'pharmacy' | 'warehouse'
   // Material: o editor de lotes so faz sentido num SATELITE (SAT_T), que tem
   // saldo por local. O Almoxarifado central controla saldo global, sem lote por
   // local — para ele a tela segue exatamente como era, sem este bloco.
   // Medicamento ignora esta prop: sempre teve o editor.
   allowLotEdit?: boolean
+  /** Estoque (stock_locations.id) de onde o diálogo foi aberto, quando houver. */
+  locationId?: string
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
@@ -172,7 +178,10 @@ const unitOptions = [
   'Un','Pc','Cx','Fr','Amp','Tb','Rl','Lt','Kg','Gl','ml','g','Pr','Cj','Sc','Rm','Ct','FL',
 ]
 
-export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenChange, onSuccess }: EditItemDialogProps) {
+type SaldoLocal = { location_id: string; quantity: number }
+
+export function EditItemDialog({ item, type, allowLotEdit = false, locationId, open, onOpenChange, onSuccess }: EditItemDialogProps) {
+  const navigate = useNavigate()
   // Medicamento sempre teve o editor de lotes. Material so mostra quando a tela
   // que abriu o dialogo esta num satelite (passa allowLotEdit) — o Almoxarifado
   // central nao passa, entao nada muda para ele.
@@ -181,30 +190,72 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   const [error, setError] = useState<string | null>(null)
   const [scanningBarcode, setScanningBarcode] = useState(false)
   const ehAlmox = type === 'warehouse'
+  // Material aberto num satélite (SAT_T): o current_stock do cadastro é o
+  // saldo do ALMOXARIFADO, não do satélite. Aqui ele não é editável — antes a
+  // edição no satélite mexia no saldo do Almox.
+  const localSatelite = ehAlmox && allowLotEdit
+    ? (locationId ?? LOT_LOCATIONS_WAREHOUSE[0]?.id ?? null)
+    : null
+  // Só o Almoxarifado central edita "Estoque Atual" aqui (autorizado em 16/09,
+  // com motivo e registro imutável). Farmácia e satélite: saldo só leitura.
+  const editaSaldo = ehAlmox && !localSatelite
   const [motivo, setMotivo] = useState('')
   const [resumo, setResumo] = useState<LinhaResumo[] | null>(null)
-  // Assinatura do que foi conferido no resumo (campos + motivo + entrada). O
-  // 2º clique só grava se nada mudou desde o resumo. NÃO usar watch(callback)
-  // para limpar o resumo: no react-hook-form 7.56 ele dispara no próprio
-  // submit e apagava o resumo na hora — o botão Salvar parecia não funcionar.
+  // Assinatura do que foi conferido no resumo (campos + motivo). O 2º clique
+  // só grava se nada mudou desde o resumo. NÃO usar watch(callback) para limpar
+  // o resumo: no react-hook-form 7.56 ele dispara no próprio submit.
   const [resumoAssinatura, setResumoAssinatura] = useState<string | null>(null)
-  // Entrada pela edicao do item (almox): rodada unica por abertura do dialogo,
-  // trava de envio e aviso de entrada parecida. Foi por esta tela que a mesma
-  // compra de mascaras entrou duas vezes (18/08 e 28/08/2026).
-  const rodadaRef = useRef<string>(novaRodadaId())
-  const confirmarParecidaRef = useRef(false)
   const trava = useTravaEnvio()
-  const [parecida, setParecida] = useState<EntradaParecida | null>(null)
-  const [nfPendente, setNfPendente] = useState(false)
-  useEffect(() => {
-    if (!open) return
-    rodadaRef.current = novaRodadaId()
-    confirmarParecidaRef.current = false
-    setParecida(null)
-    setNfPendente(false)
-  }, [open, item.id])
+  // Retry depois de erro parcial (item gravou, lotes não): guarda o que já foi
+  // gravado para não reenviar (o banco respondia "Nenhuma alteração" e os
+  // lotes nunca eram salvos).
+  const itemGravadoRef = useRef<string | null>(null)
   const [historico, setHistorico] = useState<EdicaoRegistrada[]>([])
   const barcodeInputRef = useRef<HTMLInputElement>(null)
+
+  // Saldo real (item_stocks) só para exibir; e se o item já tem movimentação
+  // (unidade não pode ser trocada). catalogoErrado: o item não está no
+  // catálogo informado (ex.: material da Satélite Térreo aberto como remédio).
+  const [saldos, setSaldos] = useState<SaldoLocal[] | null>(null)
+  const [erroSaldos, setErroSaldos] = useState<string | null>(null)
+  const [temMovimento, setTemMovimento] = useState(false)
+  const [catalogoErrado, setCatalogoErrado] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    itemGravadoRef.current = null
+    setError(null)
+    let vivo = true
+    ;(async () => {
+      try {
+        const tabela = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
+        const [noCatalogo, ent, mov, est] = await Promise.all([
+          supabase.from(tabela).select('id').eq('id', item.id).maybeSingle(),
+          supabase.from('stock_entries').select('id', { count: 'exact', head: true }).eq('item_id', item.id),
+          supabase.from('stock_movements').select('id', { count: 'exact', head: true }).eq('item_id', item.id),
+          supabase.from('item_stocks').select('location_id, quantity').eq('item_id', item.id).eq('item_type', type),
+        ])
+        if (!vivo) return
+        if (noCatalogo.error) throw noCatalogo.error
+        setCatalogoErrado(!noCatalogo.data)
+        if (est.error) throw est.error
+        const lista = (est.data ?? []) as SaldoLocal[]
+        setSaldos(lista)
+        setErroSaldos(null)
+        setTemMovimento(
+          (item.current_stock ?? 0) !== 0 || (ent.count ?? 0) > 0 || (mov.count ?? 0) > 0 ||
+          lista.some((s) => Number(s.quantity) !== 0),
+        )
+      } catch (e) {
+        if (!vivo) return
+        setSaldos(null)
+        setErroSaldos(getErrorMessage(e))
+        // Sem saber, trata como "tem movimento" (o banco recusa de qualquer jeito).
+        setTemMovimento(true)
+      }
+    })()
+    return () => { vivo = false }
+  }, [open, item.id, type, item.current_stock])
 
   // Classes do medicamento (farmácia): lê do array medication_classes; se
   // vazio, cai no medication_class (single) por compatibilidade.
@@ -226,6 +277,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   const lotesLabel = type === 'pharmacy' ? 'Lotes do medicamento' : 'Lotes do material'
   const [lots, setLots] = useState<LotRow[]>([])
   const [loadingLots, setLoadingLots] = useState(false)
+  const [erroLots, setErroLots] = useState<string | null>(null)
   const [lotsDirty, setLotsDirty] = useState(false)
 
   useEffect(() => {
@@ -233,20 +285,27 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
     let alive = true
     ;(async () => {
       setLoadingLots(true)
-      const { data } = await supabase
+      setErroLots(null)
+      const { data, error: err } = await supabase
         .from('expiry_tracking')
         .select('id, batch_number, expiry_date, current_quantity, location_id')
         .eq('item_id', item.id)
         .order('expiry_date', { ascending: true, nullsFirst: false })
       if (!alive) return
-      setLots((data || []).map((r: any) => ({
-        _key: r.id,
-        id: r.id,
-        batch_number: r.batch_number || '',
-        expiry_date: r.expiry_date || '',
-        quantity: r.current_quantity ?? 0,
-        location_id: r.location_id || LOT_LOCATIONS[0].id,
-      })))
+      if (err) {
+        // Lista vazia por erro faria "Salvar" apagar/recriar lotes: mostra o erro.
+        setErroLots(getErrorMessage(err))
+        setLots([])
+      } else {
+        setLots((data || []).map((r: any) => ({
+          _key: r.id,
+          id: r.id,
+          batch_number: r.batch_number || '',
+          expiry_date: r.expiry_date || '',
+          quantity: String(r.current_quantity ?? 0),
+          location_id: r.location_id || LOT_LOCATIONS[0].id,
+        })))
+      }
       setLotsDirty(false)
       setLoadingLots(false)
     })()
@@ -277,7 +336,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   }
   function addLot() {
     setLots((prev) => [...prev, {
-      _key: newKey(), batch_number: '', expiry_date: '', quantity: 0, location_id: LOT_LOCATIONS[0].id,
+      _key: newKey(), batch_number: '', expiry_date: '', quantity: '', location_id: LOT_LOCATIONS[0].id,
     }])
     setLotsDirty(true)
   }
@@ -290,66 +349,56 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
     setLotsDirty(true)
   }
   const lotsVisiveis = lots.filter((l) => !l.deleted)
-  const totalLotes = lotsVisiveis.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
+  const totalLotes = lotsVisiveis.reduce((s, l) => s + (lerQuantidade(l.quantity) ?? 0), 0)
+
+  // Payload dos lotes validado (inteiro >= 0). Lança erro com mensagem clara.
+  function payloadLotes() {
+    for (const l of lots) {
+      if (l.deleted) continue
+      if (!l.location_id) throw new Error('Selecione o estoque de cada lote.')
+      const q = lerQuantidade(l.quantity === '' ? '0' : l.quantity)
+      if (q === null || q < 0) throw new Error(`Quantidade inválida no lote ${l.batch_number || '(sem número)'}: use número inteiro.`)
+    }
+    return lots.map((l) => ({
+      id: l.id ?? null,
+      batch_number: l.batch_number?.trim() || null,
+      expiry_date: l.expiry_date || null,
+      quantity: lerQuantidade(l.quantity === '' ? '0' : l.quantity) ?? 0,
+      location_id: l.location_id,
+      deleted: !!l.deleted,
+    }))
+  }
+
+  const valoresDoItem = (): Partial<FormData> => ({
+    code: item.code ?? '',
+    barcode: (item as any).barcode || '',
+    name: item.name,
+    description: item.description || '',
+    category: item.category ?? '',
+    unit: item.unit,
+    min_stock: item.min_stock ?? 0,
+    avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
+    lead_time_days: (item as any).lead_time_days ?? null,
+    // Guardado como média diária; exibimos em Un/SEMANA (×7).
+    avg_daily_consumption: (item as any).avg_daily_consumption != null
+      ? Number((item as any).avg_daily_consumption) * 7 : null,
+    current_stock: item.current_stock ?? 0,
+    batch_number: (item as any).batch_number || '',
+    expiry_date: item.expiry_date || '',
+    last_purchase_price: (item as any).last_purchase_price ?? undefined,
+    reference_price: (item as any).reference_price ?? undefined,
+    controlled_subclass: (item as any).controlled_subclass ?? undefined,
+    padronizado: (item as any).padronizado ?? false,
+  })
 
   const { register, handleSubmit, formState: { errors }, reset, watch, setValue } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      code: type === 'warehouse' ? (item.code ?? '') : item.code,
-      barcode: (item as any).barcode || '',
-      name: item.name,
-      description: item.description || '',
-      category: type === 'warehouse' ? (item.category ?? '') : item.category,
-      unit: item.unit,
-      min_stock: item.min_stock ?? 0,
-      avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
-      lead_time_days: (item as any).lead_time_days ?? null,
-      // Guardado como média diária; exibimos em Un/SEMANA (×7).
-      avg_daily_consumption: (item as any).avg_daily_consumption != null
-        ? Number((item as any).avg_daily_consumption) * 7 : null,
-      current_stock: item.current_stock ?? 0,
-      batch_number: (item as any).batch_number || '',
-      expiry_date: item.expiry_date || '',
-      last_purchase_price: (item as any).last_purchase_price ?? undefined,
-      reference_price: (item as any).reference_price ?? undefined,
-      controlled_subclass: (item as any).controlled_subclass ?? undefined,
-      padronizado: (item as any).padronizado ?? false,
-      entry_quantity: 0,
-    },
+    defaultValues: valoresDoItem(),
   })
 
   // Recarrega valores quando trocar de item
   useEffect(() => {
-    reset({
-      code: type === 'warehouse' ? (item.code ?? '') : item.code,
-      barcode: (item as any).barcode || '',
-      name: item.name,
-      description: item.description || '',
-      category: type === 'warehouse' ? (item.category ?? '') : item.category,
-      unit: item.unit,
-      min_stock: item.min_stock ?? 0,
-      avg_monthly_consumption: (item as any).avg_monthly_consumption ?? null,
-      lead_time_days: (item as any).lead_time_days ?? null,
-      // Guardado como média diária; exibimos em Un/SEMANA (×7).
-      avg_daily_consumption: (item as any).avg_daily_consumption != null
-        ? Number((item as any).avg_daily_consumption) * 7 : null,
-      current_stock: item.current_stock ?? 0,
-      batch_number: (item as any).batch_number || '',
-      expiry_date: item.expiry_date || '',
-      last_purchase_price: (item as any).last_purchase_price ?? undefined,
-      reference_price: (item as any).reference_price ?? undefined,
-      controlled_subclass: (item as any).controlled_subclass ?? undefined,
-      padronizado: (item as any).padronizado ?? false,
-      entry_quantity: 0,
-      acquisition_type: undefined,
-      invoice_number: '',
-      invoice_date: '',
-      invoice_total_value: undefined,
-      unit_price: undefined,
-      afm_number: '',
-      supplier_cnpj: '',
-      supplier_name: '',
-    })
+    reset(valoresDoItem())
     setSelectedClasses(classesDoItem(item))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id])
@@ -379,14 +428,17 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
       name: [it.name ?? null, vazioParaNull(data.name)],
       description: [it.description || null, vazioParaNull(data.description)],
       category: [it.category ?? null, vazioParaNull(data.category)],
-      unit: [it.unit ?? null, vazioParaNull(data.unit)],
+      unit: [it.unit ?? null, vazioParaNull(data.unit ?? it.unit)],
       min_stock: [it.min_stock ?? 0, vazioParaNull(data.min_stock) ?? 0],
       lead_time_days: [it.lead_time_days ?? null, vazioParaNull(data.lead_time_days)],
-      current_stock: [it.current_stock ?? 0, vazioParaNull(data.current_stock) ?? 0],
       batch_number: [it.batch_number || null, vazioParaNull(data.batch_number?.trim())],
       expiry_date: [it.expiry_date || null, vazioParaNull(data.expiry_date)],
       last_purchase_price: [it.last_purchase_price ?? null, vazioParaNull(data.last_purchase_price)],
       reference_price: [it.reference_price ?? null, vazioParaNull(data.reference_price)],
+    }
+    // Saldo só no Almoxarifado central (no satélite o campo é o saldo do Almox).
+    if (editaSaldo) {
+      candidatos.current_stock = [it.current_stock ?? 0, vazioParaNull(data.current_stock) ?? 0]
     }
     const campos: Record<string, unknown> = {}
     for (const [campo, [atual, novo]] of Object.entries(candidatos)) {
@@ -403,230 +455,133 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
   }
 
   // Almoxarifado: 1º clique mostra o resumo; 2º grava pela RPC auditada.
-  // Devolve true quando gravou (o diálogo fecha).
+  // Devolve true quando gravou tudo (o diálogo fecha).
   async function salvarAlmox(data: FormData): Promise<boolean> {
     const campos = camposAlterados(data)
-    const hasEntry = (data.entry_quantity ?? 0) > 0
-    const mexeuNoItem = Object.keys(campos).length > 0 || hasEntry
+    const assinatura = JSON.stringify({ campos, motivo: motivo.trim() })
+    // Retry: o item já foi gravado com exatamente estes campos; só faltam os lotes.
+    const itemJaGravado = itemGravadoRef.current === assinatura
+    const mexeuNoItem = Object.keys(campos).length > 0 && !itemJaGravado
 
     if (!mexeuNoItem && !(podeEditarLotes && lotsDirty)) {
-      setError('Nenhuma alteração para salvar.')
-      return false
+      setError(itemJaGravado ? null : 'Nenhuma alteração para salvar.')
+      return itemJaGravado
     }
     if (mexeuNoItem && motivo.trim().length < MOTIVO_MINIMO) {
       setError(`Informe o motivo da alteração (mínimo ${MOTIVO_MINIMO} caracteres). Ele fica registrado no histórico do item.`)
       return false
     }
-    if (hasEntry && !data.acquisition_type) {
-      setError('Selecione o tipo de aquisição da nova entrada')
-      return false
-    }
-    const assinatura = JSON.stringify({
-      campos,
-      motivo: motivo.trim(),
-      entrada: hasEntry ? [data.entry_quantity, data.acquisition_type, data.invoice_number, data.unit_price] : null,
-    })
     if (mexeuNoItem && (!resumo || resumoAssinatura !== assinatura)) {
       const it = item as any
-      const linhas: LinhaResumo[] = Object.entries(campos).map(([campo, depois]) => ({
-        campo,
-        antes: it[campo],
-        depois,
-      }))
-      if (hasEntry) {
-        linhas.push({ campo: 'entrada', antes: null, depois: `+${data.entry_quantity} ${item.unit} (${data.acquisition_type})` })
-      }
-      setResumo(linhas)
+      setResumo(Object.entries(campos).map(([campo, depois]) => ({ campo, antes: it[campo], depois })))
       setResumoAssinatura(assinatura)
       return false
     }
+    const lotes = podeEditarLotes && lotsDirty ? payloadLotes() : null
 
     if (mexeuNoItem) {
-      const entrada = hasEntry
-        ? {
-            quantity: data.entry_quantity,
-            acquisition_type: data.acquisition_type,
-            invoice_number: data.invoice_number?.trim() || null,
-            invoice_date: data.invoice_date || null,
-            invoice_total_value: data.invoice_total_value ?? null,
-            unit_price: data.unit_price ?? data.last_purchase_price ?? null,
-            afm_number: data.afm_number?.trim() || null,
-            supplier_cnpj: data.supplier_cnpj?.trim() || null,
-            supplier_name:
-              data.supplier_name?.trim() ||
-              (data.acquisition_type === 'Doação' ? 'Doação' : data.acquisition_type === 'Devolução' ? 'Devolução de setor' : null),
-            batch_number: data.batch_number?.trim() || null,
-            expiry_date: data.expiry_date || null,
-            entry_group_id: rodadaRef.current,
-            nf_pendente: data.acquisition_type === 'Compra' && nfPendente,
-            confirmar_parecida: confirmarParecidaRef.current,
-          }
-        : null
       const { error: rpcErr } = await supabase.rpc('almox_editar_item', {
         p_item_id: item.id,
         p_campos: campos,
         p_motivo: motivo.trim(),
-        p_entrada: entrada,
+        p_entrada: null,
       })
       if (rpcErr) throw rpcErr
+      itemGravadoRef.current = assinatura
     }
 
     // Lotes (só no satélite de material), pelo mesmo RPC de antes.
-    if (podeEditarLotes && lotsDirty) {
-      const semLocal = lots.find((l) => !l.deleted && !l.location_id)
-      if (semLocal) throw new Error('Selecione o estoque de cada lote.')
-      const payload = lots.map((l) => ({
-        id: l.id ?? null,
-        batch_number: l.batch_number?.trim() || null,
-        expiry_date: l.expiry_date || null,
-        quantity: Number(l.quantity) || 0,
-        location_id: l.location_id,
-        deleted: !!l.deleted,
-      }))
+    if (lotes) {
       const { error: rpcErr } = await supabase.rpc('almox_editar_lotes', {
         p_item_id: item.id,
-        p_lots: payload,
+        p_lots: lotes,
       })
-      if (rpcErr) throw rpcErr
+      if (rpcErr) {
+        throw new Error(mexeuNoItem || itemJaGravado
+          ? `Os dados do item foram salvos, mas os lotes não: ${getErrorMessage(rpcErr)}. Corrija e clique em Salvar de novo (só os lotes serão enviados).`
+          : getErrorMessage(rpcErr))
+      }
     }
     return true
   }
 
+  // Farmácia: dados do cadastro + lotes. O saldo NÃO é enviado: o campo
+  // current_stock lido na abertura era gravado de volta e desfazia saídas
+  // feitas no meio (editar só o nome voltava o saldo antigo).
+  async function salvarFarmacia(data: FormData) {
+    const lotes = podeEditarLotes && lotsDirty ? payloadLotes() : null
+    const updatePayload: any = {
+      code: data.code,
+      barcode: data.barcode?.trim() || null,
+      name: data.name,
+      description: data.description || null,
+      category: data.category as ItemCategory,
+      unit: (data.unit ?? item.unit) as UnitType,
+      min_stock: data.min_stock,
+      avg_monthly_consumption: data.avg_monthly_consumption ?? null,
+      // Classes do medicamento (default uso_geral se nada marcado). O
+      // service sincroniza medication_class (single) com a 1ª do array.
+      medication_classes: selectedClasses.length > 0 ? selectedClasses : ['uso_geral'],
+      controlled_subclass: hasControlados ? (data.controlled_subclass ?? null) : null,
+      padronizado: !!data.padronizado,
+      batch_number: data.batch_number || null,
+      expiry_date: data.expiry_date || null,
+      last_purchase_price: data.last_purchase_price ?? null,
+      reference_price: data.reference_price ?? null,
+    }
+    // itemsService.update recusa quando nenhuma linha muda (RLS/catálogo errado).
+    await itemsService.update(item.id, updatePayload, 'pharmacy')
+
+    // Lotes: edita/adiciona/remove e recalcula o saldo por local (livro).
+    if (lotes) {
+      const { error: rpcErr } = await supabase.rpc('farmacia_editar_lotes', {
+        p_item_id: item.id,
+        p_lots: lotes,
+      })
+      if (rpcErr) throw new Error(`Os dados do item foram salvos, mas os lotes não: ${getErrorMessage(rpcErr)}. Corrija e clique em Salvar de novo.`)
+    }
+  }
+
   const onSubmit = async (data: FormData) => {
-    // Almox: trava que fecha na hora do clique (o disabled do botao so vale
-    // depois do redesenho — um 2o clique nesse intervalo gravava de novo).
-    if (ehAlmox && !trava.tentar()) return
+    // Trava que fecha na hora do clique (o disabled do botao so vale depois
+    // do redesenho — um 2o clique nesse intervalo gravava de novo).
+    if (!trava.tentar()) return
     try {
       setLoading(true)
       setError(null)
-
+      if (catalogoErrado) {
+        setError('Este item não está no catálogo desta tela, então nada seria salvo. Abra-o pela tela do estoque dele (material: Almoxarifado / Satélite Térreo).')
+        return
+      }
       if (ehAlmox) {
-        setParecida(null)
         if (await salvarAlmox(data)) {
           onSuccess()
           onOpenChange(false)
         }
         return
       }
-
-      const hasEntry = (data.entry_quantity ?? 0) > 0
-
-      // 1) Atualiza dados do item incluindo estoque atual
-      const updatePayload: any = {
-        code: data.code,
-        barcode: data.barcode?.trim() || null,
-        name: data.name,
-        description: data.description || null,
-        category: data.category as ItemCategory,
-        unit: data.unit as UnitType,
-        min_stock: data.min_stock,
-        ...(type === 'pharmacy'
-          ? {
-              avg_monthly_consumption: data.avg_monthly_consumption ?? null,
-              // Classes do medicamento (default uso_geral se nada marcado). O
-              // service sincroniza medication_class (single) com a 1ª do array.
-              medication_classes: selectedClasses.length > 0 ? selectedClasses : ['uso_geral'],
-              controlled_subclass: hasControlados ? (data.controlled_subclass ?? null) : null,
-              padronizado: !!data.padronizado,
-            }
-          : {
-              lead_time_days: data.lead_time_days ?? null,
-              // Digitado em Un/SEMANA; guardamos como média diária (÷7).
-              avg_daily_consumption: (data.avg_daily_consumption != null && !Number.isNaN(data.avg_daily_consumption))
-                ? data.avg_daily_consumption / 7 : null,
-            }),
-        current_stock: data.current_stock,
-        batch_number: data.batch_number || null,
-        expiry_date: data.expiry_date || null,
-        last_purchase_price: data.last_purchase_price ?? null,
-        reference_price: data.reference_price ?? null,
-      }
-      await itemsService.update(item.id, updatePayload, type)
-
-      // 1b) Se mexeu nos lotes, grava via RPC (edita/adiciona/remove lotes e
-      // recalcula o saldo por local). Na farmácia o RPC também recalcula o
-      // current_stock do medicamento (soma dos lotes); no material NÃO — lá o
-      // current_stock é o saldo do almoxarifado e não pode ser mexido.
-      if (podeEditarLotes && lotsDirty) {
-        const semLocal = lots.find((l) => !l.deleted && !l.location_id)
-        if (semLocal) throw new Error('Selecione o estoque de cada lote.')
-        const payload = lots.map((l) => ({
-          id: l.id ?? null,
-          batch_number: l.batch_number?.trim() || null,
-          expiry_date: l.expiry_date || null,
-          quantity: Number(l.quantity) || 0,
-          location_id: l.location_id,
-          deleted: !!l.deleted,
-        }))
-        const rpcName = type === 'pharmacy' ? 'farmacia_editar_lotes' : 'almox_editar_lotes'
-        const { error: rpcErr } = await supabase.rpc(rpcName, {
-          p_item_id: item.id,
-          p_lots: payload,
-        })
-        if (rpcErr) throw rpcErr
-      }
-
-      // 2) Se preencheu Nova Entrada, registra e soma estoque
-      if (hasEntry) {
-        const { data: authData } = await supabase.auth.getUser()
-        if (!authData?.user) throw new Error('Usuário não autenticado')
-
-        if (!data.acquisition_type) {
-          throw new Error('Selecione o tipo de aquisição da nova entrada')
-        }
-
-        // Campos NOT NULL do banco: usa string vazia em vez de null
-        const entry = {
-          item_id: item.id,
-          item_type: type,
-          quantity: data.entry_quantity!,
-          acquisition_type: data.acquisition_type,
-          invoice_number: data.invoice_number?.trim() || '—',
-          invoice_date: data.invoice_date || new Date().toISOString().slice(0, 10),
-          invoice_total_value: data.invoice_total_value ?? 0,
-          unit_price: data.unit_price ?? data.last_purchase_price ?? 0,
-          afm_number: data.afm_number?.trim() || '—',
-          supplier_cnpj: data.supplier_cnpj?.trim() || '00.000.000/0000-00',
-          supplier_name:
-            data.supplier_name?.trim() ||
-            (data.acquisition_type === 'Doação' ? 'Doação' : data.acquisition_type === 'Devolução' ? 'Devolução de setor' : 'Entrada via edição do item'),
-          batch_number: data.batch_number?.trim() || null,
-          expiry_date: data.expiry_date || null,
-          notes: 'Entrada registrada na edição do item',
-          created_by: authData.user.id,
-        }
-        const { error: entryError } = await supabase.from('stock_entries').insert(entry)
-        if (entryError) throw entryError
-
-        // Soma no estoque atual (usa o valor editado pelo usuário como base)
-        const newStock = (data.current_stock ?? item.current_stock ?? 0) + data.entry_quantity!
-        const tableName = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
-        const { error: stockErr } = await supabase
-          .from(tableName)
-          .update({ current_stock: newStock, updated_at: new Date().toISOString() })
-          .eq('id', item.id)
-        if (stockErr) throw stockErr
-      }
-
+      await salvarFarmacia(data)
       onSuccess()
       onOpenChange(false)
     } catch (e: any) {
-      const aviso = ehAlmox ? lerAvisoEntrada(e) : null
-      if (aviso?.tipo === 'ja_registrada') {
-        // O primeiro envio ja gravou; nada foi somado de novo.
-        onSuccess()
-        onOpenChange(false)
-      } else if (aviso?.tipo === 'parecida') {
-        setParecida(aviso.info)
-      } else {
-        console.error('Error editing item:', e)
-        setError(getErrorMessage(e))
-      }
+      console.error('Error editing item:', e)
+      setError(getErrorMessage(e))
     } finally {
       setLoading(false)
-      if (ehAlmox) trava.liberar()
+      trava.liberar()
     }
   }
+
+  // Para onde vão os botões de entrada (rotas de App.tsx).
+  const codigoLocal = pharmacyStockById(locationId)?.code
+  const rotaNovaEntrada = ehAlmox
+    ? `/inventory/warehouse/nf-entry?loc=${localSatelite ? (pharmacyStockById(localSatelite)?.code ?? 'SAT_T') : 'ALMOX'}&item=${item.id}`
+    : `/inventory/pharmacy/nf-entry?loc=${codigoLocal && codigoLocal !== 'SAT_T' ? codigoLocal : 'CAF'}&item=${item.id}`
+  const rotaEntradas = ehAlmox ? '/almox/entradas' : '/farmacia/entradas'
+  const ir = (rota: string) => { onOpenChange(false); navigate(rota) }
+
+  const nomeLocal = (id: string) => pharmacyStockById(id)?.label ?? (ehAlmox ? 'Almoxarifado' : 'Estoque')
+  const saldoDoLocal = (id: string | null) => (saldos ?? []).find((s) => s.location_id === id)?.quantity ?? 0
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -637,10 +592,38 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
             Editar Item — {item.name.slice(0, 60)}{item.name.length > 60 ? '…' : ''}
           </DialogTitle>
           <p className="text-sm text-gray-500 mt-1">
-            Atualize os dados do item. Se quiser <strong>registrar uma nova entrada</strong> de estoque,
-            preencha a seção verde no final do formulário.
+            Atualize os dados do cadastro do item. Entrada de estoque não é feita aqui.
           </p>
         </DialogHeader>
+
+        {/* Entrada de estoque: sai daqui, vai para as telas próprias. */}
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 space-y-2">
+          <p className="flex items-start gap-2">
+            <FileText className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              Chegou {ehAlmox ? 'material' : 'medicamento'}? Registre pela <strong>Nova Entrada</strong> (NF, lote, validade e local).
+              Uma entrada já lançada está errada? Corrija em <strong>Entradas</strong> — lá o estoque acompanha a correção.
+            </span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1" onClick={() => ir(rotaNovaEntrada)}>
+              <PackagePlus className="w-4 h-4" /> Registrar entrada de NF
+            </Button>
+            <Button type="button" size="sm" variant="outline" className="gap-1" onClick={() => ir(rotaEntradas)}>
+              <ListChecks className="w-4 h-4" /> Corrigir uma entrada já lançada
+            </Button>
+          </div>
+        </div>
+
+        {catalogoErrado && (
+          <div className="p-3 text-sm rounded-md border border-red-300 bg-red-50 text-red-800 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              Este item não é do catálogo de {type === 'pharmacy' ? 'medicamentos' : 'materiais'} — nada seria salvo por aqui.
+              {type === 'pharmacy' && ' Material da Satélite Térreo é editado pelo catálogo de materiais.'}
+            </span>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           {/* Dados do item */}
@@ -802,6 +785,8 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
                 </p>
                 {loadingLots ? (
                   <div className="flex items-center gap-2 text-sm text-gray-400 py-2"><Loader2 className="w-4 h-4 animate-spin" /> Carregando lotes...</div>
+                ) : erroLots ? (
+                  <p className="text-sm text-red-600 py-2">Não foi possível carregar os lotes: {erroLots}. Feche e abra de novo antes de mexer nos lotes.</p>
                 ) : lotsVisiveis.length === 0 ? (
                   <p className="text-sm text-gray-400 py-2">Nenhum lote cadastrado. Use "Adicionar lote".</p>
                 ) : (
@@ -838,13 +823,13 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
                             </td>
                             <td className="py-1 px-2">
                               <Input
-                                type="number" min={0}
-                                value={l.quantity === 0 ? '' : l.quantity}
+                                type="text" inputMode="numeric"
+                                value={l.quantity}
                                 placeholder="0"
                                 onFocus={(e) => e.target.select()}
-                                onChange={(e) => updateLot(l._key, { quantity: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+                                onChange={(e) => updateLot(l._key, { quantity: e.target.value })}
                                 onWheel={(e) => e.currentTarget.blur()}
-                                className="h-8 text-xs text-right w-20"
+                                className={`h-8 text-xs text-right w-20 ${l.quantity !== '' && lerQuantidade(l.quantity) === null ? 'border-red-400' : ''}`}
                               />
                             </td>
                             <td className="py-1 text-center">
@@ -858,7 +843,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
                     </table>
                   </div>
                 )}
-                <Button type="button" variant="outline" size="sm" onClick={addLot} className="text-indigo-700 border-indigo-300">
+                <Button type="button" variant="outline" size="sm" onClick={addLot} disabled={!!erroLots} className="text-indigo-700 border-indigo-300">
                   <Plus className="w-4 h-4 mr-1" /> Adicionar lote
                 </Button>
               </div>
@@ -871,12 +856,20 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
               <select
                 id="unit"
                 {...register('unit')}
-                className="w-full mt-1 h-9 rounded-md border border-input px-3 py-1 bg-white"
+                disabled={temMovimento}
+                className="w-full mt-1 h-9 rounded-md border border-input px-3 py-1 bg-white disabled:bg-gray-100 disabled:text-gray-500"
               >
+                {/* Unidade fora da lista (cadastro antigo) continua aparecendo. */}
+                {!unitOptions.includes(item.unit) && item.unit && <option value={item.unit}>{item.unit}</option>}
                 {unitOptions.map((u) => (
                   <option key={u} value={u}>{u}</option>
                 ))}
               </select>
+              {temMovimento && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Não dá para trocar: o item já tem movimentação ou saldo. Se a unidade está errada, cadastre um item novo.
+                </p>
+              )}
             </div>
             <div>
               <Label htmlFor="min_stock">Estoque Mínimo *</Label>
@@ -938,26 +931,56 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
             )}
           </div>
 
-          <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-            <Label htmlFor="current_stock" className="text-blue-900 font-semibold">Estoque Atual</Label>
-            <p className="text-xs text-blue-600 mb-2">Valor atual em sistema. Altere para corrigir manualmente.</p>
-            <Input
-              id="current_stock"
-              type="number"
-              min="0"
-              {...register('current_stock', { valueAsNumber: true })}
-              className="bg-white"
-            />
-            {errors.current_stock && <p className="text-sm text-red-500 mt-1">{errors.current_stock.message}</p>}
-          </div>
+          {editaSaldo ? (
+            <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <Label htmlFor="current_stock" className="text-blue-900 font-semibold">Estoque Atual (Almoxarifado)</Label>
+              <p className="text-xs text-blue-600 mb-2">
+                Saldo no sistema. Altere só para corrigir após contagem — fica registrado com o motivo.
+                Não use este campo para lançar entrada.
+              </p>
+              <Input
+                id="current_stock"
+                type="number"
+                min="0"
+                step="1"
+                {...register('current_stock', { valueAsNumber: true })}
+                className="bg-white"
+              />
+              {errors.current_stock && <p className="text-sm text-red-500 mt-1">{errors.current_stock.message}</p>}
+            </div>
+          ) : (
+            <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 text-sm">
+              <p className="font-semibold text-gray-900">
+                {localSatelite ? `Saldo na ${nomeLocal(localSatelite)}` : 'Saldo por estoque'}
+              </p>
+              {erroSaldos ? (
+                <p className="text-red-600 mt-1">Não foi possível carregar o saldo: {erroSaldos}</p>
+              ) : saldos === null ? (
+                <p className="text-gray-400 mt-1 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> carregando…</p>
+              ) : localSatelite ? (
+                <p className="mt-1 text-gray-800"><strong>{saldoDoLocal(localSatelite)}</strong> {item.unit}</p>
+              ) : (
+                <ul className="mt-1 text-gray-800 flex flex-wrap gap-x-4 gap-y-1">
+                  {LOT_LOCATIONS_PHARMACY.map((loc) => (
+                    <li key={loc.id} className={loc.id === locationId ? 'font-semibold' : ''}>
+                      {loc.label}: <strong>{saldoDoLocal(loc.id)}</strong> {item.unit}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-gray-500 mt-2">
+                Só leitura. Ajuste de saldo é feito por movimentação{podeEditarLotes ? ' ou pelos lotes acima' : ''}.
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <Label htmlFor="batch_number">Lote</Label>
+              <Label htmlFor="batch_number">Lote (cadastro)</Label>
               <Input id="batch_number" {...register('batch_number')} className="mt-1" />
             </div>
             <div>
-              <Label htmlFor="expiry_date">Validade</Label>
+              <Label htmlFor="expiry_date">Validade (cadastro)</Label>
               <Input id="expiry_date" type="date" {...register('expiry_date')} className="mt-1" />
             </div>
           </div>
@@ -985,133 +1008,6 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
             </div>
           </div>
 
-          {/* Nova entrada de estoque (opcional) — SO ALMOXARIFADO.
-              Na farmacia esta secao gravava a entrada direto do navegador, FORA
-              do livro-razao (stock_movements): o saldo por estoque (item_stocks)
-              nao mudava e so a coluna legada subia. Nunca foi usada (as 214
-              entradas de medicamento vieram da Nova Entrada) e foi fechada em
-              21/09/2026 antes que alguem usasse. */}
-          {!ehAlmox && (
-            <div className="text-sm rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-900 p-4">
-              Para dar <strong>entrada de medicamento</strong>, use <strong>Nova Entrada</strong> no estoque — é ela que
-              registra lote, validade e o movimento no livro. Nota fiscal que chegou depois? Complete a entrada em
-              <strong> Farmácia → Entradas</strong>.
-            </div>
-          )}
-          {ehAlmox && (
-          <div className="border border-emerald-200 rounded-lg overflow-hidden">
-            <div className="flex items-center gap-2 px-4 py-3 bg-emerald-50 border-b border-emerald-200">
-              <FileText className="w-4 h-4 text-emerald-700" />
-              <span className="text-sm font-medium text-emerald-900">
-                Registrar nova entrada de estoque (opcional)
-              </span>
-            </div>
-
-            <div className="p-4 space-y-4 bg-white">
-              <p className="text-xs text-gray-500">
-                Preencha esta seção se está recebendo <strong>mais material</strong> agora (Compra, Doação,
-                Empréstimo, Permuta ou Devolução). O sistema vai somar a quantidade ao estoque e registrar a NF/fornecedor.
-                Estoque atual: <strong>{item.current_stock} {item.unit}</strong>
-              </p>
-              {ehAlmox && (
-                <div className="text-xs rounded-md border border-amber-300 bg-amber-50 text-amber-900 p-3">
-                  <strong>Atenção: esta seção SOMA ao estoque.</strong> Se a nota fiscal só chegou agora para um material
-                  que <strong>já deu entrada</strong>, não preencha aqui — vá em <strong>Almoxarifado → Entradas</strong> e
-                  use <strong>Completar NF</strong> na entrada que já existe.
-                </div>
-              )}
-
-              <div>
-                <Label htmlFor="acquisition_type">Como o material chegou?</Label>
-                <select
-                  id="acquisition_type"
-                  {...register('acquisition_type')}
-                  className="mt-1 w-full h-9 rounded-md border border-input bg-white px-3 py-1 text-sm"
-                  defaultValue=""
-                >
-                  <option value="">— Selecione o tipo —</option>
-                  <option value="Compra">Compra</option>
-                  <option value="Doação">Doação</option>
-                  <option value="Empréstimo">Empréstimo</option>
-                  <option value="Permuta">Permuta</option>
-                  <option value="Devolução">Devolução</option>
-                  <option value="Inventário">Inventário</option>
-                </select>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="entry_quantity">Quantidade a adicionar</Label>
-                  <Input
-                    id="entry_quantity"
-                    type="number"
-                    min="0"
-                    {...register('entry_quantity', { valueAsNumber: true })}
-                    onWheel={(e) => e.currentTarget.blur()}
-                    className="mt-1"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="unit_price">Valor Unitário</Label>
-                  <div className="mt-1">
-                    <CurrencyInput
-                      id="unit_price"
-                      value={watch('unit_price') as number | undefined}
-                      onChange={(v) => setValue('unit_price', v as any)}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="invoice_number">Número da NF</Label>
-                  <Input id="invoice_number" {...register('invoice_number')} className="mt-1" placeholder="Ex: NF-123456" />
-                  {ehAlmox && watch('acquisition_type') === 'Compra' && (
-                    <label className="flex items-start gap-2 mt-2 text-xs text-gray-600">
-                      <input type="checkbox" checked={nfPendente} onChange={(e) => setNfPendente(e.target.checked)} className="mt-0.5" />
-                      <span>A NF ainda não chegou — fica como <strong>NF pendente</strong> para completar depois em Entradas.</span>
-                    </label>
-                  )}
-                </div>
-                <div>
-                  <Label htmlFor="afm_number">Número da AFM</Label>
-                  <Input id="afm_number" {...register('afm_number')} className="mt-1" placeholder="Ex: AFM-2026-001" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="invoice_date">Data da NF</Label>
-                  <Input id="invoice_date" type="date" {...register('invoice_date')} className="mt-1" />
-                </div>
-                <div>
-                  <Label htmlFor="invoice_total_value">Valor Total da NF</Label>
-                  <div className="mt-1">
-                    <CurrencyInput
-                      id="invoice_total_value"
-                      value={watch('invoice_total_value') as number | undefined}
-                      onChange={(v) => setValue('invoice_total_value', v as any)}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="supplier_cnpj">CNPJ do Fornecedor</Label>
-                  <Input id="supplier_cnpj" {...register('supplier_cnpj')} className="mt-1" placeholder="00.000.000/0000-00" />
-                </div>
-                <div>
-                  <Label htmlFor="supplier_name">Nome do Fornecedor</Label>
-                  <Input id="supplier_name" {...register('supplier_name')} className="mt-1" placeholder="Nome da empresa" />
-                </div>
-              </div>
-            </div>
-          </div>
-          )}
-
           {ehAlmox && (
             <div className="rounded-lg border border-amber-300 overflow-hidden">
               <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 border-b border-amber-200">
@@ -1137,10 +1033,8 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
                     <ul className="space-y-1 text-sm">
                       {resumo.map((l) => (
                         <li key={l.campo} className="text-gray-800">
-                          <strong>{l.campo === 'entrada' ? 'Nova entrada' : (ROTULO_CAMPO[l.campo] ?? l.campo)}:</strong>{' '}
-                          {l.campo === 'entrada'
-                            ? mostraValor(l.depois)
-                            : <>{mostraValor(l.antes)} <span className="text-gray-400">→</span> <strong>{mostraValor(l.depois)}</strong></>}
+                          <strong>{ROTULO_CAMPO[l.campo] ?? l.campo}:</strong>{' '}
+                          {mostraValor(l.antes)} <span className="text-gray-400">→</span> <strong>{mostraValor(l.depois)}</strong>
                         </li>
                       ))}
                     </ul>
@@ -1179,23 +1073,6 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
             </details>
           )}
 
-          {parecida && (
-            <div className="p-3 text-sm bg-amber-50 rounded-md border border-amber-300 space-y-2">
-              <p className="text-amber-900"><strong>Esta entrada parece repetida.</strong> {descreverParecida(parecida)}</p>
-              <p className="text-xs text-amber-800">
-                Se a nota só chegou agora para esse material, não registre de novo: complete a entrada existente em
-                Almoxarifado → Entradas.
-              </p>
-              <div className="flex gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => setParecida(null)}>Cancelar</Button>
-                <Button type="button" size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" disabled={loading}
-                  onClick={() => { confirmarParecidaRef.current = true; setParecida(null); handleSubmit(onSubmit)() }}>
-                  É outra entrada — registrar mesmo assim
-                </Button>
-              </div>
-            </div>
-          )}
-
           {error && (
             <div className="p-3 text-sm text-red-500 bg-red-50 rounded-md border border-red-200">
               {error}
@@ -1215,7 +1092,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, open, onOpenC
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={loading}>
+            <Button type="submit" disabled={loading || catalogoErrado}>
               {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               {ehAlmox && resumo ? 'Confirmar e salvar' : 'Salvar'}
             </Button>

@@ -9,7 +9,8 @@ import { Label } from '@/components/ui/label'
 import { CurrencyInput } from '@/components/ui/currency-input'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
-import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, type EntradaParecida } from '@/lib/utils/entradas'
+import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, avisoValidade, type EntradaParecida } from '@/lib/utils/entradas'
+import { hojeLocal, termoIlike, lerQuantidade, erroQuantidade } from '@/lib/utils/seguro'
 import { suppliersService } from '@/lib/services/farmacia-cadastros'
 import { externalUnitsService } from '@/lib/services/external-units'
 import { useAuth } from '@/contexts/auth'
@@ -25,14 +26,28 @@ interface ItemRow {
 }
 
 interface LineItem {
+  // Identidade da LINHA, nao do item: o mesmo medicamento entra em varias
+  // linhas (uma por lote). Com key=item_id o React repetia chave e misturava
+  // lote/validade entre as linhas.
+  _uid: string
   item_id: string
   name: string
   code: string
   unit: string
-  quantity: number
+  // Texto do campo; convertido so ao validar/enviar (vazio fica vazio).
+  quantity: string
   batch_number: string
   expiry_date: string
   unit_price: number
+}
+
+// Teto por linha (o banco tambem recusa acima disso).
+const QTD_MAXIMA = 100000
+function erroLinha(q: string): string | null {
+  const e = erroQuantidade(q)
+  if (e) return e
+  if ((lerQuantidade(q) ?? 0) > QTD_MAXIMA) return `Quantidade acima de ${QTD_MAXIMA.toLocaleString('pt-BR')}: confira.`
+  return null
 }
 
 // Tipos de entrada. 'Compra' exige NF/AFM; os demais não.
@@ -80,7 +95,7 @@ export function NfEntry({ type }: NfEntryProps) {
   const locationLabel = LOC_LABELS[locationCode] ?? locationCode
   const table = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
   const backTo = type === 'pharmacy' ? '/inventory/pharmacy' : '/inventory/warehouse'
-  const today = new Date().toISOString().slice(0, 10)
+  const today = hojeLocal()
 
   // Cabeçalho
   const [entryType, setEntryType] = useState<EntryType>('Compra')
@@ -149,6 +164,7 @@ export function NfEntry({ type }: NfEntryProps) {
   const [search, setSearch] = useState('')
   const [results, setResults] = useState<ItemRow[]>([])
   const [searching, setSearching] = useState(false)
+  const [erroBusca, setErroBusca] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -156,42 +172,70 @@ export function NfEntry({ type }: NfEntryProps) {
   useEffect(() => {
     const t = setTimeout(async () => {
       const q = search.trim()
-      if (!q) { setResults([]); return }
+      if (!q) { setResults([]); setErroBusca(null); return }
       setSearching(true)
+      setErroBusca(null)
+      // termoIlike: virgula/parenteses no nome quebravam a busca (400) e a
+      // lista vinha vazia como se o item nao existisse.
       const { data, error: err } = await supabase
         .from(table)
         .select('id, code, name, unit')
         .eq('is_active', true)
-        .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+        .or(`name.ilike.${termoIlike(q)},code.ilike.${termoIlike(q)}`)
         .order('name')
         .limit(20)
-      if (err) console.error(err)
-      setResults((data || []) as ItemRow[])
+      if (err) {
+        console.error(err)
+        setErroBusca(getErrorMessage(err))
+        setResults([])
+      } else {
+        setResults((data || []) as ItemRow[])
+      }
       setSearching(false)
     }, 200)
     return () => clearTimeout(t)
   }, [search, table])
 
+  function novaLinha(item: ItemRow): LineItem {
+    return {
+      _uid: `${item.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
+      quantity: '1', batch_number: '', expiry_date: '', unit_price: 0,
+    }
+  }
   function addLine(item: ItemRow) {
     // O MESMO item pode entrar em várias linhas — uma por LOTE. Uma NF costuma
     // trazer o mesmo medicamento em lotes diferentes, e cada linha carrega seu
     // batch_number/validade. A RPC trata cada linha de forma independente e
     // cria/incrementa o lote por (item, lote, local).
-    setLines((prev) => [...prev, {
-      item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
-      quantity: 1, batch_number: '', expiry_date: '', unit_price: 0,
-    }])
+    setLines((prev) => [...prev, novaLinha(item)])
     setSearch(''); setResults([])
   }
-  function updateLine(idx: number, patch: Partial<LineItem>) {
-    setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)))
+  function updateLine(uid: string, patch: Partial<LineItem>) {
+    setLines((prev) => prev.map((l) => (l._uid === uid ? { ...l, ...patch } : l)))
   }
-  function removeLine(idx: number) {
-    setLines((prev) => prev.filter((_, i) => i !== idx))
+  function removeLine(uid: string) {
+    setLines((prev) => prev.filter((l) => l._uid !== uid))
   }
 
-  const totalQty = lines.reduce((s, l) => s + (l.quantity || 0), 0)
-  const totalValue = lines.reduce((s, l) => s + (l.quantity || 0) * (l.unit_price || 0), 0)
+  // Veio do Editar Item ("Registrar entrada de NF"): ?item=<id> ja entra na lista.
+  const itemInicial = searchParams.get('item')
+  useEffect(() => {
+    if (!itemInicial) return
+    let vivo = true
+    supabase.from(table).select('id, code, name, unit').eq('id', itemInicial).eq('is_active', true).maybeSingle()
+      .then(({ data, error: err }) => {
+        if (!vivo) return
+        if (err) { setError(`Não foi possível carregar o item: ${getErrorMessage(err)}`); return }
+        const it = data as ItemRow | null
+        if (it) setLines((prev) => (prev.some((l) => l.item_id === it.id) ? prev : [...prev, novaLinha(it)]))
+      })
+    return () => { vivo = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemInicial, table])
+
+  const totalQty = lines.reduce((s, l) => s + (lerQuantidade(l.quantity) ?? 0), 0)
+  const totalValue = lines.reduce((s, l) => s + (lerQuantidade(l.quantity) ?? 0) * (l.unit_price || 0), 0)
 
   // Lote e validade sao obrigatorios pra QUALQUER entrada — sem eles,
   // o controle de FEFO e de vencimento do estoque quebra. Se o produto
@@ -202,13 +246,18 @@ export function NfEntry({ type }: NfEntryProps) {
     // Compra exige NF + data de emissão. AFM deixou de ser obrigatório.
     (!isCompra || nfPendente || (invoiceNumber.trim() && invoiceDate)) &&
     lines.length > 0 &&
-    lines.every((l) => l.quantity > 0 && l.batch_number.trim() && l.expiry_date)
+    lines.every((l) => !erroLinha(l.quantity) && l.batch_number.trim() && l.expiry_date)
 
   async function handleSubmit(confirmarParecida = false) {
     setError(null)
+    const linhaRuim = lines.find((l) => erroLinha(l.quantity))
+    if (linhaRuim) {
+      setError(`${linhaRuim.name}: ${erroLinha(linhaRuim.quantity)}`)
+      return
+    }
     if (!canSubmit) {
       // Erro especifico se o problema for lote/validade em alguma linha
-      const missingLotValid = lines.some((l) => l.quantity > 0 && (!l.batch_number.trim() || !l.expiry_date))
+      const missingLotValid = lines.some((l) => !l.batch_number.trim() || !l.expiry_date)
       if (missingLotValid) {
         setError('Preencha Lote e Validade em TODAS as linhas — obrigatórios pra rastreabilidade e FEFO.')
         return
@@ -236,8 +285,8 @@ export function NfEntry({ type }: NfEntryProps) {
         p_location_code: locationCode,
         p_items: lines.map((l) => ({
           item_id: l.item_id,
-          quantity: l.quantity,
-          unit_price: l.unit_price,
+          quantity: lerQuantidade(l.quantity),
+          unit_price: l.unit_price ?? 0,
           batch_number: l.batch_number.trim() || null,
           expiry_date: l.expiry_date || null,
         })),
@@ -396,6 +445,10 @@ export function NfEntry({ type }: NfEntryProps) {
             <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
               {searching ? (
                 <div className="px-4 py-3 text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Buscando...</div>
+              ) : erroBusca ? (
+                <div className="px-4 py-3 text-sm text-red-700 bg-red-50 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" /> Erro na busca: {erroBusca}. Tente de novo.
+                </div>
               ) : results.length === 0 ? (
                 <div className="px-4 py-3 text-sm text-gray-400">Nenhum item encontrado.</div>
               ) : results.map((i) => {
@@ -438,28 +491,29 @@ export function NfEntry({ type }: NfEntryProps) {
                 </tr>
               </thead>
               <tbody>
-                {lines.map((l, idx) => (
-                  <tr key={l.item_id} className="border-b last:border-0">
+                {lines.map((l) => (
+                  <tr key={l._uid} className="border-b last:border-0">
                     <td className="py-2 pr-2">
                       <p className="font-medium text-gray-900">{l.name}</p>
                       <p className="text-xs text-gray-400">{l.code || 'sem código'} · {l.unit}</p>
                     </td>
                     <td className="py-2 px-2">
                       <Input
-                        type="number"
-                        min={1}
-                        value={l.quantity === 0 ? '' : l.quantity}
+                        type="text"
+                        inputMode="numeric"
+                        value={l.quantity}
                         placeholder="0"
                         onFocus={(e) => e.target.select()}
-                        onChange={(e) => updateLine(idx, { quantity: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+                        onChange={(e) => updateLine(l._uid, { quantity: e.target.value })}
                         onWheel={(e) => e.currentTarget.blur()}
-                        className="w-20 text-right"
+                        className={`w-20 text-right ${erroLinha(l.quantity) ? 'border-red-400' : ''}`}
                       />
+                      {erroLinha(l.quantity) && <p className="text-xs text-red-600 mt-1 max-w-[8rem]">{erroLinha(l.quantity)}</p>}
                     </td>
                     <td className="py-2 px-2">
                       <Input
                         value={l.batch_number}
-                        onChange={(e) => updateLine(idx, { batch_number: e.target.value })}
+                        onChange={(e) => updateLine(l._uid, { batch_number: e.target.value })}
                         placeholder="Obrigatório"
                         className={`w-28 ${!l.batch_number.trim() ? 'border-red-300 focus:border-red-500' : ''}`}
                       />
@@ -468,18 +522,21 @@ export function NfEntry({ type }: NfEntryProps) {
                       <Input
                         type="date"
                         value={l.expiry_date}
-                        onChange={(e) => updateLine(idx, { expiry_date: e.target.value })}
+                        onChange={(e) => updateLine(l._uid, { expiry_date: e.target.value })}
                         className={`w-36 ${!l.expiry_date ? 'border-red-300 focus:border-red-500' : ''}`}
                       />
+                      {avisoValidade(l.expiry_date, deliveryDate || invoiceDate || today) && (
+                        <p className="text-xs text-amber-700 mt-1 max-w-[9rem]">{avisoValidade(l.expiry_date, deliveryDate || invoiceDate || today)}</p>
+                      )}
                     </td>
                     <td className="py-2 px-2">
-                      <div className="w-28 ml-auto"><CurrencyInput value={l.unit_price} onChange={(v) => updateLine(idx, { unit_price: v as number })} /></div>
+                      <div className="w-28 ml-auto"><CurrencyInput value={l.unit_price} onChange={(v) => updateLine(l._uid, { unit_price: v ?? 0 })} /></div>
                     </td>
                     <td className="py-2 px-2 text-right font-medium text-gray-700">
-                      R$ {((l.quantity || 0) * (l.unit_price || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      R$ {((lerQuantidade(l.quantity) ?? 0) * (l.unit_price || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="py-2 text-right">
-                      <button onClick={() => removeLine(idx)} className="text-red-500 hover:text-red-600 p-1"><Trash2 className="w-4 h-4" /></button>
+                      <button onClick={() => removeLine(l._uid)} className="text-red-500 hover:text-red-600 p-1"><Trash2 className="w-4 h-4" /></button>
                     </td>
                   </tr>
                 ))}

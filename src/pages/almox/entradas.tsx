@@ -27,7 +27,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/auth'
 import { getErrorMessage } from '@/lib/utils/error-messages'
-import { lerAvisoEntrada, dataBR, useTravaEnvio, type EntradaParecida } from '@/lib/utils/entradas'
+import { lerAvisoEntrada, dataBR, useTravaEnvio, avisoValidade, type EntradaParecida } from '@/lib/utils/entradas'
+import { lerValorMonetario } from '@/components/ui/currency-input'
+import { lerQuantidade } from '@/lib/utils/seguro'
+
+/** Numero para mostrar num campo de texto em formato brasileiro ("1,5"). */
+const numeroBR = (n: number | null | undefined) =>
+  n == null ? '' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 4, useGrouping: false })
 
 interface Linha {
   id: string
@@ -44,6 +50,9 @@ interface Linha {
   supplier_name: string | null
   supplier_cnpj: string | null
   unit_price: number | null
+  // Valor total da NF informado pelo usuario (NAO e o valor da linha; o da
+  // linha e sempre quantity * unit_price).
+  invoice_total_value: number | null
   batch_number: string | null
   expiry_date: string | null
   location_id: string | null
@@ -496,7 +505,8 @@ function EditarDialog({ linha, rpc, farmacia, onClose, onDone }: {
   const [qtd, setQtd] = useState(String(linha.quantity))
   const [lote, setLote] = useState(linha.batch_number || '')
   const [validade, setValidade] = useState(linha.expiry_date || '')
-  const [preco, setPreco] = useState(linha.unit_price != null ? String(linha.unit_price) : '')
+  const [preco, setPreco] = useState(numeroBR(linha.unit_price))
+  const [totalNf, setTotalNf] = useState(numeroBR(linha.invoice_total_value))
   const [nf, setNf] = useState(semNF(linha.invoice_number) ? '' : (linha.invoice_number || ''))
   const [dataNf, setDataNf] = useState(linha.invoice_date || '')
   const [entrega, setEntrega] = useState(linha.delivery_date || '')
@@ -508,23 +518,38 @@ function EditarDialog({ linha, rpc, farmacia, onClose, onDone }: {
   const [erro, setErro] = useState<string | null>(null)
   const trava = useTravaEnvio()
 
-  const novaQtd = Number(qtd)
-  const diferenca = Number.isFinite(novaQtd) ? novaQtd - linha.quantity : 0
+  const novaQtd = lerQuantidade(qtd)
+  const diferenca = novaQtd != null ? novaQtd - linha.quantity : 0
+  const dataEntrada = (linha.delivery_date || linha.invoice_date || linha.created_at || '').slice(0, 10)
 
   async function salvar(confirmar = false) {
     setErro(null)
-    if (!Number.isInteger(novaQtd) || novaQtd <= 0) {
+    if (novaQtd == null || novaQtd <= 0) {
       setErro('Quantidade deve ser um número inteiro maior que zero. Para desfazer a entrada, use Excluir.')
       return
     }
+    if (novaQtd > 100000) { setErro('Quantidade acima de 100.000: confira o número digitado.'); return }
     if (farmacia && !lote.trim()) { setErro('Medicamento precisa de lote.'); return }
+    // Preco: vazio = nao mudar (antes gravava 0); aceita "1,5" e "1.234,56".
+    const precoNovo = preco.trim() === '' ? undefined : lerValorMonetario(preco)
+    if (preco.trim() !== '' && (precoNovo === undefined || precoNovo < 0)) {
+      setErro('Preço unitário inválido. Use o formato 1,50.')
+      return
+    }
+    const totalNovo = totalNf.trim() === '' ? null : lerValorMonetario(totalNf)
+    if (totalNf.trim() !== '' && (totalNovo === undefined || (totalNovo ?? 0) < 0)) {
+      setErro('Valor total da NF inválido. Use o formato 1.234,56.')
+      return
+    }
     // So manda o que mudou: o historico registra exatamente o que foi alterado.
     const dados: Record<string, unknown> = {}
     const mudou = (a: unknown, b: unknown) => String(a ?? '') !== String(b ?? '')
     if (novaQtd !== linha.quantity) dados.quantity = novaQtd
     if (mudou(lote.trim(), linha.batch_number)) dados.batch_number = lote.trim()
     if (mudou(validade, linha.expiry_date)) dados.expiry_date = validade || null
-    if (mudou(preco === '' ? null : Number(preco), linha.unit_price)) dados.unit_price = preco === '' ? null : Number(preco)
+    if (precoNovo !== undefined && precoNovo !== Number(linha.unit_price ?? NaN)) dados.unit_price = precoNovo
+    const totalAtual = linha.invoice_total_value == null ? null : Number(linha.invoice_total_value)
+    if (totalNovo !== totalAtual) dados.invoice_total_value = totalNovo
     if (mudou(nf.trim(), semNF(linha.invoice_number) ? '' : linha.invoice_number)) dados.invoice_number = nf.trim()
     if (mudou(dataNf, linha.invoice_date)) dados.invoice_date = dataNf || null
     if (mudou(entrega, linha.delivery_date)) dados.delivery_date = entrega || null
@@ -558,7 +583,10 @@ function EditarDialog({ linha, rpc, farmacia, onClose, onDone }: {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <Label htmlFor="e-qtd">Quantidade</Label>
-            <Input id="e-qtd" type="number" min={1} value={qtd} onChange={(e) => setQtd(e.target.value)} className="mt-1" />
+            <Input id="e-qtd" type="text" inputMode="numeric" value={qtd} onChange={(e) => setQtd(e.target.value)} className="mt-1" />
+            {qtd.trim() !== '' && novaQtd == null && (
+              <p className="text-xs mt-1 text-red-600">Informe um número inteiro (sem casas decimais).</p>
+            )}
             {diferenca !== 0 && Number.isFinite(diferenca) && (
               <p className={`text-xs mt-1 ${diferenca > 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
                 O estoque vai {diferenca > 0 ? 'aumentar' : 'diminuir'} {Math.abs(diferenca)} {linha.item?.unit || 'un'}.
@@ -566,8 +594,23 @@ function EditarDialog({ linha, rpc, farmacia, onClose, onDone }: {
             )}
           </div>
           <div><Label htmlFor="e-lote">Lote</Label><Input id="e-lote" value={lote} onChange={(e) => setLote(e.target.value)} className="mt-1" /></div>
-          <div><Label htmlFor="e-val">Validade</Label><Input id="e-val" type="date" value={validade} onChange={(e) => setValidade(e.target.value)} className="mt-1" /></div>
-          <div><Label htmlFor="e-preco">Preço unitário</Label><Input id="e-preco" type="number" step="0.01" min={0} value={preco} onChange={(e) => setPreco(e.target.value)} className="mt-1" /></div>
+          <div>
+            <Label htmlFor="e-val">Validade</Label>
+            <Input id="e-val" type="date" value={validade} onChange={(e) => setValidade(e.target.value)} className="mt-1" />
+            {validade !== (linha.expiry_date || '') && avisoValidade(validade, dataEntrada) && (
+              <p className="text-xs mt-1 text-amber-700">{avisoValidade(validade, dataEntrada)}</p>
+            )}
+          </div>
+          <div>
+            <Label htmlFor="e-preco">Preço unitário (R$)</Label>
+            <Input id="e-preco" type="text" inputMode="decimal" value={preco} onChange={(e) => setPreco(e.target.value)} placeholder="0,00" className="mt-1" />
+            <p className="text-xs mt-1 text-gray-500">Vazio = não muda.</p>
+          </div>
+          <div>
+            <Label htmlFor="e-total">Valor total da NF (R$)</Label>
+            <Input id="e-total" type="text" inputMode="decimal" value={totalNf} onChange={(e) => setTotalNf(e.target.value)} placeholder="0,00" className="mt-1" />
+            <p className="text-xs mt-1 text-gray-500">Da nota inteira, não desta linha.</p>
+          </div>
           <div><Label htmlFor="e-nf">Número da NF</Label><Input id="e-nf" value={nf} onChange={(e) => setNf(e.target.value)} className="mt-1" /></div>
           <div><Label htmlFor="e-dnf">Data da NF</Label><Input id="e-dnf" type="date" value={dataNf} onChange={(e) => setDataNf(e.target.value)} className="mt-1" /></div>
           <div><Label htmlFor="e-ent">Data de entrega</Label><Input id="e-ent" type="date" value={entrega} onChange={(e) => setEntrega(e.target.value)} className="mt-1" /></div>
@@ -624,13 +667,24 @@ interface EventoHist {
 
 function HistoricoDialog({ rodada, onClose }: { rodada: Rodada; onClose: () => void }) {
   const [eventos, setEventos] = useState<EventoHist[] | null>(null)
+  const [erroHist, setErroHist] = useState<string | null>(null)
+  const [tentativa, setTentativa] = useState(0)
   const nomeItem = (id: string) => rodada.linhas.find((l) => l.id === id)?.item?.name || 'Item'
 
   useEffect(() => {
+    let vivo = true
+    setEventos(null)
+    setErroHist(null)
     supabase.from('entrada_historico').select('*').in('entry_id', rodada.linhas.map((l) => l.id))
       .order('feito_em', { ascending: true })
-      .then(({ data }) => setEventos((data || []) as EventoHist[]))
-  }, [rodada])
+      .then(({ data, error }) => {
+        if (!vivo) return
+        // Consulta que falha nao pode virar "Nenhuma alteracao".
+        if (error) { setErroHist(getErrorMessage(error)); setEventos([]); return }
+        setEventos((data || []) as EventoHist[])
+      })
+    return () => { vivo = false }
+  }, [rodada, tentativa])
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
@@ -666,7 +720,13 @@ function HistoricoDialog({ rodada, onClose }: { rodada: Rodada; onClose: () => v
               )}
             </li>
           ))}
-          {eventos && eventos.length === 0 && <li className="text-xs text-gray-400">Nenhuma alteração desde a criação.</li>}
+          {erroHist && (
+            <li className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md flex items-center justify-between gap-2">
+              <span>Não foi possível carregar o histórico: {erroHist}</span>
+              <Button size="sm" variant="outline" onClick={() => setTentativa((t) => t + 1)}>Tentar de novo</Button>
+            </li>
+          )}
+          {!erroHist && eventos && eventos.length === 0 && <li className="text-xs text-gray-400">Nenhuma alteração desde a criação.</li>}
         </ol>
         <DialogFooter><Button variant="outline" onClick={onClose}>Fechar</Button></DialogFooter>
       </DialogContent>

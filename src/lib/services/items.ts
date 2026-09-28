@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { termoIlike, normalizarBusca } from '../utils/seguro'
 import { saveAs } from 'file-saver'
 import * as XLSX from 'xlsx'
 
@@ -713,121 +714,6 @@ class ItemsService {
     }
   }
 
-  async addStock(
-    id: string, 
-    type: 'pharmacy' | 'warehouse',
-    data: {
-      quantity: number
-      batch_number: string
-      expiry_date: string
-      supplier: string
-      unit_price: number
-      description: string
-      invoice_number?: string
-      invoice_date?: string
-      delivery_date?: string
-      afm_number?: string
-    }
-  ) {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('User not authenticated')
-
-    // Input validation
-    if (!id || typeof id !== 'string') {
-      throw new Error('ID do item é obrigatório')
-    }
-    
-    if (!data.quantity || data.quantity <= 0) {
-      throw new Error('Quantidade deve ser maior que zero')
-    }
-
-    try {
-      // First, call the increment_stock RPC function
-      const { data: newStock, error: rpcError } = await supabase.rpc('increment_stock', {
-        p_id: id,
-        p_quantity: data.quantity,
-        p_table: this.getTableName(type)
-      })
-
-      if (rpcError) {
-        console.error('Error incrementing stock:', rpcError)
-        throw rpcError
-      }
-
-      // Get the current reorder status
-      const { data: reorderStatus, error: reorderError } = await supabase.rpc('update_reorder_status', {
-        p_id: id,
-        p_table: this.getTableName(type)
-      })
-
-      if (reorderError) {
-        console.error('Error getting reorder status:', reorderError)
-        throw reorderError
-      }
-
-      // Ensure reorder status is valid, default to 'normal' if not
-      const validStatus = reorderStatus && ['normal', 'reorder_point', 'reordering', 'critical'].includes(reorderStatus)
-        ? reorderStatus
-        : 'normal'
-
-      // Update the item with the new stock value and other fields
-      const { data: updatedItem, error: updateError } = await supabase
-        .from(this.getTableName(type))
-        .update({ 
-          current_stock: newStock,
-          reorder_status: validStatus,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', id)
-        .select()
-        .single()
-
-      if (updateError) {
-        console.error('Error updating stock:', updateError)
-        throw updateError
-      }
-
-      // Add the expiry tracking entry
-      const { error: expiryError } = await supabase
-        .from('expiry_tracking')
-        .insert({
-          item_id: id,
-          batch_number: data.batch_number,
-          expiry_date: data.expiry_date,
-          initial_quantity: data.quantity,
-          current_quantity: data.quantity,
-          created_by: user.id,
-          invoice_number: data.invoice_number,
-          invoice_date: data.invoice_date,
-          delivery_date: data.delivery_date,
-          afm_number: data.afm_number
-        })
-
-      if (expiryError) {
-        console.error('Error adding expiry tracking:', expiryError)
-        throw expiryError
-      }
-
-      // Update consumption history
-      const { error: historyError } = await supabase.rpc('update_consumption_history', {
-        p_id: id,
-        p_quantity: data.quantity,
-        p_type: 'addition',
-        p_table: this.getTableName(type)
-      })
-
-      if (historyError) {
-        console.error('Error updating consumption history:', historyError)
-        throw historyError
-      }
-
-      return updatedItem as Item
-    } catch (error) {
-      console.error('Error adding stock:', error)
-      throw error
-    }
-  }
-
   async getAuditHistory(id: string, type: 'pharmacy' | 'warehouse', filters?: {
     actionType?: string
     startDate?: string
@@ -1080,8 +966,11 @@ class ItemsService {
         throw new Error('Estoque mínimo não pode ser negativo')
       }
 
-      if (data.current_stock !== undefined && data.current_stock < 0) {
-        throw new Error('Estoque atual não pode ser negativo')
+      // Saldo NUNCA entra pelo cadastro: entrava gravando lote 'INICIAL' e
+      // stock_entries direto do navegador, engolindo erro. Estoque entra pela
+      // Nova Entrada (RPC atomica, com rodada e local).
+      if (data.current_stock !== undefined && data.current_stock !== null && Number(data.current_stock) !== 0) {
+        throw new Error('O cadastro do item não grava saldo. Cadastre com estoque 0 e lance a quantidade pela Nova Entrada.')
       }
 
       const pharmacyCategories = ['Medicamentos', 'Material Hospitalar', 'MEDICAMENTO', 'MAT/MED', 'HIGIENE E LIMPEZA']
@@ -1097,7 +986,7 @@ class ItemsService {
         unit: data.unit,
         min_stock: data.min_stock ?? 0,
         max_stock: data.max_stock ?? 0,
-        current_stock: data.current_stock ?? 0,
+        current_stock: 0,
         allowed_department_ids: data.allowed_department_ids ?? [],
         padronizado: data.padronizado ?? false,
       }
@@ -1191,121 +1080,69 @@ class ItemsService {
 
       console.log('Inserting item into table:', table, 'with data:', insertData)
 
-      // Check if an inactive item with the same code exists — reactivate instead of creating
-      const { data: existingInactive } = await supabase
+      // Codigo de item INATIVO: antes o cadastro reativava o item antigo e
+      // sobrescrevia nome/unidade/categoria dele — o historico do item velho
+      // passava a aparecer com os dados do novo. Agora recusa com mensagem.
+      const { data: existentes, error: buscaErr } = await supabase
         .from(table)
-        .select('id')
-        .eq('code', data.code)
-        .eq('is_active', false)
-        .maybeSingle()
-
-      let item: any
-
-      if (existingInactive) {
-        // Reactivate the soft-deleted item with updated data
-        const { data: reactivated, error: reactivateError } = await supabase
-          .from(table)
-          .update({ ...insertData, is_active: true, updated_at: new Date().toISOString() })
-          .eq('id', existingInactive.id)
-          .select()
-          .single()
-
-        if (reactivateError) {
-          console.error('Supabase reactivation error:', reactivateError)
-          throw reactivateError
-        }
-        item = reactivated
-        console.log('Reactivated existing inactive item:', existingInactive.id)
-      } else {
-        const { data: created, error } = await supabase
-          .from(table)
-          .insert(insertData)
-          .select()
-          .single()
-
-        if (error) {
-          console.error('Supabase error:', error)
-          throw error
-        }
-        item = created
+        .select('id, name, is_active')
+        .eq('code', data.code.trim())
+        .limit(1)
+      if (buscaErr) throw buscaErr
+      const existente = (existentes ?? [])[0] as { id: string; name: string; is_active: boolean } | undefined
+      if (existente) {
+        throw new Error(existente.is_active
+          ? `Já existe um item ativo com o código ${data.code.trim()} ("${existente.name}"). Use o item existente ou outro código.`
+          : `O código ${data.code.trim()} pertence a um item INATIVO ("${existente.name}"). Peça ao gestor para reativar esse item em vez de cadastrar outro, ou use um código diferente.`)
       }
 
-      // Create an entry in expiry_tracking to record the initial stock with all details
-      if (item && data.current_stock && data.current_stock > 0) {
-        const expiryTrackingData: any = {
-          item_id: item.id,
-          batch_number: 'INICIAL',
-          initial_quantity: data.current_stock,
-          current_quantity: data.current_stock,
-          created_by: user.id
-        }
+      const { data: created, error } = await supabase
+        .from(table)
+        .insert(insertData)
+        .select()
+        .single()
 
-        // Add optional fields
-        if (data.expiry_date) {
-          expiryTrackingData.expiry_date = data.expiry_date
-        }
-        if (data.invoice_number) {
-          expiryTrackingData.invoice_number = data.invoice_number
-        }
-        if (data.afm_number) {
-          expiryTrackingData.afm_number = data.afm_number
-        }
-        if (data.supplier_cnpj) {
-          expiryTrackingData.supplier_cnpj = data.supplier_cnpj
-        }
-        if (data.supplier_name) {
-          expiryTrackingData.supplier_name = data.supplier_name
-        }
-        if (data.invoice_total_value) {
-          expiryTrackingData.invoice_total_value = data.invoice_total_value
-        }
-
-        const { error: trackingError } = await supabase
-          .from('expiry_tracking')
-          .insert(expiryTrackingData)
-
-        if (trackingError) {
-          console.error('Error creating expiry tracking entry:', trackingError)
-          // Don't throw error here, as the item was created successfully
-        }
-
-        // Cria um stock_entries para o estoque inicial (para auditoria
-        // e para aparecer corretamente nos relatórios de movimentação).
-        // Campos NOT NULL do banco recebem placeholders ('—') em vez de null.
-        try {
-          const itemType = table === 'pharmacy_items' ? 'pharmacy' : 'warehouse'
-          const entryData: any = {
-            item_id: item.id,
-            item_type: itemType,
-            quantity: data.current_stock,
-            acquisition_type: data.acquisition_type || 'Compra',
-            invoice_number: data.invoice_number?.trim() || 'CADASTRO INICIAL',
-            invoice_date: data.invoice_date || new Date().toISOString().slice(0, 10),
-            invoice_total_value: data.invoice_total_value ?? 0,
-            unit_price: data.unit_price ?? data.last_purchase_price ?? 0,
-            afm_number: data.afm_number?.trim() || '—',
-            supplier_cnpj: data.supplier_cnpj?.trim() || '00.000.000/0000-00',
-            supplier_name: data.supplier_name?.trim() || (data.acquisition_type === 'Doação' ? 'Doação' : 'Cadastro inicial'),
-            batch_number: data.batch_number || null,
-            expiry_date: data.expiry_date || null,
-            notes: 'Estoque inicial registrado no cadastro do item',
-            created_by: user.id,
-          }
-          const { error: entryError } = await supabase.from('stock_entries').insert(entryData)
-          if (entryError) {
-            console.error('Error creating initial stock_entries record:', entryError)
-            // não falha o cadastro — o item já está criado
-          }
-        } catch (e) {
-          console.error('Error creating initial stock_entries record:', e)
-        }
+      if (error) {
+        console.error('Supabase error:', error)
+        throw error
       }
+      const item: any = created
 
       return item as Item
     } catch (error) {
       console.error('Error creating item:', error)
       throw error
     }
+  }
+
+  /**
+   * Itens ativos com nome parecido (mesmas palavras, sem acento/maiuscula/
+   * pontuacao) — aviso antes de cadastrar um item que ja existe com outra grafia.
+   */
+  async nomesParecidos(nome: string, type: 'pharmacy' | 'warehouse'): Promise<Array<{ id: string; code: string | null; name: string; unit: string }>> {
+    const limpa = (t: string) => normalizarBusca(t).replace(/[^a-z0-9]+/g, ' ').trim()
+    const alvo = limpa(nome)
+    const palavras = alvo.split(' ').filter((p) => p.length >= 3)
+    if (palavras.length === 0) return []
+    // Busca pela palavra mais longa e compara no navegador.
+    const chave = [...palavras].sort((a, b) => b.length - a.length)[0]
+    const { data, error } = await supabase
+      .from(this.getTableName(type))
+      .select('id, code, name, unit')
+      .eq('is_active', true)
+      .or(`name.ilike.${termoIlike(chave)}`)
+      .limit(300)
+    if (error) throw error
+    const conjunto = (t: string) => new Set(limpa(t).split(' ').filter((p) => p.length >= 3))
+    const meu = conjunto(nome)
+    return ((data ?? []) as Array<{ id: string; code: string | null; name: string; unit: string }>).filter((r) => {
+      const outro = limpa(r.name)
+      if (outro === alvo) return true
+      const dele = conjunto(r.name)
+      const comuns = [...meu].filter((p) => dele.has(p)).length
+      // Todas as palavras (3+ letras) de um nome estao no outro.
+      return comuns > 0 && (comuns === meu.size || comuns === dele.size)
+    }).slice(0, 5)
   }
 
   async update(id: string, data: UpdateItemData, type: 'pharmacy' | 'warehouse') {
@@ -1334,6 +1171,12 @@ class ItemsService {
         .maybeSingle()
 
       if (error) throw error
+      // 0 linhas sem erro = RLS negou ou o item nao e deste catalogo (ex.: item
+      // de material aberto como medicamento na Satelite Terreo). Antes a tela
+      // fechava como se tivesse salvo.
+      if (!item) {
+        throw new Error(`Não foi possível salvar: item não encontrado no catálogo de ${type === 'pharmacy' ? 'medicamentos' : 'materiais'} ou sem permissão.`)
+      }
       return item as Item
     } catch (error) {
       console.error('Error updating item:', error)

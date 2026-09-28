@@ -6,6 +6,7 @@
 // vezes. A tela manda um id de RODADA; o banco recusa a mesma rodada de novo.
 
 import { useCallback, useRef } from 'react'
+import { dataBR as dataBRSeguro } from '@/lib/utils/seguro'
 
 /** Id novo de rodada. Um por abertura de tela/dialogo; o banco nao aceita repetido. */
 export function novaRodadaId(): string {
@@ -63,10 +64,26 @@ export function lerAvisoEntrada(e: unknown): AvisoEntrada | null {
   return null
 }
 
+/**
+ * Data para exibir. Coluna date ('YYYY-MM-DD') vai pelo dataBR de seguro.ts:
+ * new Date('YYYY-MM-DD') e meia-noite UTC e aparecia UM DIA ANTES na tela
+ * (validade, data da NF). Timestamp com hora segue pelo relogio local.
+ */
 export function dataBR(iso: string | null | undefined, comHora = false): string {
   if (!iso) return '—'
+  if (!comHora || /^\d{4}-\d{2}-\d{2}$/.test(iso.trim())) return dataBRSeguro(iso)
   const d = new Date(iso)
-  return comHora ? d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : d.toLocaleDateString('pt-BR')
+  return isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+}
+
+/** Aviso para validade anterior a data da entrada (vencido ou digitado errado). */
+export function avisoValidade(validade: string | null | undefined, dataEntrada: string): string | null {
+  if (!validade) return null
+  const ano = Number(validade.slice(0, 4))
+  const teto = new Date().getFullYear() + 30
+  if (!(ano >= 2015 && ano <= teto)) return `Validade ${dataBRSeguro(validade)} parece digitada errada. Confira o ano.`
+  if (validade < dataEntrada) return `Validade ${dataBRSeguro(validade)} é anterior à data da entrada: o produto já chega vencido. Confira.`
+  return null
 }
 
 /** Frase curta para o aviso de entrada parecida. */

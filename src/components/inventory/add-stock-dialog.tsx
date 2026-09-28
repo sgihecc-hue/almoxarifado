@@ -1,8 +1,22 @@
-import { useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import { Loader2, Package2, FileText, Building2, Calendar } from 'lucide-react'
+// =====================================================================
+// Adicionar Estoque (aberto pelo detalhe do item)
+//
+// Ate 28/09/2026 este dialogo gravava do navegador: no almox inseria em
+// stock_entries e depois fazia current_stock = (valor lido ao ABRIR a tela) +
+// quantidade — qualquer saida registrada no meio era apagada — sem rodada,
+// sem trava e sem local; na farmacia chamava registrar_entrada_estoque (sem
+// rodada nem local). A validade vinha preenchida com hoje+365.
+//
+// Agora grava pelas MESMAS RPCs da Nova Entrada, numa transacao so:
+//   material     -> registrar_entrada_nf (local ALMOX)
+//   medicamento  -> registrar_entrada_farmacia (local CAF)
+// com rodada (duplo clique/reenvio nao soma de novo), aviso de entrada
+// parecida e validade VAZIA por padrao.
+// =====================================================================
+
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Loader2, Package2, FileText, Building2, AlertCircle } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -16,38 +30,11 @@ import { CurrencyInput } from '@/components/ui/currency-input'
 import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { hojeLocal, lerQuantidade, erroQuantidade } from '@/lib/utils/seguro'
+import {
+  novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, avisoValidade, type EntradaParecida,
+} from '@/lib/utils/entradas'
 import type { Item } from '@/lib/services/items'
-
-const stockEntrySchema = z.object({
-  quantity: z.number().min(1, 'Quantidade deve ser maior que 0'),
-  acquisition_type: z.enum(['Compra', 'Empréstimo', 'Doação', 'Permuta', 'Inventário'], {
-    errorMap: () => ({ message: 'Selecione o tipo de aquisição' })
-  }),
-  invoice_number: z.string().min(1, 'Numero da nota fiscal e obrigatorio'),
-  invoice_date: z.string().min(1, 'Data de emissao e obrigatoria'),
-  invoice_total_value: z.number().min(0, 'Valor total deve ser maior ou igual a 0'),
-  // Validade fora da faixa era escorregao de dedo no ano (0208, 0554, 8027) e
-  // tirava o lote do controle de vencimento — ele nunca mais caia na janela de
-  // alerta. Mesma faixa do gatilho trg_valida_validade_almox no banco; aqui e
-  // so para o usuario ver o erro no campo em vez de tomar erro do servidor.
-  expiry_date: z.string().optional().refine(
-    (v) => {
-      if (!v) return true
-      const ano = Number(v.slice(0, 4))
-      return ano >= 2015 && ano <= new Date().getFullYear() + 30
-    },
-    { message: 'Validade parece digitada errada. Confira o ano.' }
-  ),
-  afm_number: z.string().min(1, 'Numero da AFM e obrigatorio'),
-  supplier_cnpj: z.string().min(1, 'CNPJ do fornecedor e obrigatorio'),
-  supplier_name: z.string().min(1, 'Nome do fornecedor e obrigatorio'),
-  unit_price: z.number().min(0, 'Valor unitario deve ser maior ou igual a 0'),
-  batch_number: z.string().optional(),
-  delivery_date: z.string().optional(),
-  notes: z.string().optional(),
-})
-
-type StockEntryFormData = z.infer<typeof stockEntrySchema>
 
 interface AddStockDialogProps {
   item: Item
@@ -57,201 +44,133 @@ interface AddStockDialogProps {
   onSuccess: () => void
 }
 
+// Mesmas opcoes das telas de Nova Entrada de cada modulo.
+const TIPOS_ALMOX = ['Compra', 'Empréstimo', 'Doação', 'Consignado', 'Troca de validade'] as const
+const TIPOS_FARMACIA = ['Compra', 'Empréstimo', 'Pagamento de empréstimo', 'Doação', 'Permuta', 'Consignado', 'Troca de validade', 'Inventário'] as const
+const QTD_MAXIMA = 100000
+
+function formatCNPJ(value: string) {
+  const n = value.replace(/\D/g, '').slice(0, 14)
+  return n
+    .replace(/(\d{2})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1/$2')
+    .replace(/(\d{4})(\d)/, '$1-$2')
+}
+
 export function AddStockDialog({ item, type, open, onOpenChange, onSuccess }: AddStockDialogProps) {
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const navigate = useNavigate()
+  const farmacia = type === 'pharmacy'
+  const localCodigo = farmacia ? 'CAF' : 'ALMOX'
+  const localNome = farmacia ? 'CAF' : 'Almoxarifado'
+  const tipos: readonly string[] = farmacia ? TIPOS_FARMACIA : TIPOS_ALMOX
 
-  const today = new Date().toISOString().split('T')[0]
-  const defaultExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  const [tipo, setTipo] = useState<string>('Compra')
+  const [nf, setNf] = useState('')
+  const [nfPendente, setNfPendente] = useState(false)
+  const [dataNf, setDataNf] = useState(hojeLocal())
+  const [entrega, setEntrega] = useState(hojeLocal())
+  const [afm, setAfm] = useState('')
+  const [cnpj, setCnpj] = useState('')
+  const [fornecedor, setFornecedor] = useState('')
+  const [qtd, setQtd] = useState('1')
+  const [preco, setPreco] = useState<number | undefined>(undefined)
+  const [lote, setLote] = useState('')
+  // Validade VAZIA: antes vinha hoje+365 e ia gravada sem ninguem conferir.
+  const [validade, setValidade] = useState('')
+  const [obs, setObs] = useState('')
 
-  const { register, handleSubmit, formState: { errors }, reset, watch, setValue } = useForm<StockEntryFormData>({
-    resolver: zodResolver(stockEntrySchema),
-    defaultValues: {
-      quantity: 1,
-      acquisition_type: 'Compra' as const,
-      invoice_number: '',
-      invoice_date: today,
-      invoice_total_value: 0,
-      expiry_date: defaultExpiry,
-      afm_number: '',
-      supplier_cnpj: '',
-      supplier_name: '',
-      unit_price: 0,
-      batch_number: '',
-      delivery_date: today,
-      notes: '',
-    }
-  })
+  const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+  const [parecida, setParecida] = useState<EntradaParecida | null>(null)
+  const [rodadaId, setRodadaId] = useState(novaRodadaId)
+  const trava = useTravaEnvio()
 
-  const quantity = watch('quantity')
-  const unitPrice = watch('unit_price')
-  const totalValue = (quantity || 0) * (unitPrice || 0)
+  // Cada abertura do dialogo e uma entrada nova (rodada nova, campos limpos).
+  useEffect(() => {
+    if (!open) return
+    setRodadaId(novaRodadaId())
+    setTipo('Compra'); setNf(''); setNfPendente(false); setDataNf(hojeLocal()); setEntrega(hojeLocal())
+    setAfm(''); setCnpj(''); setFornecedor(''); setQtd('1'); setPreco(undefined)
+    setLote(''); setValidade(''); setObs(''); setErro(null); setParecida(null)
+    trava.liberar()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, item.id])
 
-  const onSubmit = async (data: StockEntryFormData) => {
+  const isCompra = tipo === 'Compra'
+  const isInventario = tipo === 'Inventário'
+  const quantidade = lerQuantidade(qtd)
+  const erroQtd = erroQuantidade(qtd) ?? ((quantidade ?? 0) > QTD_MAXIMA ? `Quantidade acima de ${QTD_MAXIMA.toLocaleString('pt-BR')}: confira.` : null)
+  const totalLinha = (quantidade ?? 0) * (preco ?? 0)
+  const aviso = avisoValidade(validade, entrega || dataNf || hojeLocal())
+
+  function validar(): string | null {
+    if (erroQtd) return erroQtd
+    if (farmacia && (!lote.trim() || !validade)) return 'Medicamento precisa de lote e validade (rastreabilidade e FEFO).'
+    if (!isInventario && !fornecedor.trim()) return 'Informe o fornecedor / origem.'
+    if (isCompra && !nfPendente && (!nf.trim() || !dataNf)) return 'Para Compra, informe o número e a data da NF — ou marque "a NF ainda não chegou".'
+    return null
+  }
+
+  async function salvar(confirmarParecida = false) {
+    setErro(null)
+    const msg = validar()
+    if (msg) { setErro(msg); return }
+    if (!trava.tentar()) return
+    setParecida(null)
+    setSalvando(true)
+    let gravou = false
     try {
-      setLoading(true)
-      setError(null)
-
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('Usuario nao autenticado')
-
-      if (type === 'pharmacy') {
-        // Farmácia roda no modelo multi-estoque: a entrada precisa passar pelo
-        // ledger. A RPC grava stock_entries (NF/auditoria), insere stock_movements
-        // (ENTRADA_NF -> credita item_stocks via trigger e espelha current_stock)
-        // e cria/incrementa o lote em expiry_tracking, tudo numa transação.
-        // NUNCA escrever em current_stock direto — quebra o saldo multi-estoque.
-        const { error: rpcError } = await supabase.rpc('registrar_entrada_estoque', {
-          p_item_id: item.id,
-          p_item_type: type,
-          p_quantity: data.quantity,
-          p_invoice_number: data.invoice_number,
-          p_invoice_date: data.invoice_date,
-          p_afm_number: data.afm_number,
-          p_supplier_cnpj: data.supplier_cnpj,
-          p_supplier_name: data.supplier_name,
-          p_unit_price: data.unit_price,
-          p_invoice_total_value: data.invoice_total_value,
-          p_acquisition_type: data.acquisition_type,
-          p_batch_number: data.batch_number || null,
-          p_expiry_date: data.expiry_date || null,
-          p_delivery_date: data.delivery_date || null,
-          p_notes: data.notes || null,
-        })
-        if (rpcError) {
-          console.error('Error registering stock entry:', rpcError)
-          throw rpcError
-        }
-      } else {
-        // Almoxarifado roda no modelo legado (current_stock direto, consistente com
-        // as saídas via deduct_warehouse_stock). item_stocks(ALMOX) não é usado aqui.
-        const { error: entryError } = await supabase
-          .from('stock_entries')
-          .insert({
-            item_id: item.id,
-            item_type: type,
-            quantity: data.quantity,
-            acquisition_type: data.acquisition_type,
-            invoice_number: data.invoice_number,
-            invoice_date: data.invoice_date,
-            invoice_total_value: data.invoice_total_value,
-            expiry_date: data.expiry_date || null,
-            afm_number: data.afm_number,
-            supplier_cnpj: data.supplier_cnpj,
-            supplier_name: data.supplier_name,
-            unit_price: data.unit_price,
-            batch_number: data.batch_number || null,
-            delivery_date: data.delivery_date || null,
-            notes: data.notes || null,
-            created_by: user.id,
-          })
-        if (entryError) {
-          console.error('Error creating stock entry:', entryError)
-          throw entryError
-        }
-
-        const { error: updateError } = await supabase
-          .from('warehouse_items')
-          .update({
-            current_stock: item.current_stock + data.quantity,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', item.id)
-        if (updateError) {
-          console.error('Error updating item stock:', updateError)
-          throw updateError
-        }
-
-        if (data.expiry_date && data.batch_number) {
-          // NAO inserir as cegas: ate 10/09/2026 esta tela SEMPRE criava linha
-          // nova em expiry_tracking. Reentrada do mesmo lote (o caso comum:
-          // segunda caixa da mesma nota, ou nota parcelada) virava um segundo
-          // lote com o mesmo numero. A saida depois cai num deles e o outro
-          // afunda para negativo. Era a origem de boa parte dos 63 lotes
-          // negativos do almoxarifado.
-          //
-          // Aqui repetimos o que as RPCs do servidor ja fazem
-          // (registrar_entrada_material, saida_material_*): procura primeiro,
-          // soma no que existe, so cria se nao achar.
-          //
-          // O lote vai normalizado porque trg_normaliza_lote_almox reescreve na
-          // gravacao — mandamos ja em maiuscula/sem espaco para a BUSCA abaixo
-          // enxergar o que o gatilho gravou.
-          const loteNormalizado = data.batch_number.trim().toUpperCase().replace(/\s+/g, '')
-
-          // Lote de material vive todo no mesmo local (o default da coluna), por
-          // isso a busca nao filtra location_id. Entrada COM local escolhido
-          // passa pela RPC registrar_entrada_material, que trata local por local.
-          const { data: existente } = await supabase
-            .from('expiry_tracking')
-            .select('id, initial_quantity, current_quantity')
-            .eq('item_id', item.id)
-            .eq('batch_number', loteNormalizado)
-            .eq('expiry_date', data.expiry_date)
-            .order('created_at', { ascending: true })
-            .limit(1)
-            .maybeSingle()
-
-          if (existente) {
-            // Soma nos dois: current_quantity e o saldo, initial_quantity e o
-            // total que ja entrou daquele lote (usado nos relatorios).
-            const { error: lotError } = await supabase
-              .from('expiry_tracking')
-              .update({
-                initial_quantity: (existente.initial_quantity || 0) + data.quantity,
-                current_quantity: (existente.current_quantity || 0) + data.quantity,
-              })
-              .eq('id', existente.id)
-            // Falha aqui NAO derruba a entrada: stock_entries e current_stock ja
-            // foram gravados acima. Lancar erro faria o usuario repetir a
-            // operacao e somar o estoque duas vezes — pior do que o lote torto.
-            if (lotError) console.error('Error updating existing lot:', lotError)
-          } else {
-            const { error: lotError } = await supabase
-              .from('expiry_tracking')
-              .insert({
-                item_id: item.id,
-                batch_number: loteNormalizado,
-                expiry_date: data.expiry_date,
-                initial_quantity: data.quantity,
-                current_quantity: data.quantity,
-                created_by: user.id,
-                invoice_number: data.invoice_number,
-                invoice_date: data.invoice_date,
-                delivery_date: data.delivery_date,
-                afm_number: data.afm_number,
-                supplier_cnpj: data.supplier_cnpj,
-                supplier_name: data.supplier_name,
-                invoice_total_value: data.invoice_total_value,
-              })
-            // Mesma razao do update acima: nao derruba a entrada ja gravada.
-            if (lotError) console.error('Error creating lot:', lotError)
-          }
-        }
+      const linha = {
+        item_id: item.id,
+        quantity: quantidade,
+        unit_price: preco ?? 0,
+        batch_number: lote.trim() || null,
+        expiry_date: validade || null,
       }
-
-      reset()
+      const comum = {
+        p_invoice_number: nf.trim() || null,
+        p_invoice_date: dataNf || null,
+        p_afm_number: afm.trim() || null,
+        p_supplier_cnpj: cnpj.trim() || null,
+        p_supplier_name: fornecedor.trim() || null,
+        p_items: [linha],
+        p_acquisition_type: tipo,
+        p_location_code: localCodigo,
+        p_delivery_date: entrega || null,
+        p_entry_group_id: rodadaId,
+        p_confirmar_parecida: confirmarParecida,
+        p_nf_pendente: isCompra && nfPendente,
+      }
+      const { error } = farmacia
+        ? await supabase.rpc('registrar_entrada_farmacia', { ...comum, p_notes: obs.trim() || null })
+        : await supabase.rpc('registrar_entrada_nf', { ...comum, p_item_type: 'warehouse' })
+      if (error) throw error
+      gravou = true
       onSuccess()
       onOpenChange(false)
-    } catch (error: any) {
-      console.error('Error adding stock:', error)
-      setError(getErrorMessage(error))
+    } catch (e) {
+      const a = lerAvisoEntrada(e)
+      if (a?.tipo === 'ja_registrada') {
+        // O primeiro envio ja gravou (clique duplo/reenvio); nada somou de novo.
+        gravou = true
+        onSuccess()
+        onOpenChange(false)
+      } else if (a?.tipo === 'parecida') {
+        setParecida(a.info)
+      } else {
+        console.error('Adicionar estoque:', e)
+        setErro(getErrorMessage(e))
+      }
     } finally {
-      setLoading(false)
+      setSalvando(false)
+      if (!gravou) trava.liberar()
     }
   }
 
-  const formatCNPJ = (value: string) => {
-    const numbers = value.replace(/\D/g, '')
-    if (numbers.length <= 14) {
-      return numbers
-        .replace(/(\d{2})(\d)/, '$1.$2')
-        .replace(/(\d{3})(\d)/, '$1.$2')
-        .replace(/(\d{3})(\d)/, '$1/$2')
-        .replace(/(\d{4})(\d)/, '$1-$2')
-    }
-    return value
-  }
+  const rotaNovaEntrada = farmacia
+    ? `/inventory/pharmacy/nf-entry?loc=CAF&item=${item.id}`
+    : `/inventory/warehouse/nf-entry?loc=ALMOX&item=${item.id}`
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -261,261 +180,145 @@ export function AddStockDialog({ item, type, open, onOpenChange, onSuccess }: Ad
             <Package2 className="w-5 h-5 text-primary-600" />
             Adicionar Estoque
           </DialogTitle>
-          <div className="mt-2 p-3 bg-gray-50 rounded-lg">
-            <p className="text-sm text-gray-600">
-              <span className="font-medium">Item:</span> {item.name}
-            </p>
-            <p className="text-sm text-gray-600">
-              <span className="font-medium">Codigo:</span> {item.code}
-            </p>
-            <p className="text-sm text-gray-600">
-              <span className="font-medium">UF:</span> {item.unit}
-            </p>
-            <p className="text-sm text-gray-600">
-              <span className="font-medium">Estoque atual:</span> {item.current_stock} {item.unit}
-            </p>
+          <div className="mt-2 p-3 bg-gray-50 rounded-lg text-sm text-gray-600 space-y-0.5">
+            <p><span className="font-medium">Item:</span> {item.name}</p>
+            <p><span className="font-medium">Código:</span> {item.code ?? '—'} · <span className="font-medium">Unidade:</span> {item.unit}</p>
+            <p><span className="font-medium">Destino:</span> {localNome}</p>
           </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Grava como a <strong>Nova Entrada</strong>. NF com vários itens ou entrada em outro estoque?{' '}
+            <button type="button" className="underline text-primary-700" onClick={() => { onOpenChange(false); navigate(rotaNovaEntrada) }}>
+              Abrir Nova Entrada
+            </button>
+          </p>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+        <div className="space-y-6">
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-gray-700 border-b pb-2">
-              <FileText className="w-4 h-4" />
-              Dados da Nota Fiscal
+              <FileText className="w-4 h-4" /> Dados da entrada
             </div>
-
-            <div>
-              <Label htmlFor="acquisition_type">Tipo de Aquisição *</Label>
-              <select
-                id="acquisition_type"
-                {...register('acquisition_type')}
-                className="mt-1 w-full h-9 rounded-md border border-input px-3 py-1 bg-white text-sm"
-              >
-                <option value="Compra">Compra</option>
-                <option value="Empréstimo">Empréstimo</option>
-                <option value="Doação">Doação</option>
-                <option value="Permuta">Permuta</option>
-                <option value="Inventário">Inventário</option>
-              </select>
-              {errors.acquisition_type && (
-                <p className="text-sm text-red-500 mt-1">{errors.acquisition_type.message}</p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="invoice_number">Numero da Nota Fiscal *</Label>
-                <Input
-                  id="invoice_number"
-                  {...register('invoice_number')}
-                  className="mt-1"
-                  placeholder="Ex: NF-123456"
-                />
-                {errors.invoice_number && (
-                  <p className="text-sm text-red-500 mt-1">{errors.invoice_number.message}</p>
+                <Label htmlFor="as-tipo">Tipo de entrada *</Label>
+                <select id="as-tipo" value={tipo} onChange={(e) => setTipo(e.target.value)}
+                  className="mt-1 w-full h-9 rounded-md border border-input px-3 py-1 bg-white text-sm">
+                  {tipos.map((t) => <option key={t} value={t}>{t === 'Inventário' ? 'Ajuste por inventário' : t}</option>)}
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="as-nf">Número da NF {isCompra && !nfPendente ? '*' : '(opcional)'}</Label>
+                <Input id="as-nf" value={nf} onChange={(e) => setNf(e.target.value)} className="mt-1" placeholder="Ex: 123456" />
+                {isCompra && (
+                  <label className="flex items-start gap-2 mt-2 text-xs text-gray-600">
+                    <input type="checkbox" checked={nfPendente} onChange={(e) => setNfPendente(e.target.checked)} className="mt-0.5" />
+                    <span>A NF ainda não chegou — fica como <strong>NF pendente</strong> para completar depois em Entradas.</span>
+                  </label>
                 )}
               </div>
-
               <div>
-                <Label htmlFor="invoice_date">Data de Emissao *</Label>
-                <Input
-                  id="invoice_date"
-                  type="date"
-                  {...register('invoice_date')}
-                  className="mt-1"
-                />
-                {errors.invoice_date && (
-                  <p className="text-sm text-red-500 mt-1">{errors.invoice_date.message}</p>
-                )}
+                <Label htmlFor="as-dnf">Data de emissão da NF</Label>
+                <Input id="as-dnf" type="date" value={dataNf} onChange={(e) => setDataNf(e.target.value)} className="mt-1" />
               </div>
-
               <div>
-                <Label htmlFor="invoice_total_value">Valor Total da Nota *</Label>
-                <div className="mt-1">
-                  <CurrencyInput
-                    id="invoice_total_value"
-                    value={watch('invoice_total_value')}
-                    onChange={(v) => setValue('invoice_total_value', v as any)}
-                  />
-                </div>
-                {errors.invoice_total_value && (
-                  <p className="text-sm text-red-500 mt-1">{errors.invoice_total_value.message}</p>
-                )}
+                <Label htmlFor="as-ent">Data de entrega</Label>
+                <Input id="as-ent" type="date" value={entrega} onChange={(e) => setEntrega(e.target.value)} className="mt-1" />
               </div>
-
               <div>
-                <Label htmlFor="afm_number">Numero da AFM *</Label>
-                <Input
-                  id="afm_number"
-                  {...register('afm_number')}
-                  className="mt-1"
-                  placeholder="Ex: AFM-2024-001"
-                />
-                {errors.afm_number && (
-                  <p className="text-sm text-red-500 mt-1">{errors.afm_number.message}</p>
-                )}
+                <Label htmlFor="as-afm">Número da AFM (opcional)</Label>
+                <Input id="as-afm" value={afm} onChange={(e) => setAfm(e.target.value)} className="mt-1" />
               </div>
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-gray-700 border-b pb-2">
-              <Building2 className="w-4 h-4" />
-              Dados do Fornecedor
+              <Building2 className="w-4 h-4" /> Fornecedor
             </div>
-
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="supplier_cnpj">CNPJ do Fornecedor *</Label>
-                <Input
-                  id="supplier_cnpj"
-                  {...register('supplier_cnpj')}
-                  className="mt-1"
-                  placeholder="00.000.000/0000-00"
-                  onChange={(e) => {
-                    e.target.value = formatCNPJ(e.target.value)
-                  }}
-                  maxLength={18}
-                />
-                {errors.supplier_cnpj && (
-                  <p className="text-sm text-red-500 mt-1">{errors.supplier_cnpj.message}</p>
-                )}
+                <Label htmlFor="as-cnpj">CNPJ (opcional)</Label>
+                <Input id="as-cnpj" value={cnpj} onChange={(e) => setCnpj(formatCNPJ(e.target.value))} placeholder="00.000.000/0000-00" maxLength={18} className="mt-1" />
               </div>
-
               <div>
-                <Label htmlFor="supplier_name">Nome do Fornecedor *</Label>
-                <Input
-                  id="supplier_name"
-                  {...register('supplier_name')}
-                  className="mt-1"
-                  placeholder="Nome da empresa fornecedora"
-                />
-                {errors.supplier_name && (
-                  <p className="text-sm text-red-500 mt-1">{errors.supplier_name.message}</p>
-                )}
+                <Label htmlFor="as-forn">{isInventario ? 'Fornecedor / Origem (opcional)' : 'Fornecedor / Origem *'}</Label>
+                <Input id="as-forn" value={fornecedor} onChange={(e) => setFornecedor(e.target.value)} className="mt-1" />
               </div>
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-gray-700 border-b pb-2">
-              <Package2 className="w-4 h-4" />
-              Dados do Produto
+              <Package2 className="w-4 h-4" /> Produto
             </div>
-
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <Label htmlFor="quantity">Quantidade *</Label>
-                <Input
-                  id="quantity"
-                  type="number"
-                  min="1"
-                  {...register('quantity', { valueAsNumber: true })}
-                  className="mt-1"
-                />
-                {errors.quantity && (
-                  <p className="text-sm text-red-500 mt-1">{errors.quantity.message}</p>
-                )}
+                <Label htmlFor="as-qtd">Quantidade *</Label>
+                <Input id="as-qtd" type="text" inputMode="numeric" value={qtd} onChange={(e) => setQtd(e.target.value)}
+                  className={`mt-1 ${erroQtd ? 'border-red-400' : ''}`} />
+                {erroQtd && <p className="text-xs text-red-600 mt-1">{erroQtd}</p>}
               </div>
-
               <div>
-                <Label htmlFor="unit_price">Valor Unitário *</Label>
-                <div className="mt-1">
-                  <CurrencyInput
-                    id="unit_price"
-                    value={watch('unit_price')}
-                    onChange={(v) => setValue('unit_price', v as any)}
-                  />
-                </div>
-                {errors.unit_price && (
-                  <p className="text-sm text-red-500 mt-1">{errors.unit_price.message}</p>
-                )}
+                <Label htmlFor="as-preco">Valor unitário</Label>
+                <div className="mt-1"><CurrencyInput id="as-preco" value={preco} onChange={setPreco} /></div>
               </div>
-
               <div>
-                <Label>Valor Total do Item</Label>
+                <Label>Valor desta linha</Label>
                 <div className="mt-1 h-9 px-3 py-2 bg-gray-100 rounded-md text-sm font-medium text-gray-700">
-                  R$ {totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  R$ {totalLinha.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
               </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="batch_number">Numero do Lote</Label>
-                <Input
-                  id="batch_number"
-                  {...register('batch_number')}
-                  className="mt-1"
-                  placeholder="Ex: LOTE-2024-001"
-                />
+                <Label htmlFor="as-lote">Lote {farmacia ? '*' : '(opcional)'}</Label>
+                <Input id="as-lote" value={lote} onChange={(e) => setLote(e.target.value)} className="mt-1" />
               </div>
-
               <div>
-                <Label htmlFor="expiry_date">Prazo de Validade</Label>
-                <Input
-                  id="expiry_date"
-                  type="date"
-                  {...register('expiry_date')}
-                  className="mt-1"
-                />
+                <Label htmlFor="as-val">Validade {farmacia ? '*' : '(opcional)'}</Label>
+                <Input id="as-val" type="date" value={validade} onChange={(e) => setValidade(e.target.value)} className="mt-1" />
+                {aviso && <p className="text-xs text-amber-700 mt-1">{aviso}</p>}
               </div>
             </div>
+            {farmacia && (
+              <div>
+                <Label htmlFor="as-obs">Observação (opcional)</Label>
+                <textarea id="as-obs" value={obs} onChange={(e) => setObs(e.target.value)} rows={2}
+                  className="w-full mt-1 rounded-md border border-input px-3 py-2 bg-white text-sm" />
+              </div>
+            )}
           </div>
 
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-gray-700 border-b pb-2">
-              <Calendar className="w-4 h-4" />
-              Dados de Entrega
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="delivery_date">Data de Entrega</Label>
-                <Input
-                  id="delivery_date"
-                  type="date"
-                  {...register('delivery_date')}
-                  className="mt-1"
-                />
+          {parecida && (
+            <div className="p-3 text-sm bg-amber-50 rounded-md border border-amber-300 space-y-2">
+              <p className="text-amber-900 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span><strong>Esta entrada parece repetida.</strong> {descreverParecida(parecida)}</span>
+              </p>
+              <p className="text-xs text-amber-800">
+                Se a nota só chegou agora para uma mercadoria que já entrou, não registre de novo: complete a entrada
+                existente em Entradas.
+              </p>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setParecida(null)}>Cancelar</Button>
+                <Button type="button" size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" disabled={salvando}
+                  onClick={() => salvar(true)}>
+                  É outra entrada — registrar mesmo assim
+                </Button>
               </div>
-            </div>
-
-            <div>
-              <Label htmlFor="notes">Observacoes</Label>
-              <textarea
-                id="notes"
-                {...register('notes')}
-                className="w-full mt-1 rounded-md border border-input px-3 py-2 min-h-[80px] bg-white"
-                placeholder="Observacoes adicionais (opcional)"
-              />
-            </div>
-          </div>
-
-          {error && (
-            <div className="p-3 text-sm text-red-500 bg-red-50 rounded-md border border-red-200">
-              {error}
             </div>
           )}
 
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <p className="text-sm text-blue-700">
-              <span className="font-medium">Resumo:</span> Sera adicionado{' '}
-              <span className="font-bold">{quantity || 0} {item.unit}</span> ao estoque.
-              Novo estoque total: <span className="font-bold">{item.current_stock + (quantity || 0)} {item.unit}</span>
-            </p>
-          </div>
+          {erro && (
+            <div className="p-3 text-sm text-red-600 bg-red-50 rounded-md border border-red-200">{erro}</div>
+          )}
 
-          <DialogFooter className="pt-4">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={loading}>
-              {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+            <Button type="button" onClick={() => salvar()} disabled={salvando}>
+              {salvando && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Confirmar Entrada
             </Button>
           </DialogFooter>
-        </form>
+        </div>
       </DialogContent>
     </Dialog>
   )
