@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { supabase } from '@/lib/supabase'
 import { pharmacyStockById, PHARMACY_STOCKS, departmentBelongsToStock, type PharmacyStock } from '@/lib/constants/stock-locations'
+import { montarPerfil, moduloDoSetor, type PerfilAcesso } from '@/lib/permissoes'
 
 export type ModuleType = 'farmacia' | 'almoxarifado' | null
 
@@ -25,6 +26,14 @@ interface ModuleContextType {
   // pode ATENDER uma solicitação — ver lib/utils/request-scope.ts.
   // null = sem vínculo (admin, Supervisão Administrativa, sem setor) => sem restrição.
   homeModule: ModuleType
+  // Perfil de acesso (papel + módulos que pode operar), do mapa único em
+  // lib/permissoes.ts. Usado pelo menu e pela guarda de rotas.
+  perfil: PerfilAcesso
+  // false enquanto o setor do usuário ainda está sendo lido do banco.
+  setorPronto: boolean
+  // true se não foi possível ler o setor (rede/banco). recarregarSetor tenta de novo.
+  erroSetor: boolean
+  recarregarSetor: () => void
 }
 
 const ModuleContext = createContext<ModuleContextType | null>(null)
@@ -53,50 +62,70 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   const isAtendente = user?.role === 'atendente'
   // Farmacêutico é sempre usuário de farmácia (mesma nav do atendente-farmácia).
   const isPharmacist = user?.role === 'pharmacist'
-  const [atendenteModule, setAtendenteModule] = useState<ModuleType>(null)
   // Nome do setor do usuário (usado pra derivar módulo do atendente e pra
   // restringir os estoques de quem é lotado numa satélite).
   const [deptName, setDeptName] = useState<string | null>(null)
+  // Para qual (usuário:setor) o nome acima já foi carregado. Enquanto não
+  // carregou, as guardas de rota esperam (não negam nem liberam no escuro).
+  const [setorCarregadoPara, setSetorCarregadoPara] = useState<string | null>(null)
+  const [erroSetor, setErroSetor] = useState(false)
+  const [tentativaSetor, setTentativaSetor] = useState(0)
+  const needsDept = isAtendente || isPharmacist || isGestor
+  const chaveSetor = user ? `${user.id}:${user.department_id ?? ''}` : null
 
   useEffect(() => {
     // Também carregamos o setor do GESTOR — pra saber se ele é gestor de
     // farmácia (entra só na farmácia) ou de almox/geral (vê os dois módulos).
-    const needsDept = isAtendente || isPharmacist || isGestor
-    if (!needsDept || !user?.department_id) { setAtendenteModule(null); setDeptName(null); return }
+    if (!needsDept || !user?.department_id) { setDeptName(null); setErroSetor(false); return }
     let cancelled = false
-    ;(async () => {
-      const { data } = await supabase
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const chave = `${user.id}:${user.department_id}`
+    const carregar = async (tentativa: number) => {
+      const { data, error } = await supabase
         .from('departments')
         .select('name')
-        .eq('id', user.department_id)
+        .eq('id', user.department_id!)
         .maybeSingle()
       if (cancelled) return
-      const nome = (data as { name?: string } | null)?.name || ''
-      setDeptName(nome)
-      setAtendenteModule(isAtendente
-        ? (nome.trim().toLowerCase() === 'almoxarifado' ? 'almoxarifado' : 'farmacia')
-        : null)
-    })()
-    return () => { cancelled = true }
-  }, [isAtendente, isPharmacist, isGestor, user?.department_id])
+      if (error) {
+        // Antes o erro virava "setor vazio" e o atendente do ALMOXARIFADO caía
+        // no módulo da farmácia. Agora tenta de novo e, se não der, avisa.
+        if (tentativa < 3) {
+          timer = setTimeout(() => carregar(tentativa + 1), 1500 * (tentativa + 1))
+          return
+        }
+        setErroSetor(true)
+        return
+      }
+      setErroSetor(false)
+      setDeptName((data as { name?: string } | null)?.name || '')
+      setSetorCarregadoPara(chave)
+    }
+    setErroSetor(false)
+    carregar(0)
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+  }, [needsDept, user?.id, user?.department_id, tentativaSetor])
+
+  // true quando o módulo/setor do usuário já é conhecido.
+  const setorPronto = !!user && (!needsDept || !user.department_id || setorCarregadoPara === chaveSetor)
+  const recarregarSetor = () => setTentativaSetor((n) => n + 1)
+  const nomeSetorAtual = setorPronto && user?.department_id ? deptName : null
+  const perfil: PerfilAcesso = montarPerfil(user?.role, nomeSetorAtual)
+  // Módulo do atendente = módulo do setor (Almoxarifado => almox; CAF/Satélites
+  // => farmácia). Setor de outra área ou sem setor => nenhum (antes caía em
+  // farmácia e o menu mostrava os dois módulos).
+  const atendenteModule: ModuleType = isAtendente ? moduloDoSetor(nomeSetorAtual) : null
 
   // Módulo de origem do usuário, derivado do SETOR. É o que decide se ele pode
   // atender uma solicitação (ver lib/utils/request-scope.ts). Admin e quem não
   // é de farmácia nem de almoxarifado (ex.: Supervisão Administrativa) ficam
   // com null = sem restrição, pra não trancar a supervisão fora do sistema.
-  const homeModule: ModuleType = (() => {
-    if (isAdmin) return null
-    if (!deptName) return null
-    if (deptName.trim().toLowerCase() === 'almoxarifado') return 'almoxarifado'
-    if (PHARMACY_STOCKS.some((s) => departmentBelongsToStock(deptName, s))) return 'farmacia'
-    return null
-  })()
+  const homeModule: ModuleType = isAdmin ? null : moduloDoSetor(nomeSetorAtual)
 
   // Gestor lotado numa farmácia (CAF ou satélite) opera SÓ a farmácia: não vê
   // o card de Almoxarifado nem a tela de escolha de módulo — cai direto no
   // seletor de estoque. Gestor de almox/geral e admin seguem com os dois módulos.
-  const isPharmacyGestor = isGestor && !!deptName &&
-    PHARMACY_STOCKS.some((s) => departmentBelongsToStock(deptName, s))
+  const isPharmacyGestor = isGestor && moduloDoSetor(nomeSetorAtual) === 'farmacia'
 
   // Escolhem entre Farmácia e Almoxarifado: admin e gestor NÃO-farmácia.
   const isModuleUser = isAdmin || (isGestor && !isPharmacyGestor)
@@ -104,8 +133,8 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   // Operador de farmácia lotado numa SATÉLITE só enxerga as 3 satélites (sem
   // CAF). Gestor/admin e quem é lotado no CAF continuam vendo tudo. Como hoje
   // ninguém é lotado em satélite, essa regra só afeta quem for cadastrado assim.
-  const satelliteOnly = (isAtendente || isPharmacist) && !!deptName &&
-    PHARMACY_STOCKS.some((s) => s.code !== 'CAF' && departmentBelongsToStock(deptName, s))
+  const satelliteOnly = (isAtendente || isPharmacist) && !!nomeSetorAtual &&
+    PHARMACY_STOCKS.some((s) => s.code !== 'CAF' && departmentBelongsToStock(nomeSetorAtual, s))
   const allowedStocks = satelliteOnly
     ? PHARMACY_STOCKS.filter((s) => s.code !== 'CAF')
     : PHARMACY_STOCKS
@@ -206,7 +235,7 @@ export function ModuleProvider({ children }: { children: ReactNode }) {
   }, [satelliteOnly, activeStock])
 
   return (
-    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, isPharmacyStockUser, allowedStocks, activeStock, setActiveStock, homeModule }}>
+    <ModuleContext.Provider value={{ activeModule: effectiveModule, setActiveModule, isModuleUser, isPharmacyStockUser, allowedStocks, activeStock, setActiveStock, homeModule, perfil, setorPronto, erroSetor, recarregarSetor }}>
       {children}
     </ModuleContext.Provider>
   )

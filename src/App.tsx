@@ -96,11 +96,17 @@ import { MovimentacaoDiaria } from '@/pages/farmacia/movimentacao-diaria'
 import { ConsentGate } from '@/components/lgpd/consent-gate'
 import { useModule } from '@/contexts/module'
 import { ModuleLayout } from '@/components/module-layout-wrapper'
+import { GuardaAcesso } from '@/components/guarda-acesso'
+import { AvisoSemSetor, PaginaNaoEncontrada } from '@/components/telas-de-aviso'
+import { Toaster } from 'sonner'
 
 const queryClient = new QueryClient()
 
 function DashboardOrSelector() {
-  const { activeModule, isModuleUser, isPharmacyStockUser, activeStock } = useModule()
+  const { activeModule, isModuleUser, isPharmacyStockUser, activeStock, perfil, setorPronto } = useModule()
+  // Atendente sem setor de farmácia/almox: não opera nenhum módulo (antes o
+  // painel mostrava os dois). Só pede material e vê o aviso.
+  if (setorPronto && perfil.semSetor) return <AvisoSemSetor />
   // Gestor/admin: escolhem primeiro o módulo (Farmácia/Almoxarifado).
   if (isModuleUser && !activeModule) return <ModuleSelector />
   // Farmacêutico / atendente de farmácia: entram direto na escolha do estoque
@@ -135,7 +141,9 @@ export default function App() {
                 <Route path="/login" element={<Login />} />
                 {/* Autocadastro desligado (16/09/2026): link antigo volta ao login. */}
                 <Route path="/register" element={<Navigate to="/login" replace />} />
-                <Route path="/change-password" element={<ChangePassword />} />
+                {/* Protegida: sem sessão não há senha para trocar (antes a tela abria
+                    sem login e a flag must_change_password nunca era limpa). */}
+                <Route path="/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
                 <Route path="/tv/warehouse" element={<WarehouseTVDashboard />} />
                 <Route path="/tv/warehouse/history" element={<TVHistory type="warehouse" />} />
                 <Route path="/tv/warehouse/:id" element={<TVRequestDetail type="warehouse" />} />
@@ -759,7 +767,9 @@ export default function App() {
               } />
               <Route path="/farmacia/movimentacoes/:id/imprimir" element={
                 <ProtectedRoute>
-                  <PharmacyLoanDetail printMode />
+                  <GuardaAcesso>
+                    <PharmacyLoanDetail printMode />
+                  </GuardaAcesso>
                 </ProtectedRoute>
               } />
 
@@ -787,7 +797,9 @@ export default function App() {
               } />
               <Route path="/almoxarifado/movimentacoes/:id/imprimir" element={
                 <ProtectedRoute>
-                  <PharmacyLoanDetail printMode />
+                  <GuardaAcesso>
+                    <PharmacyLoanDetail printMode />
+                  </GuardaAcesso>
                 </ProtectedRoute>
               } />
 
@@ -813,6 +825,7 @@ export default function App() {
 
               {/* Farmácia module */}
               <Route path="/farmacia" element={<ModuleLayout module="farmacia" />}>
+                <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="dashboard" element={<Dashboard module="farmacia" />} />
                 <Route path="inventory" element={<PharmacyItems />} />
                 <Route path="inventory/nf-entry" element={<NfEntry type="pharmacy" />} />
@@ -862,6 +875,7 @@ export default function App() {
 
               {/* Almoxarifado module */}
               <Route path="/almox" element={<ModuleLayout module="almoxarifado" />}>
+                <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="dashboard" element={<Dashboard module="almoxarifado" />} />
                 <Route path="inventory" element={<WarehouseItems />} />
                 <Route path="inventory/nf-entry" element={<NfEntryWarehouse />} />
@@ -896,8 +910,18 @@ export default function App() {
                 <Route path="reports/movimentacoes" element={<MovementsReport />} />
               </Route>
 
+              {/* Endereço que não existe: aviso dentro do layout (menu visível). */}
+              <Route path="*" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <PaginaNaoEncontrada />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+
               </Routes>
             </ConsentGate>
+            <Toaster richColors closeButton position="top-right" />
             </ModuleProvider>
             </AuthProvider>
             </ThemeProvider>
