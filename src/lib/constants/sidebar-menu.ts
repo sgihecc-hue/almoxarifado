@@ -194,7 +194,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
       title: 'Operações',
       module: 'almoxarifado',
       items: [
-        { name: 'Quebras e Avarias', icon: PackageMinus, href: '/estoque/saida-avulsa', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Quebras e Avarias', icon: PackageMinus, href: '/inventory/warehouse/saida-lote?loc=ALMOX', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Devoluções', icon: Undo2, href: '/estoque/devolucao', show: () => true },
         { name: 'Estorno', icon: Undo2, href: '/almox/estoque/estorno', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Empréstimos', icon: Handshake, href: '/estoque/emprestimos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },

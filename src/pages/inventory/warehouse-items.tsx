@@ -638,6 +638,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
           // So o satelite (SAT_T) edita lote: ele tem saldo por local. O
           // almoxarifado central nao passa isto e segue sem o bloco de lotes.
           allowLotEdit={!!locationId}
+          locationId={locationId}
           open={showEditItemDialog}
           onOpenChange={(open) => {
             setShowEditItemDialog(open)

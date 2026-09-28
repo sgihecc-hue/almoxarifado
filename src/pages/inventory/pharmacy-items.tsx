@@ -934,6 +934,8 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
         <EditItemDialog
           item={selectedItem}
           type={catalogItemType}
+          allowLotEdit={isWarehouseStock}
+          locationId={effectiveLocationId}
           open={showEditItemDialog}
           onOpenChange={(open) => {
             setShowEditItemDialog(open)
