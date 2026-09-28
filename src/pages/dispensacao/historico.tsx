@@ -57,6 +57,7 @@ export function HistoricoDispensacoes() {
 
   const [filtered, setFiltered] = useState<PharmacyDispensation[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
 
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -79,8 +80,10 @@ export function HistoricoDispensacoes() {
         : await pharmacyDispensationService.getAll({ ...f, locationId: activeStock?.id })
       setFiltered(data)
       setPage(0)
+      setLoadError('')
     } catch (e) {
       console.error(e)
+      setLoadError('Erro ao carregar o histórico: ' + ((e as any)?.message ?? 'falha de conexão'))
     } finally {
       setLoading(false)
     }
@@ -168,7 +171,12 @@ export function HistoricoDispensacoes() {
       </div>
 
       {/* Lista */}
-      {loading ? (
+      {!loading && loadError ? (
+        <div className="p-6 text-center text-sm text-red-600" style={card}>
+          {loadError}{' '}
+          <button className="underline" onClick={() => void load()}>Tentar de novo</button>
+        </div>
+      ) : loading ? (
         <div className="p-8 flex items-center justify-center gap-3" style={card}>
           <Loader2 size={20} className="animate-spin" style={{ color: txtMut }} />
           <span style={{ color: txtMut }}>Carregando histórico...</span>

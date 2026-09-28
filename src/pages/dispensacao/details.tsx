@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useTheme } from '@/contexts/theme'
 import { ArrowLeft, User, FileText, Pill as PillIcon, Clock, XCircle, CheckCircle2, Loader2, AlertCircle, Building2 } from 'lucide-react'
@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { pharmacyDispensationService } from '@/lib/services/pharmacy-dispensation'
+import { getErrorMessage } from '@/lib/utils/error-messages'
 import { isMaterialDispensationId, loadMaterialDispensationById } from '@/lib/services/material-dispensations'
 import { useModule } from '@/contexts/module'
 import type { PharmacyDispensation } from '@/lib/types/dispensation'
@@ -41,6 +42,10 @@ export function DispensationDetails() {
   const [showCancel, setShowCancel] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
   const [cancelling, setCancelling] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [cancelError, setCancelError] = useState('')
+  const [cancelOk, setCancelOk] = useState('')
+  const cancelandoRef = useRef(false)
 
   useEffect(() => {
     if (id) loadData()
@@ -48,6 +53,7 @@ export function DispensationDetails() {
 
   async function loadData() {
     setLoading(true)
+    setLoadError('')
     try {
       // Dispensacao de MATERIAL nao existe em pharmacy_dispensations: ela vive
       // em stock_movements e a lista monta uma chave sintetica. Por isso o
@@ -58,22 +64,29 @@ export function DispensationDetails() {
       setDispensation(data)
     } catch (e) {
       console.error('Error:', e)
+      setLoadError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
   }
 
   const handleCancel = async () => {
-    if (!cancelReason.trim() || !id) return
+    if (!cancelReason.trim() || !id || cancelandoRef.current) return
+    cancelandoRef.current = true
     setCancelling(true)
+    setCancelError('')
     try {
       await pharmacyDispensationService.cancel(id, cancelReason)
-      await loadData()
       setShowCancel(false)
       setCancelReason('')
+      setCancelOk('Dispensação cancelada e estoque devolvido.')
+      await loadData()
     } catch (e) {
       console.error('Error:', e)
+      // O cancelamento falhou: avisa (antes a tela ficava igual, sem aviso).
+      setCancelError('Não foi possível cancelar: ' + getErrorMessage(e))
     } finally {
+      cancelandoRef.current = false
       setCancelling(false)
     }
   }
@@ -82,6 +95,19 @@ export function DispensationDetails() {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 size={32} className="animate-spin" style={{ color: txtMut }} />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-4">
+        <AlertCircle size={48} className="text-red-500" />
+        <p className="text-red-700 text-sm">Erro ao carregar a dispensação: {loadError}</p>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => loadData()}>Tentar de novo</Button>
+          <Button variant="outline" onClick={() => navigate('/dispensacao')}>Voltar</Button>
+        </div>
       </div>
     )
   }
@@ -253,6 +279,13 @@ export function DispensationDetails() {
           {d.cancellation_reason && infoItem('Motivo do cancelamento', d.cancellation_reason)}
         </div>
       </div>
+
+      {cancelOk && (
+        <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">{cancelOk}</div>
+      )}
+      {cancelError && (
+        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">{cancelError}</div>
+      )}
 
       {/* Cancel Action */}
       {(d.status === 'completed' || d.status === 'pending_approval') && (

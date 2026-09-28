@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { lerQuantidade } from '@/lib/utils/seguro'
 import { warehouseDispatchService, DISPATCH_TYPE_LABELS, type DispatchType } from '@/lib/services/warehouse-dispatch'
 import { itemsService } from '@/lib/services/items'
 import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
@@ -21,7 +22,9 @@ interface SelectedItem {
   barcode?: string | null
   unit: string
   current_stock: number
-  quantity: number
+  // Texto digitado (convertido so ao validar/enviar): parseInt(v)||1 num input
+  // controlado fazia "5" virar "15" ao apagar e redigitar.
+  quantity: string
 }
 
 interface Department {
@@ -57,6 +60,10 @@ export function NewWarehouseDispatch() {
   // Submit state
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  // Trava de duplo clique (o estado do React nao bloqueia o 2o clique no mesmo
+  // tick) e chave da rodada: repetir o envio nao grava a saida duas vezes.
+  const enviandoRef = useRef(false)
+  const chaveRef = useRef<string>(crypto.randomUUID())
 
   useEffect(() => {
     loadItems()
@@ -82,6 +89,7 @@ export function NewWarehouseDispatch() {
       setAllItems((data as any) || [])
     } catch (e) {
       console.error('Error loading items:', e)
+      setError('Não foi possível carregar os itens do almoxarifado: ' + getErrorMessage(e) + ' Recarregue a página.')
     } finally {
       setLoadingItems(false)
     }
@@ -97,6 +105,7 @@ export function NewWarehouseDispatch() {
       setDepartments((data as any) || [])
     } catch (e) {
       console.error('Error loading departments:', e)
+      setError('Não foi possível carregar os setores: ' + getErrorMessage(e) + ' Recarregue a página.')
     }
   }
 
@@ -106,7 +115,7 @@ export function NewWarehouseDispatch() {
       if (existing) {
         // Scan duplicado → incrementa quantidade
         return prev.map((s) =>
-          s.item_id === item.id ? { ...s, quantity: s.quantity + 1 } : s,
+          s.item_id === item.id ? { ...s, quantity: String((lerQuantidade(s.quantity) ?? 0) + 1) } : s,
         )
       }
       return [
@@ -118,7 +127,7 @@ export function NewWarehouseDispatch() {
           barcode: (item as any).barcode,
           unit: item.unit || 'UN',
           current_stock: item.current_stock || 0,
-          quantity: 1,
+          quantity: '1',
         },
       ]
     })
@@ -198,11 +207,12 @@ export function NewWarehouseDispatch() {
     setSelectedItems((prev) => prev.filter((i) => i.item_id !== itemId))
   }
 
-  const updateQuantity = (itemId: string, qty: number) => {
+  const updateQuantity = (itemId: string, qty: string) => {
     setSelectedItems((prev) =>
-      prev.map((i) => (i.item_id === itemId ? { ...i, quantity: Math.max(1, qty) } : i)),
+      prev.map((i) => (i.item_id === itemId ? { ...i, quantity: qty } : i)),
     )
   }
+  const qtd = (i: SelectedItem) => lerQuantidade(i.quantity)
 
   const hasDestination =
     destinationType === 'interno'
@@ -210,11 +220,12 @@ export function NewWarehouseDispatch() {
       : departmentText.trim().length > 0
   const allItemsValid =
     selectedItems.length > 0 &&
-    selectedItems.every((i) => i.quantity > 0 && i.quantity <= i.current_stock)
+    selectedItems.every((i) => { const q = qtd(i); return q !== null && q > 0 && q <= i.current_stock })
   const canSubmit = hasDestination && allItemsValid
 
   const handleSubmit = async () => {
-    if (!canSubmit) return
+    if (!canSubmit || enviandoRef.current) return
+    enviandoRef.current = true
     setSubmitting(true)
     setError('')
     try {
@@ -225,12 +236,13 @@ export function NewWarehouseDispatch() {
           destinationType === 'externo' ? departmentText.trim() : undefined,
         dispatch_type: dispatchType,
         notes: notes || undefined,
-        items: selectedItems.map((i) => ({ item_id: i.item_id, quantity: i.quantity })),
-      })
+        items: selectedItems.map((i) => ({ item_id: i.item_id, quantity: qtd(i) as number })),
+      }, chaveRef.current)
+      // sucesso: nao reabilita o botao — sai da tela
       navigate('/saida-direta')
     } catch (e: any) {
       setError(getErrorMessage(e))
-    } finally {
+      enviandoRef.current = false
       setSubmitting(false)
     }
   }
@@ -475,7 +487,9 @@ export function NewWarehouseDispatch() {
         ) : (
           <div className="space-y-2">
             {selectedItems.map((item) => {
-              const overStock = item.quantity > item.current_stock
+              const q = qtd(item)
+              const overStock = q !== null && q > item.current_stock
+              const invalida = q === null || q <= 0
               return (
                 <div
                   key={item.item_id}
@@ -499,14 +513,11 @@ export function NewWarehouseDispatch() {
                   <div className="flex items-center gap-2">
                     <Label className="text-xs">Qtd:</Label>
                     <input
-                      type="number"
-                      min={1}
-                      max={item.current_stock}
+                      type="text"
+                      inputMode="numeric"
                       value={item.quantity}
                       ref={(el) => { quantityRefs.current[item.item_id] = el }}
-                      onChange={(e) =>
-                        updateQuantity(item.item_id, parseInt(e.target.value) || 1)
-                      }
+                      onChange={(e) => updateQuantity(item.item_id, e.target.value)}
                       onWheel={(e) => e.currentTarget.blur()}
                       onKeyDown={(e) => {
                         // Tab ou Enter no campo quantidade → volta pro scan
@@ -521,6 +532,9 @@ export function NewWarehouseDispatch() {
                   </div>
                   {overStock && (
                     <span className="text-xs text-red-600 whitespace-nowrap">Excede estoque!</span>
+                  )}
+                  {invalida && (
+                    <span className="text-xs text-red-600 whitespace-nowrap">Quantidade inteira maior que zero</span>
                   )}
                   <button
                     onClick={() => removeItem(item.item_id)}

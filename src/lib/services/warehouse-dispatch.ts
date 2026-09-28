@@ -88,7 +88,7 @@ class WarehouseDispatchService {
 
     if (error) {
       console.error('Error listing warehouse dispatches:', error)
-      return []
+      throw new Error('Erro ao carregar as saídas diretas: ' + error.message)
     }
 
     return (data || []).map((row: any) => ({
@@ -167,79 +167,48 @@ class WarehouseDispatchService {
     }
   }
 
-  async create(data: CreateWarehouseDispatchData): Promise<{ id: string }> {
-    const { data: authData } = await supabase.auth.getUser()
-    if (!authData?.user) throw new Error('Usuário não autenticado')
-
+  /**
+   * Cria a saida numa transacao no banco (RPC criar_saida_direta_almox): confere
+   * papel/modulo, trava o item, recusa saldo insuficiente e baixa o estoque.
+   * `chave` identifica a rodada: repetir (duplo clique/timeout) nao duplica.
+   */
+  async create(data: CreateWarehouseDispatchData, chave: string): Promise<{ id: string; dispatch_number: number }> {
     if (!data.items || data.items.length === 0) {
       throw new Error('Adicione pelo menos um item')
     }
-
     if (!data.destination_department_id && !data.destination_department_text?.trim()) {
       throw new Error('Informe o destino')
     }
-
-    const { data: dispatch, error: dispatchError } = await supabase
-      .from('warehouse_dispatches')
-      .insert({
-        destination_department_id: data.destination_department_id || null,
-        destination_department_text: data.destination_department_text?.trim() || null,
-        dispatch_type: data.dispatch_type || 'consumo',
-        notes: data.notes?.trim() || null,
-        created_by: authData.user.id,
-      })
-      .select('id')
-      .single()
-
-    if (dispatchError) {
-      console.error('Error creating warehouse dispatch:', dispatchError)
-      throw new Error(dispatchError.message)
+    const { data: result, error } = await supabase.rpc('criar_saida_direta_almox', {
+      p_itens: data.items.map((it) => ({ item_id: it.item_id, quantity: it.quantity })),
+      p_destino_departamento: data.destination_department_id || null,
+      p_destino_texto: data.destination_department_text?.trim() || null,
+      p_tipo: data.dispatch_type || 'consumo',
+      p_observacao: data.notes?.trim() || null,
+      p_chave: chave,
+    })
+    if (error) {
+      console.error('Error creating warehouse dispatch:', error)
+      throw error
     }
-    if (!dispatch) throw new Error('Falha ao criar saída')
-
-    const itemsToInsert = data.items.map((it) => ({
-      dispatch_id: dispatch.id,
-      item_id: it.item_id,
-      quantity: it.quantity,
-    }))
-
-    const { error: itemsError } = await supabase
-      .from('warehouse_dispatch_items')
-      .insert(itemsToInsert)
-
-    if (itemsError) {
-      // Rollback
-      await supabase.from('warehouse_dispatches').delete().eq('id', dispatch.id)
-      console.error('Error inserting dispatch items:', itemsError)
-      throw new Error(itemsError.message)
-    }
-
-    return { id: dispatch.id }
+    const r = result as { id: string; dispatch_number: number }
+    return { id: r.id, dispatch_number: r.dispatch_number }
   }
 
-  async cancel(id: string, reason: string): Promise<void> {
-    const { data: authData } = await supabase.auth.getUser()
-    if (!authData?.user) throw new Error('Usuário não autenticado')
-
+  /** Estorno (so gestor/admin do almox): devolve SO o que a saida efetivamente baixou, uma unica vez. */
+  async cancel(id: string, reason: string): Promise<{ quantidade_devolvida: number; linhas_sem_baixa: number }> {
     if (!reason || reason.trim().length < 3) {
       throw new Error('Informe um motivo (mínimo 3 caracteres) para o estorno')
     }
-
-    const { error } = await supabase
-      .from('warehouse_dispatches')
-      .update({
-        status: 'cancelled',
-        cancelled_at: new Date().toISOString(),
-        cancelled_by: authData.user.id,
-        cancellation_reason: reason.trim(),
-      })
-      .eq('id', id)
-      .eq('status', 'completed') // só permite cancelar saídas concluídas
-
+    const { data, error } = await supabase.rpc('estornar_saida_direta_almox', {
+      p_id: id,
+      p_motivo: reason.trim(),
+    })
     if (error) {
       console.error('Error cancelling warehouse dispatch:', error)
-      throw new Error(error.message)
+      throw error
     }
+    return data as { quantidade_devolvida: number; linhas_sem_baixa: number }
   }
 }
 
