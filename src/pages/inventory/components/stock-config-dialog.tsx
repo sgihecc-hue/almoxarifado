@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -13,7 +13,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { itemsService } from '@/lib/services/items'
+import { supabase } from '@/lib/supabase'
+import { exigirLinhas } from '@/lib/utils/seguro'
 import type { Item } from '@/lib/services/items'
 
 const stockConfigSchema = z.object({
@@ -29,6 +30,9 @@ type StockConfigFormData = z.infer<typeof stockConfigSchema>
 
 interface StockConfigDialogProps {
   item: Item
+  // Tipo do CATALOGO vindo da pagina (antes adivinhado pela categoria:
+  // 252 de 293 itens da farmacia caiam em warehouse_items, 0 linhas, "sucesso").
+  type: 'pharmacy' | 'warehouse'
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
@@ -36,6 +40,7 @@ interface StockConfigDialogProps {
 
 export function StockConfigDialog({ 
   item, 
+  type,
   open, 
   onOpenChange, 
   onSuccess 
@@ -44,6 +49,7 @@ export function StockConfigDialog({
   const [error, setError] = useState<string | null>(null)
   const [systemAvgConsumption, setSystemAvgConsumption] = useState<number>(0)
   const [calculatedReorderPoint, setCalculatedReorderPoint] = useState<number>(0)
+  const salvandoRef = useRef(false)
   
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<StockConfigFormData>({
     resolver: zodResolver(stockConfigSchema),
@@ -90,27 +96,36 @@ export function StockConfigDialog({
   }, [avgConsumption, leadTimeDays, safetyFactor, useCalculatedValues, setValue])
 
   const onSubmit = async (data: StockConfigFormData) => {
+    if (salvandoRef.current) return
+    salvandoRef.current = true
     try {
       setLoading(true)
       setError(null)
-      
-      const type = item.category === 'Medicamentos' || item.category === 'Material Hospitalar' 
-        ? 'pharmacy' 
-        : 'warehouse'
-      
-      // In a real implementation, you would also update the avg_consumption and reorder_point
-      // in the database. For now, we'll just update min_stock and lead_time_days.
-      await itemsService.update(item.id, {
-        min_stock: data.min_stock,
-        lead_time_days: data.lead_time_days,
-      }, type)
-      
+
+      // So min_stock e lead_time_days sao gravados (consumo medio e ponto de
+      // pedido sao calculados). .select('id') + exigirLinhas: se a RLS negar
+      // ou a tabela estiver errada, o PostgREST devolve 0 linhas SEM erro —
+      // antes a tela dizia "atualizado" sem ter gravado nada.
+      const tabela = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
+      const r = await supabase
+        .from(tabela)
+        .update({
+          min_stock: data.min_stock,
+          lead_time_days: data.lead_time_days,
+        })
+        .eq('id', item.id)
+        .select('id')
+      exigirLinhas(r)
+
       onSuccess()
       onOpenChange(false)
     } catch (error) {
       console.error('Error updating stock configuration:', error)
-      setError('Erro ao atualizar configuração de estoque. Por favor, tente novamente.')
+      setError(error instanceof Error && error.message
+        ? `Erro ao atualizar configuração de estoque: ${error.message}`
+        : 'Erro ao atualizar configuração de estoque. Por favor, tente novamente.')
     } finally {
+      salvandoRef.current = false
       setLoading(false)
     }
   }

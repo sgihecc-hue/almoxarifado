@@ -7,19 +7,25 @@ import {
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/contexts/theme'
 import { supabase } from '@/lib/supabase'
+import { buscarTodas, normalizarBusca, parseDataLocal } from '@/lib/utils/seguro'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 import { format, differenceInDays, parseISO } from 'date-fns'
 
 // --------------- Tipos ---------------
 
+// Uma linha por LOTE com saldo (expiry_tracking.current_quantity > 0).
+// Antes era uma linha por item com o lote/validade do CADASTRO (campo unico,
+// velho): 22 itens apareciam vencidos sem ter lote vencido com saldo.
 interface ExpiryItem {
-  id: string
-  code: string
+  id: string          // id da linha (lote) — unico
+  item_id: string
+  local: string       // codigo do estoque do lote (CAF, SAT_1...) ou 'cadastro'
+  code: string | null
   name: string
-  category: string
-  unit: string
-  current_stock: number
+  category: string | null
+  unit: string | null
+  current_stock: number   // saldo do LOTE neste local
   min_stock: number
   batch_number: string | null
   expiry_date: string | null
@@ -43,7 +49,7 @@ function getExpiryStatus(expiryDate: string | null) {
 
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  const expDate = parseISO(expiryDate)
+  const expDate = parseDataLocal(expiryDate) ?? parseISO(expiryDate)
   const days = differenceInDays(expDate, today)
 
   if (days < 0) return { label: 'Vencido', color: '#ef4444', bg: 'rgba(239,68,68,0.12)', key: 'expired' as const, days }
@@ -72,6 +78,7 @@ export function StockExpiryReport() {
   const printRef = useRef<HTMLDivElement>(null)
   const [items, setItems] = useState<ExpiryItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [erro, setErro] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [expiryFilter, setExpiryFilter] = useState<ExpiryFilter>('all')
@@ -110,31 +117,59 @@ export function StockExpiryReport() {
 
   async function loadItems() {
     setLoading(true)
+    setErro(null)
     try {
-      const [pharma, warehouse] = await Promise.all([
-        supabase
-          .from('pharmacy_items')
-          .select('id, code, name, category, unit, current_stock, min_stock, batch_number, expiry_date, price, last_purchase_price, reference_price')
-          .eq('is_active', true)
-          .order('name'),
-        supabase
-          .from('warehouse_items')
-          .select('id, code, name, category, unit, current_stock, min_stock, batch_number, expiry_date, price, last_purchase_price, reference_price')
-          .eq('is_active', true)
-          .order('name'),
+      type Cad = Omit<ExpiryItem, 'id' | 'item_id' | 'local' | 'item_type'> & { id: string }
+      const campos = 'id, code, name, category, unit, current_stock, min_stock, batch_number, expiry_date, price, last_purchase_price, reference_price'
+      const cadastro = (tabela: string) => buscarTodas<Cad>((de, ate) =>
+        supabase.from(tabela).select(campos).eq('is_active', true).order('name').order('id').range(de, ate) as unknown as PromiseLike<{ data: Cad[] | null; error: unknown }>)
+      type Lote = { id: string; item_id: string; batch_number: string | null; expiry_date: string | null; current_quantity: number; location_id: string | null }
+      const [pharma, warehouse, lotes, locs] = await Promise.all([
+        cadastro('pharmacy_items'),
+        cadastro('warehouse_items'),
+        buscarTodas<Lote>((de, ate) =>
+          supabase.from('expiry_tracking')
+            .select('id, item_id, batch_number, expiry_date, current_quantity, location_id')
+            .gt('current_quantity', 0)
+            .order('id')
+            .range(de, ate) as unknown as PromiseLike<{ data: Lote[] | null; error: unknown }>),
+        supabase.from('stock_locations').select('id, code'),
       ])
+      if (locs.error) throw locs.error
+      const codLocal = new Map(((locs.data || []) as Array<{ id: string; code: string }>).map((l) => [l.id, l.code]))
+      const lotesPorItem = new Map<string, Lote[]>()
+      for (const l of lotes) {
+        const lista = lotesPorItem.get(l.item_id) ?? []
+        lista.push(l)
+        lotesPorItem.set(l.item_id, lista)
+      }
 
-      if (pharma.error) throw pharma.error
-      if (warehouse.error) throw warehouse.error
-
-      const all: ExpiryItem[] = [
-        ...(pharma.data || []).map((i: any) => ({ ...i, item_type: 'pharmacy' as const })),
-        ...(warehouse.data || []).map((i: any) => ({ ...i, item_type: 'warehouse' as const })),
-      ]
+      const all: ExpiryItem[] = []
+      const montar = (lista: Cad[], tipo: 'pharmacy' | 'warehouse') => {
+        for (const it of lista) {
+          const ls = lotesPorItem.get(it.id) ?? []
+          if (ls.length > 0) {
+            for (const l of ls) {
+              all.push({ ...it, id: l.id, item_id: it.id, item_type: tipo,
+                local: (l.location_id && codLocal.get(l.location_id)) || '—',
+                batch_number: l.batch_number, expiry_date: l.expiry_date,
+                current_stock: Number(l.current_quantity) || 0 })
+            }
+          } else if (tipo === 'warehouse' && Number(it.current_stock) > 0) {
+            // Almox antigo: lote/validade so no cadastro (sem expiry_tracking).
+            all.push({ ...it, id: `cad-${it.id}`, item_id: it.id, item_type: tipo, local: 'cadastro' })
+          }
+          // Farmacia sem lote com saldo: nada a vencer (saldo zero) — fica de fora.
+        }
+      }
+      montar(pharma, 'pharmacy')
+      montar(warehouse, 'warehouse')
 
       setItems(all)
     } catch (e) {
       console.error('Error loading items for expiry report:', e)
+      setErro('Não foi possível carregar o relatório de validade. Verifique a conexão e tente de novo.')
+      setItems([])
     } finally {
       setLoading(false)
     }
@@ -143,7 +178,7 @@ export function StockExpiryReport() {
   const categories = useMemo(() => {
     let source = items
     if (typeFilter !== 'all') source = source.filter(i => i.item_type === typeFilter)
-    return Array.from(new Set(source.map(i => i.category))).filter(Boolean).sort()
+    return Array.from(new Set(source.map(i => i.category ?? ''))).filter(Boolean).sort((a, b) => a.localeCompare(b))
   }, [items, typeFilter])
 
   const filteredItems = useMemo(() => {
@@ -152,11 +187,11 @@ export function StockExpiryReport() {
     if (typeFilter !== 'all') result = result.filter(i => i.item_type === typeFilter)
 
     if (search.trim()) {
-      const q = search.toLowerCase()
+      const q = normalizarBusca(search)
       result = result.filter(i =>
-        i.name.toLowerCase().includes(q) ||
-        i.code?.toLowerCase().includes(q) ||
-        (i.batch_number || '').toLowerCase().includes(q),
+        normalizarBusca(i.name).includes(q) ||
+        normalizarBusca(i.code).includes(q) ||
+        normalizarBusca(i.batch_number).includes(q),
       )
     }
 
@@ -167,14 +202,14 @@ export function StockExpiryReport() {
     result.sort((a, b) => {
       let cmp = 0
       switch (sortField) {
-        case 'name': cmp = a.name.localeCompare(b.name); break
+        case 'name': cmp = (a.name ?? '').localeCompare(b.name ?? ''); break
         case 'code': cmp = (a.code || '').localeCompare(b.code || ''); break
         case 'category': cmp = (a.category || '').localeCompare(b.category || ''); break
         case 'current_stock': cmp = a.current_stock - b.current_stock; break
         case 'batch_number': cmp = (a.batch_number || '').localeCompare(b.batch_number || ''); break
         case 'expiry_date': {
-          const da = a.expiry_date ? new Date(a.expiry_date).getTime() : Infinity
-          const db = b.expiry_date ? new Date(b.expiry_date).getTime() : Infinity
+          const da = a.expiry_date ? (parseDataLocal(a.expiry_date)?.getTime() ?? Infinity) : Infinity
+          const db = b.expiry_date ? (parseDataLocal(b.expiry_date)?.getTime() ?? Infinity) : Infinity
           cmp = da - db
           break
         }
@@ -202,7 +237,7 @@ export function StockExpiryReport() {
     const noDate = source.filter(i => getExpiryStatus(i.expiry_date).key === 'no_date').length
     const expiredValue = source
       .filter(i => getExpiryStatus(i.expiry_date).key === 'expired')
-      .reduce((sum, i) => sum + (i.current_stock * (i.price || i.reference_price || i.last_purchase_price || 0)), 0)
+      .reduce((sum, i) => sum + (i.current_stock * (i.last_purchase_price || i.price || i.reference_price || 0)), 0)
     return { total, expired, expiringSoon, ok, noDate, expiredValue }
   }, [items, typeFilter])
 
@@ -227,13 +262,14 @@ export function StockExpiryReport() {
         'Nome': item.name,
         'Categoria': item.category || '',
         'Unidade': item.unit,
+        'Local': item.local,
         'Lote': item.batch_number || '',
         'Validade': item.expiry_date ? formatDate(item.expiry_date) : 'Sem data',
         'Dias Restantes': status.days !== null ? status.days : '',
-        'Estoque Atual': item.current_stock,
+        'Saldo do lote': item.current_stock,
         'Estoque Mínimo': item.min_stock,
-        'Valor Unit.': item.price || item.reference_price || item.last_purchase_price || 0,
-        'Valor Total': item.current_stock * (item.price || item.reference_price || item.last_purchase_price || 0),
+        'Valor Unit.': item.last_purchase_price || item.price || item.reference_price || 0,
+        'Valor Total': item.current_stock * (item.last_purchase_price || item.price || item.reference_price || 0),
         'Status Validade': status.label,
       }
     })
@@ -299,7 +335,7 @@ export function StockExpiryReport() {
           <p>${typeLabel} | Filtro: ${filterLabel} | Gerado em: ${dateStr}</p>
         </div>
         <div class="summary">
-          <div class="summary-card"><div class="value">${stats.total}</div><div class="label">Total de Itens</div></div>
+          <div class="summary-card"><div class="value">${stats.total}</div><div class="label">Total de Lotes</div></div>
           <div class="summary-card"><div class="value" style="color:#dc2626">${stats.expired}</div><div class="label">Vencidos</div></div>
           <div class="summary-card"><div class="value" style="color:#ea580c">${stats.expiringSoon}</div><div class="label">Próx. Vencimento</div></div>
           <div class="summary-card"><div class="value" style="color:#16a34a">${stats.ok}</div><div class="label">Dentro da Validade</div></div>
@@ -308,8 +344,8 @@ export function StockExpiryReport() {
         <table>
           <thead><tr>
             <th>Tipo</th><th>Código</th><th>Nome</th><th>Categoria</th>
-            <th>Lote</th><th>Validade</th><th>Dias</th>
-            <th>Estoque</th><th>Und</th><th class="text-right">Valor Unit.</th><th class="text-right">Valor Total</th><th>Status</th>
+            <th>Local</th><th>Lote</th><th>Validade</th><th>Dias</th>
+            <th>Saldo do lote</th><th>Und</th><th class="text-right">Valor Unit.</th><th class="text-right">Valor Total</th><th>Status</th>
           </tr></thead>
           <tbody>
             ${data.map(row => {
@@ -321,10 +357,11 @@ export function StockExpiryReport() {
                 <td>${row['Código']}</td>
                 <td>${row['Nome']}</td>
                 <td>${row['Categoria']}</td>
+                <td>${row['Local']}</td>
                 <td>${row['Lote']}</td>
                 <td>${row['Validade']}</td>
                 <td>${row['Dias Restantes'] !== '' ? row['Dias Restantes'] : '—'}</td>
-                <td>${row['Estoque Atual']}</td>
+                <td>${row['Saldo do lote']}</td>
                 <td>${row['Unidade']}</td>
                 <td class="text-right">${formatCurrency(row['Valor Unit.'] as number)}</td>
                 <td class="text-right">${formatCurrency(row['Valor Total'] as number)}</td>
@@ -352,7 +389,7 @@ export function StockExpiryReport() {
   // --------------- Stat cards ---------------
 
   const statCards = [
-    { label: 'Total de Itens', value: stats.total, color: txt, filter: 'all' as ExpiryFilter },
+    { label: 'Total de Lotes', value: stats.total, color: txt, filter: 'all' as ExpiryFilter },
     { label: 'Vencidos', value: stats.expired, color: '#ef4444', filter: 'expired' as ExpiryFilter },
     { label: 'Próx. Vencimento', value: stats.expiringSoon, color: '#f97316', filter: 'expiring_soon' as ExpiryFilter },
     { label: 'Dentro da Validade', value: stats.ok, color: '#22c55e', filter: 'ok' as ExpiryFilter },
@@ -366,9 +403,10 @@ export function StockExpiryReport() {
     { label: 'Código', field: 'code' },
     { label: 'Nome', field: 'name' },
     { label: 'Categoria', field: 'category' },
+    { label: 'Local', field: null },
     { label: 'Lote', field: 'batch_number' },
     { label: 'Validade', field: 'expiry_date' },
-    { label: 'Estoque', field: 'current_stock' },
+    { label: 'Saldo do lote', field: 'current_stock' },
     { label: 'Und', field: null },
     { label: 'Status', field: 'expiry_status' },
   ]
@@ -384,7 +422,7 @@ export function StockExpiryReport() {
           <div>
             <h1 className="text-xl font-bold" style={{ color: txt }}>Relatório de Validade de Estoque</h1>
             <p className="text-sm" style={{ color: txtSec }}>
-              {filteredItems.length} de {items.length} itens | Gerado em {format(new Date(), "dd/MM/yyyy 'às' HH:mm")}
+              {filteredItems.length} de {items.length} lotes | Gerado em {format(new Date(), "dd/MM/yyyy 'às' HH:mm")}
             </p>
           </div>
         </div>
@@ -480,6 +518,11 @@ export function StockExpiryReport() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={columns.length} className="text-center py-12" style={{ color: txtMut }}>Carregando...</td></tr>
+              ) : erro ? (
+                <tr><td colSpan={columns.length} className="text-center py-12" style={{ color: '#ef4444' }}>
+                  {erro}{' '}
+                  <Button size="sm" variant="outline" onClick={loadItems}>Tentar de novo</Button>
+                </td></tr>
               ) : filteredItems.length === 0 ? (
                 <tr><td colSpan={columns.length} className="text-center py-12" style={{ color: txtMut }}>Nenhum item encontrado</td></tr>
               ) : (
@@ -510,6 +553,7 @@ export function StockExpiryReport() {
                       <td className="px-4 py-3 text-sm" style={{ color: txtMut }}>{item.code}</td>
                       <td className="px-4 py-3 text-sm font-medium" style={{ color: txt }}>{item.name}</td>
                       <td className="px-4 py-3 text-sm" style={{ color: txtSec }}>{item.category}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: txtMut }}>{item.local}</td>
                       <td className="px-4 py-3 text-sm" style={{ color: txtSec }}>{item.batch_number || '—'}</td>
                       <td className="px-4 py-3 text-sm" style={{
                         color: status.key === 'expired' ? '#ef4444' : status.key === 'expiring_soon' ? '#f97316' : txtSec,

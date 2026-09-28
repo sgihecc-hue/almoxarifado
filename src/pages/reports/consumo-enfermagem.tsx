@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
+import { buscarTodas, normalizarBusca } from '@/lib/utils/seguro'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 
 interface LinhaItem {
@@ -80,17 +81,24 @@ export function ConsumoEnfermagemReport() {
       const de = `${inicio}T00:00:00-03:00`
       const ate = `${fim}T23:59:59-03:00`
 
-      let qi = supabase.from('v_consumo_enfermagem').select('*').gte('data', de).lte('data', ate)
-      let qk = supabase.from('v_kits_enfermagem').select('*').gte('data', de).lte('data', ate)
-      if (somenteEntregues) {
-        qi = qi.in('status', STATUS_ENTREGUE)
-        qk = qk.in('status', STATUS_ENTREGUE)
-      }
-      const [ri, rk] = await Promise.all([qi.limit(20000), qk.limit(20000)])
-      if (ri.error) throw ri.error
-      if (rk.error) throw rk.error
-      setItens((ri.data || []) as LinhaItem[])
-      setKits((rk.data || []) as LinhaKit[])
+      // Paginado de 1000 em 1000: o .limit(20000) antigo parava em 1000 (teto
+      // do PostgREST). Ordem completa para a paginacao nao pular linha.
+      const [ri, rk] = await Promise.all([
+        buscarTodas<LinhaItem>((a, b) => {
+          let qi = supabase.from('v_consumo_enfermagem').select('*').gte('data', de).lte('data', ate)
+          if (somenteEntregues) qi = qi.in('status', STATUS_ENTREGUE)
+          return qi.order('data').order('request_id').order('item_id').order('kit').order('origem')
+            .range(a, b) as unknown as PromiseLike<{ data: LinhaItem[] | null; error: unknown }>
+        }),
+        buscarTodas<LinhaKit>((a, b) => {
+          let qk = supabase.from('v_kits_enfermagem').select('*').gte('data', de).lte('data', ate)
+          if (somenteEntregues) qk = qk.in('status', STATUS_ENTREGUE)
+          return qk.order('data').order('request_id').order('kit_id')
+            .range(a, b) as unknown as PromiseLike<{ data: LinhaKit[] | null; error: unknown }>
+        }),
+      ])
+      setItens(ri)
+      setKits(rk)
     } catch (e) {
       setError(getErrorMessage(e))
     } finally {
@@ -100,18 +108,18 @@ export function ConsumoEnfermagemReport() {
 
   useEffect(() => { carregar() }, [])
 
-  const q = busca.trim().toLowerCase()
+  const q = normalizarBusca(busca)
   const itensFiltrados = useMemo(() => !q ? itens : itens.filter((l) =>
-    (l.paciente || '').toLowerCase().includes(q) ||
-    (l.prontuario || '').toLowerCase().includes(q) ||
-    (l.kit || '').toLowerCase().includes(q) ||
-    l.item.toLowerCase().includes(q) ||
-    (l.setor || '').toLowerCase().includes(q)), [itens, q])
+    normalizarBusca(l.paciente).includes(q) ||
+    normalizarBusca(l.prontuario).includes(q) ||
+    normalizarBusca(l.kit).includes(q) ||
+    normalizarBusca(l.item).includes(q) ||
+    normalizarBusca(l.setor).includes(q)), [itens, q])
   const kitsFiltrados = useMemo(() => !q ? kits : kits.filter((l) =>
-    (l.paciente || '').toLowerCase().includes(q) ||
-    (l.prontuario || '').toLowerCase().includes(q) ||
-    l.kit.toLowerCase().includes(q) ||
-    (l.setor || '').toLowerCase().includes(q)), [kits, q])
+    normalizarBusca(l.paciente).includes(q) ||
+    normalizarBusca(l.prontuario).includes(q) ||
+    normalizarBusca(l.kit).includes(q) ||
+    normalizarBusca(l.setor).includes(q)), [kits, q])
 
   const porPaciente = useMemo(() => {
     const m = new Map<string, { paciente: string; prontuario: string; kits: number; itens: number; pedidos: Set<string> }>()

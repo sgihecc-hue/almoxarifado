@@ -9,24 +9,28 @@ import { supabase } from '@/lib/supabase'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 import { format } from 'date-fns'
+import { buscarTodas, normalizarBusca } from '@/lib/utils/seguro'
 
 interface StockItem {
   id: string
-  code: string
+  code: string | null
   name: string
-  category: string
-  unit: string
+  category: string | null
+  unit: string | null
   current_stock: number
   min_stock: number
   price: number | null
+  last_purchase_price?: number | null
+  // Farmacia: saldo por local (codigo do local -> quantidade), de item_stocks
+  porLocal?: Record<string, number>
   is_active: boolean
   batch_number?: string | null
   expiry_date?: string | null
 }
 
-// Lote com saldo, do MESMO estoque que o relatorio soma (CAF na farmacia,
-// almoxarifado central no almox) — senao a soma dos lotes nao bate com o
-// "Estoque Atual". Pedido de 22/09/2026: exportar lote e validade.
+// Lote com saldo, do MESMO estoque que o relatorio soma (todos os estoques da
+// farmacia: CAF + satelites; almoxarifado central no almox) — senao a soma dos
+// lotes nao bate com o "Estoque Atual". Pedido de 22/09/2026: exportar lote e validade.
 interface LoteSaldo { lote: string; validade: string | null; qtd: number }
 
 const dataBR = (d: string | null | undefined) => (d ? d.slice(0, 10).split('-').reverse().join('/') : '')
@@ -60,6 +64,9 @@ export function StockReport({ type }: StockReportProps) {
   const [sortField, setSortField] = useState<SortField>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [lotes, setLotes] = useState<Map<string, LoteSaldo[]>>(new Map())
+  const [erro, setErro] = useState<string | null>(null)
+  // Farmacia: locais (CAF, SAT_1, SAT_2, SAT_T) na ordem das colunas
+  const [locais, setLocais] = useState<Array<{ id: string; code: string }>>([])
 
   const table = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
   const title = type === 'pharmacy' ? 'Relatorio de Estoque — Farmacia' : 'Relatorio de Estoque — Almoxarifado'
@@ -88,17 +95,62 @@ export function StockReport({ type }: StockReportProps) {
 
   async function loadItems() {
     setLoading(true)
+    setErro(null)
     try {
-      const { data, error } = await supabase
-        .from(table)
-        .select('id, code, name, category, unit, current_stock, min_stock, price, is_active, batch_number, expiry_date')
-        .eq('is_active', true)
-        .order('name')
-      if (error) throw error
-      setItems(data || [])
-      await loadLotes()
+      const data = await buscarTodas<StockItem>((de, ate) =>
+        supabase
+          .from(table)
+          .select('id, code, name, category, unit, current_stock, min_stock, price, last_purchase_price, is_active, batch_number, expiry_date')
+          .eq('is_active', true)
+          .order('name')
+          .order('id')
+          .range(de, ate) as unknown as PromiseLike<{ data: StockItem[] | null; error: unknown }>
+      )
+
+      // Locais do relatorio: farmacia = CAF + satelites; almox = ALMOX.
+      const { data: locs, error: eLoc } = await supabase
+        .from('stock_locations')
+        .select('id, code')
+        .in('code', type === 'pharmacy' ? ['CAF', 'SAT_1', 'SAT_2', 'SAT_T'] : ['ALMOX'])
+        .order('code')
+      if (eLoc) throw eLoc
+      const listaLocais = (locs || []) as Array<{ id: string; code: string }>
+
+      if (type === 'pharmacy') {
+        // O saldo da farmacia mora em item_stocks por local. pharmacy_items
+        // .current_stock e so o da CAF: o relatorio mostrava so a CAF.
+        type Saldo = { item_id: string; location_id: string; quantity: number }
+        const saldos = await buscarTodas<Saldo>((de, ate) =>
+          supabase
+            .from('item_stocks')
+            .select('item_id, location_id, quantity')
+            .eq('item_type', 'pharmacy')
+            .in('location_id', listaLocais.map((l) => l.id))
+            .order('id')
+            .range(de, ate) as unknown as PromiseLike<{ data: Saldo[] | null; error: unknown }>
+        )
+        const codigoPorId = new Map(listaLocais.map((l) => [l.id, l.code]))
+        const porItem = new Map<string, Record<string, number>>()
+        for (const s of saldos) {
+          const m = porItem.get(s.item_id) ?? {}
+          const cod = codigoPorId.get(s.location_id) ?? '?'
+          m[cod] = (m[cod] ?? 0) + Number(s.quantity || 0)
+          porItem.set(s.item_id, m)
+        }
+        for (const it of data) {
+          const m = porItem.get(it.id) ?? {}
+          it.porLocal = m
+          it.current_stock = Object.values(m).reduce((a, b) => a + b, 0)
+        }
+      }
+
+      setLocais(listaLocais)
+      setItems(data)
+      await loadLotes(listaLocais.map((l) => l.id))
     } catch (e) {
       console.error('Error loading items:', e)
+      setErro('Não foi possível carregar o relatório de estoque. Verifique a conexão e tente de novo.')
+      setItems([])
     } finally {
       setLoading(false)
     }
@@ -106,31 +158,30 @@ export function StockReport({ type }: StockReportProps) {
 
   // Lotes com saldo do estoque do relatorio. Paginado: o Supabase devolve no
   // maximo 1000 linhas por consulta.
-  async function loadLotes() {
-    try {
-      const { data: loc } = await supabase.from('stock_locations').select('id')
-        .eq('code', type === 'pharmacy' ? 'CAF' : 'ALMOX').maybeSingle()
-      if (!loc) return
-      const mapa = new Map<string, LoteSaldo[]>()
-      for (let de = 0; ; de += 1000) {
-        const { data, error } = await supabase.from('expiry_tracking')
-          .select('item_id, batch_number, expiry_date, current_quantity')
-          .eq('location_id', (loc as any).id).gt('current_quantity', 0)
+  async function loadLotes(locationIds: string[]) {
+    type LinhaLote = { id: string; item_id: string; batch_number: string | null; expiry_date: string | null; current_quantity: number }
+    const mapa = new Map<string, LoteSaldo[]>()
+    if (locationIds.length) {
+      const linhas = await buscarTodas<LinhaLote>((de, ate) =>
+        supabase.from('expiry_tracking')
+          .select('id, item_id, batch_number, expiry_date, current_quantity')
+          .in('location_id', locationIds).gt('current_quantity', 0)
           .order('expiry_date', { ascending: true, nullsFirst: false })
-          .range(de, de + 999)
-        if (error) throw error
-        for (const r of (data || []) as any[]) {
-          const lista = mapa.get(r.item_id) || []
-          lista.push({ lote: r.batch_number || 's/ lote', validade: r.expiry_date, qtd: Number(r.current_quantity) })
-          mapa.set(r.item_id, lista)
-        }
-        if (!data || data.length < 1000) break
+          .order('id')
+          .range(de, ate) as unknown as PromiseLike<{ data: LinhaLote[] | null; error: unknown }>
+      )
+      for (const r of linhas) {
+        const lista = mapa.get(r.item_id) || []
+        lista.push({ lote: r.batch_number || 's/ lote', validade: r.expiry_date, qtd: Number(r.current_quantity) })
+        mapa.set(r.item_id, lista)
       }
-      setLotes(mapa)
-    } catch (e) {
-      console.error('Error loading lots:', e)
     }
+    setLotes(mapa)
   }
+
+  // Preco para valor em estoque: price esta vazio em todo o cadastro da
+  // farmacia e em metade do almox -> ultimo preco de compra.
+  const precoDe = (i: StockItem) => Number(i.last_purchase_price ?? i.price ?? 0) || 0
 
   // Item sem lote cadastrado: usa o lote/validade gravados no proprio item
   // (modelo antigo do almox), quando houver.
@@ -144,20 +195,22 @@ export function StockReport({ type }: StockReportProps) {
   }
 
   const categories = useMemo(() => {
-    const cats = new Set(items.map(i => i.category))
-    return Array.from(cats).sort()
+    const cats = new Set(items.map(i => i.category ?? ''))
+    return Array.from(cats).sort((a, b) => a.localeCompare(b))
   }, [items])
 
   const filteredItems = useMemo(() => {
     let result = [...items]
 
     if (search.trim()) {
-      const q = search.toLowerCase()
-      result = result.filter(i => i.name.toLowerCase().includes(q) || i.code.toLowerCase().includes(q))
+      // code/category podem ser nulos (itens sem codigo): antes
+      // i.code.toLowerCase() derrubava a tela inteira ao buscar.
+      const q = normalizarBusca(search)
+      result = result.filter(i => normalizarBusca(i.name).includes(q) || normalizarBusca(i.code).includes(q))
     }
 
     if (categoryFilter !== 'all') {
-      result = result.filter(i => i.category === categoryFilter)
+      result = result.filter(i => (i.category ?? '') === categoryFilter)
     }
 
     if (stockFilter !== 'all') {
@@ -167,9 +220,9 @@ export function StockReport({ type }: StockReportProps) {
     result.sort((a, b) => {
       let cmp = 0
       switch (sortField) {
-        case 'name': cmp = a.name.localeCompare(b.name); break
-        case 'code': cmp = a.code.localeCompare(b.code); break
-        case 'category': cmp = a.category.localeCompare(b.category); break
+        case 'name': cmp = (a.name ?? '').localeCompare(b.name ?? ''); break
+        case 'code': cmp = (a.code ?? '').localeCompare(b.code ?? ''); break
+        case 'category': cmp = (a.category ?? '').localeCompare(b.category ?? ''); break
         case 'current_stock': cmp = a.current_stock - b.current_stock; break
         case 'min_stock': cmp = a.min_stock - b.min_stock; break
         case 'status': cmp = a.current_stock / Math.max(a.min_stock, 1) - b.current_stock / Math.max(b.min_stock, 1); break
@@ -187,7 +240,7 @@ export function StockReport({ type }: StockReportProps) {
     const low = items.filter(i => getStockStatus(i).key === 'low').length
     const critical = items.filter(i => getStockStatus(i).key === 'critical').length
     const out = items.filter(i => getStockStatus(i).key === 'out').length
-    const totalValue = items.reduce((sum, i) => sum + (i.current_stock * (i.price || 0)), 0)
+    const totalValue = items.reduce((sum, i) => sum + (i.current_stock * precoDe(i)), 0)
     return { total, normal, low, critical, out, totalValue }
   }, [items])
 
@@ -208,19 +261,24 @@ export function StockReport({ type }: StockReportProps) {
   function exportToExcel() {
     const data = filteredItems.map(item => {
       const status = getStockStatus(item)
-      return {
-        'Codigo': item.code,
+      const linha: Record<string, string | number> = {
+        'Codigo': item.code ?? '',
         'Nome': item.name,
-        'Categoria': item.category,
-        'Unidade': item.unit,
+        'Categoria': item.category ?? '',
+        'Unidade': item.unit ?? '',
         'Estoque Atual': item.current_stock,
         'Estoque Minimo': item.min_stock,
-        'Preco Unit.': item.price || 0,
-        'Valor Total': item.current_stock * (item.price || 0),
+        'Preco Unit.': precoDe(item),
+        'Valor Total': item.current_stock * precoDe(item),
         'Status': status.label,
         'Lotes': textoLotes(lotesDoItem(item)),
         'Validade mais proxima': dataBR(validadeMaisProxima(lotesDoItem(item))),
       }
+      // Farmacia: saldo de cada estoque (CAF, SAT_1, SAT_2, SAT_T), no fim
+      if (type === 'pharmacy') {
+        for (const l of locais) linha[`Saldo ${l.code}`] = item.porLocal?.[l.code] ?? 0
+      }
+      return linha
     })
 
     const ws = XLSX.utils.json_to_sheet(data)
@@ -230,9 +288,9 @@ export function StockReport({ type }: StockReportProps) {
     // Aba "Por lote": uma linha por lote com saldo, ordenada por validade.
     const porLote = filteredItems.flatMap((item) =>
       lotesDoItem(item).map((l) => ({
-        'Codigo': item.code,
+        'Codigo': item.code ?? '',
         'Nome': item.name,
-        'Unidade': item.unit,
+        'Unidade': item.unit ?? '',
         'Lote': l.lote,
         'Validade': dataBR(l.validade),
         'Quantidade no lote': l.qtd,
@@ -264,6 +322,8 @@ export function StockReport({ type }: StockReportProps) {
     const dateStr = format(new Date(), 'yyyy-MM-dd')
     saveAs(blob, `relatorio_estoque_${type}_${dateStr}.xlsx`)
   }
+
+  const colunas = 7 + (type === 'pharmacy' ? locais.length : 0)
 
   const statCards = [
     { label: 'Total de Itens', value: stats.total, color: txt, filter: 'all' as StockFilter },
@@ -317,6 +377,13 @@ export function StockReport({ type }: StockReportProps) {
         ))}
       </div>
 
+      {erro && (
+        <div className="flex items-center justify-between gap-3 p-4 rounded-xl text-sm" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}>
+          <span>{erro}</span>
+          <Button size="sm" variant="outline" onClick={loadItems} disabled={loading}>Tentar de novo</Button>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 p-4 rounded-xl" style={glass}>
         <div className="relative flex-1 min-w-[200px]">
@@ -348,7 +415,8 @@ export function StockReport({ type }: StockReportProps) {
                 { label: 'Nome', field: 'name' as SortField },
                 { label: 'Categoria', field: 'category' as SortField },
                 { label: 'Unidade', field: null },
-                { label: 'Estoque Atual', field: 'current_stock' as SortField },
+                ...(type === 'pharmacy' ? locais.map((l) => ({ label: l.code, field: null })) : []),
+                { label: type === 'pharmacy' ? 'Total' : 'Estoque Atual', field: 'current_stock' as SortField },
                 { label: 'Estoque Minimo', field: 'min_stock' as SortField },
                 { label: 'Status', field: 'status' as SortField },
               ].map((col) => (
@@ -368,9 +436,11 @@ export function StockReport({ type }: StockReportProps) {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} className="text-center py-12" style={{ color: txtMut }}>Carregando...</td></tr>
+              <tr><td colSpan={colunas} className="text-center py-12" style={{ color: txtMut }}>Carregando...</td></tr>
+            ) : erro ? (
+              <tr><td colSpan={colunas} className="text-center py-12" style={{ color: '#ef4444' }}>Dados não carregados</td></tr>
             ) : filteredItems.length === 0 ? (
-              <tr><td colSpan={7} className="text-center py-12" style={{ color: txtMut }}>Nenhum item encontrado</td></tr>
+              <tr><td colSpan={colunas} className="text-center py-12" style={{ color: txtMut }}>Nenhum item encontrado</td></tr>
             ) : (
               filteredItems.map((item, i) => {
                 const status = getStockStatus(item)
@@ -386,6 +456,9 @@ export function StockReport({ type }: StockReportProps) {
                     <td className="px-4 py-3 text-sm font-medium" style={{ color: txt }}>{item.name}</td>
                     <td className="px-4 py-3 text-sm" style={{ color: txtSec }}>{item.category}</td>
                     <td className="px-4 py-3 text-sm" style={{ color: txtMut }}>{item.unit}</td>
+                    {type === 'pharmacy' && locais.map((l) => (
+                      <td key={l.code} className="px-4 py-3 text-sm" style={{ color: txtSec }}>{item.porLocal?.[l.code] ?? 0}</td>
+                    ))}
                     <td className="px-4 py-3 text-sm font-bold" style={{ color: status.key === 'normal' ? txt : status.color }}>
                       {item.current_stock}
                     </td>

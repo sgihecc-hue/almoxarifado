@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { 
   BarChart3, 
   Download, 
@@ -32,6 +32,8 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import type { Item } from '@/lib/services/items'
 import type { Department } from '@/lib/types/departments'
+import { supabase } from '@/lib/supabase'
+import { lerQuantidade, normalizarBusca } from '@/lib/utils/seguro'
 
 // Types for consumption data
 interface ConsumptionEntry {
@@ -86,6 +88,10 @@ export function AdminWarehouseConsumptionManagement() {
   const [bulkDepartment, setBulkDepartment] = useState<string>('')
   const [bulkDate, setBulkDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
   
+  // Trava de duplo clique (o estado do React nao bloqueia o 2o clique no mesmo tick)
+  const salvandoRef = useRef(false)
+  const [salvando, setSalvando] = useState(false)
+
   // Filters
   const [dateFilter, setDateFilter] = useState<string>('')
   const [departmentFilter, setDepartmentFilter] = useState<string>('')
@@ -167,11 +173,14 @@ export function AdminWarehouseConsumptionManagement() {
   }
 
   const handleAddConsumption = async () => {
+    if (salvandoRef.current) return
     try {
       if (!selectedItem || !selectedDepartment || !consumptionDate || consumptionQuantity <= 0) {
         setError('Por favor, preencha todos os campos obrigatórios')
         return
       }
+      salvandoRef.current = true
+      setSalvando(true)
       
       // Save to database using the service
       await warehouseConsumptionService.create({
@@ -199,26 +208,38 @@ export function AdminWarehouseConsumptionManagement() {
     } catch (error) {
       console.error('Error adding consumption:', error)
       setError('Erro ao registrar consumo. Por favor, tente novamente.')
+    } finally {
+      salvandoRef.current = false
+      setSalvando(false)
     }
   }
 
   const handleAddBulkConsumption = async () => {
+    if (salvandoRef.current) return
     try {
       if (bulkEntries.length === 0) {
         setError('Adicione pelo menos um item para registrar consumo em massa')
         return
       }
-      
-      // Save all entries to database
-      for (const entry of bulkEntries) {
-        await warehouseConsumptionService.create({
+      salvandoRef.current = true
+      setSalvando(true)
+
+      // Um INSERT so com todas as linhas (atomico): antes era um laco de
+      // inserts — se o 3o falhasse, os 2 primeiros ficavam gravados e o
+      // usuario repetia o lote inteiro (duplicando).
+      const { data: { user: autor } } = await supabase.auth.getUser()
+      if (!autor) throw new Error('Sessão expirada. Entre de novo.')
+      const { error: eLote } = await supabase.from('warehouse_consumption_entries').insert(
+        bulkEntries.map((entry) => ({
           item_id: entry.item.id,
           department_id: entry.department.id,
           date: entry.date,
           quantity: entry.quantity,
-          notes: entry.notes
-        })
-      }
+          notes: entry.notes || null,
+          created_by: autor.id,
+        }))
+      )
+      if (eLote) throw eLote
       
       // Reload data from database
       await loadConsumptionData()
@@ -234,7 +255,10 @@ export function AdminWarehouseConsumptionManagement() {
       setTimeout(() => setSuccess(null), 3000)
     } catch (error) {
       console.error('Error adding bulk consumption:', error)
-      setError('Erro ao registrar consumo em massa. Por favor, tente novamente.')
+      setError('Erro ao registrar consumo em massa. Nada foi gravado; tente novamente.')
+    } finally {
+      salvandoRef.current = false
+      setSalvando(false)
     }
   }
 
@@ -348,11 +372,11 @@ export function AdminWarehouseConsumptionManagement() {
     
     // Search term filter
     const matchesSearch = !searchTerm || 
-      item?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item?.code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item?.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      department?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      department?.description?.toLowerCase().includes(searchTerm.toLowerCase())
+      normalizarBusca(item?.name).includes(normalizarBusca(searchTerm)) ||
+      normalizarBusca(item?.code).includes(normalizarBusca(searchTerm)) ||
+      normalizarBusca(item?.category).includes(normalizarBusca(searchTerm)) ||
+      normalizarBusca(department?.name).includes(normalizarBusca(searchTerm)) ||
+      normalizarBusca(department?.description).includes(normalizarBusca(searchTerm))
     
     return matchesDate && matchesDepartment && matchesItem && matchesCategory && matchesSearch
   })
@@ -382,7 +406,7 @@ export function AdminWarehouseConsumptionManagement() {
 
   // Group consumption by category
   const consumptionByCategory = items.reduce((acc, item) => {
-    const category = item.category
+    const category = (item.category as string | null) ?? 'Sem categoria'
     if (!acc[category]) {
       acc[category] = {
         items: [],
@@ -636,9 +660,9 @@ export function AdminWarehouseConsumptionManagement() {
                     {items
                       .filter(item => 
                         (!searchTerm || 
-                          item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          item.code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          item.category.toLowerCase().includes(searchTerm.toLowerCase())
+                          normalizarBusca(item.name).includes(normalizarBusca(searchTerm)) ||
+                          normalizarBusca(item.code).includes(normalizarBusca(searchTerm)) ||
+                          normalizarBusca(item.category).includes(normalizarBusca(searchTerm))
                         ) &&
                         (!categoryFilter || item.category === categoryFilter)
                       )
@@ -701,7 +725,7 @@ export function AdminWarehouseConsumptionManagement() {
               
               {Object.entries(consumptionByCategory)
                 .filter(([category]) => 
-                  !searchTerm || category.toLowerCase().includes(searchTerm.toLowerCase())
+                  !searchTerm || normalizarBusca(category).includes(normalizarBusca(searchTerm))
                 )
                 .map(([category, data]) => (
                   <div key={category} className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-4">
@@ -776,8 +800,8 @@ export function AdminWarehouseConsumptionManagement() {
               {consumptionByDepartment
                 .filter(dept => 
                   !searchTerm || 
-                  dept.department.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                  dept.department.description?.toLowerCase().includes(searchTerm.toLowerCase())
+                  normalizarBusca(dept.department.name).includes(normalizarBusca(searchTerm)) ||
+                  normalizarBusca(dept.department.description).includes(normalizarBusca(searchTerm))
                 )
                 .map(dept => (
                   <div key={dept.department.id} className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-4">
@@ -987,7 +1011,7 @@ export function AdminWarehouseConsumptionManagement() {
                 value={consumptionQuantity === 0 ? '' : consumptionQuantity}
                 placeholder="0"
                 onFocus={(e) => e.target.select()}
-                onChange={(e) => setConsumptionQuantity(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
+                onChange={(e) => setConsumptionQuantity(lerQuantidade(e.target.value) ?? 0)}
                 className="mt-1"
               />
             </div>
@@ -1008,7 +1032,7 @@ export function AdminWarehouseConsumptionManagement() {
             <Button variant="outline" onClick={() => setShowAddItemDialog(false)}>
               Cancelar
             </Button>
-            <Button onClick={handleAddConsumption}>
+            <Button onClick={handleAddConsumption} disabled={salvando}>
               <Save className="w-4 h-4 mr-2" />
               Registrar Consumo
             </Button>
@@ -1087,7 +1111,7 @@ export function AdminWarehouseConsumptionManagement() {
                     value={consumptionQuantity === 0 ? '' : consumptionQuantity}
                     placeholder="0"
                     onFocus={(e) => e.target.select()}
-                    onChange={(e) => setConsumptionQuantity(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
+                    onChange={(e) => setConsumptionQuantity(lerQuantidade(e.target.value) ?? 0)}
                     className="mt-1"
                   />
                 </div>
@@ -1171,7 +1195,7 @@ export function AdminWarehouseConsumptionManagement() {
             </Button>
             <Button 
               onClick={handleAddBulkConsumption}
-              disabled={bulkEntries.length === 0}
+              disabled={bulkEntries.length === 0 || salvando}
             >
               <Save className="w-4 h-4 mr-2" />
               Registrar {bulkEntries.length} Item(ns)

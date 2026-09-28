@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { useTheme } from '@/contexts/theme'
 import { useModule } from '@/contexts/module'
 import { supabase } from '@/lib/supabase'
+import { buscarTodas } from '@/lib/utils/seguro'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import { MEDICATION_CLASS_LABEL } from '@/lib/types/farmacia'
 import type { MedicationClass } from '@/lib/types/farmacia'
@@ -117,14 +118,17 @@ export function MovimentacaoDiaria() {
     if (!activeStock) { setError('Selecione um estoque no topo.'); return }
     setLoading(true); setError(''); setRows(null)
     try {
-      const { data, error: e } = await supabase.rpc('farmacia_movimentacao_diaria', {
-        p_location_code: activeStock.code,
-        p_inicio: periodo.inicio,
-        p_fim: periodo.fim,
-        p_classe: classe || null,
-      })
-      if (e) throw e
-      setRows((data ?? []) as MovRow[])
+      // Paginado: a RPC tambem e cortada em 1000 linhas pelo PostgREST (um mes
+      // de satelite passa disso). A ordem da RPC e estavel (momento, id).
+      const data = await buscarTodas<MovRow>((de, ate) =>
+        supabase.rpc('farmacia_movimentacao_diaria', {
+          p_location_code: activeStock.code,
+          p_inicio: periodo.inicio,
+          p_fim: periodo.fim,
+          p_classe: classe || null,
+        }).range(de, ate) as unknown as PromiseLike<{ data: MovRow[] | null; error: unknown }>
+      )
+      setRows(data)
     } catch (e) {
       setError(getErrorMessage(e))
     } finally {
@@ -194,7 +198,7 @@ export function MovimentacaoDiaria() {
           <th style="text-align:right">Estoque anterior</th><th style="text-align:right">Movim.</th><th style="text-align:right">Estoque atual</th>
         </tr></thead>
         <tbody>${linhas}</tbody>
-        <tfoot><tr><td colspan="4">Total movimentado</td><td style="text-align:right">${totalQtd}</td><td></td></tr></tfoot>
+        <tfoot><tr><td colspan="6">Total movimentado</td><td style="text-align:right">${totalQtd}</td><td></td></tr></tfoot>
       </table>
       <button onclick="window.print()" style="margin-top:16px;padding:8px 16px">Imprimir</button>
       </body></html>`

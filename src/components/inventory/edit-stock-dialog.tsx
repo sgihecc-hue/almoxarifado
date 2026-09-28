@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -13,23 +13,28 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import { itemsService } from '@/lib/services/items'
+import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import type { Item } from '@/lib/services/items'
 
 const CONFIRM_WORD = 'EDITAR'
 
 const stockEditSchema = z.object({
-  new_stock: z.number().min(0, 'Estoque deve ser maior ou igual a 0'),
-  reason: z.string().min(5, 'Motivo deve ter pelo menos 5 caracteres'),
-  is_active: z.boolean(),
+  new_stock: z.number({ invalid_type_error: 'Informe o novo estoque' })
+    .int('Informe uma quantidade inteira (sem casas decimais).')
+    .min(0, 'Estoque deve ser maior ou igual a 0'),
+  // a RPC almox_editar_item exige motivo com pelo menos 10 caracteres
+  reason: z.string().trim().min(10, 'Motivo deve ter pelo menos 10 caracteres'),
 })
 
 type StockEditFormData = z.infer<typeof stockEditSchema>
 
 interface EditStockDialogProps {
   item: Item
+  // Tipo do CATALOGO vindo da pagina. Antes o tipo era adivinhado pela
+  // categoria e 252 de 293 itens da farmacia caiam em 'warehouse': o update
+  // ia para a tabela errada, afetava 0 linhas e a tela dizia "sucesso".
+  type: 'pharmacy' | 'warehouse'
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
@@ -37,6 +42,7 @@ interface EditStockDialogProps {
 
 export function EditStockDialog({
   item,
+  type,
   open,
   onOpenChange,
   onSuccess
@@ -45,13 +51,13 @@ export function EditStockDialog({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmText, setConfirmText] = useState('')
+  const salvandoRef = useRef(false)
 
   const stockForm = useForm<StockEditFormData>({
     resolver: zodResolver(stockEditSchema),
     defaultValues: {
       new_stock: item.current_stock,
       reason: '',
-      is_active: item.is_active ?? true,
     }
   })
 
@@ -69,19 +75,32 @@ export function EditStockDialog({
   }
 
   const handleStockEdit = async (data: StockEditFormData) => {
+    if (salvandoRef.current) return
+    // Farmacia: saldo e por local (item_stocks) e so muda por movimento
+    // (entrada, saida, ajuste) — gravar um numero absoluto aqui furaria o livro.
+    if (type !== 'warehouse') {
+      setError('Na farmácia o saldo só muda por movimento (entrada, saída ou ajuste). Use a tela de movimentações.')
+      return
+    }
+    if (data.new_stock === item.current_stock) {
+      setError('O novo estoque é igual ao atual. Nada para salvar.')
+      return
+    }
+    salvandoRef.current = true
     try {
       setLoading(true)
       setError(null)
 
-      const pharmacyCats = ['Medicamentos', 'Material Hospitalar', 'MEDICAMENTO', 'MAT/MED', 'HIGIENE E LIMPEZA']
-      const itemType = pharmacyCats.includes(item.category as string)
-        ? 'pharmacy'
-        : 'warehouse'
-
-      await itemsService.update(item.id, {
-        current_stock: data.new_stock,
-        is_active: data.is_active
-      }, itemType)
+      // Grava pela RPC auditada do almox (a mesma do "Editar Item"): confere
+      // permissao, exige motivo e registra antes/depois + motivo em
+      // almox_item_edicoes. Antes: update direto em warehouse_items, sem
+      // motivo gravado e sem conferir se alguma linha foi alterada.
+      const { error: rpcErr } = await supabase.rpc('almox_editar_item', {
+        p_item_id: item.id,
+        p_campos: { current_stock: data.new_stock },
+        p_motivo: data.reason.trim(),
+      })
+      if (rpcErr) throw rpcErr
 
       onSuccess()
       onOpenChange(false)
@@ -90,6 +109,7 @@ export function EditStockDialog({
       console.error('Error updating stock:', error)
       setError(getErrorMessage(error))
     } finally {
+      salvandoRef.current = false
       setLoading(false)
     }
   }
@@ -101,7 +121,6 @@ export function EditStockDialog({
     stockForm.reset({
       new_stock: item.current_stock,
       reason: '',
-      is_active: item.is_active ?? true,
     })
   }
 
@@ -185,7 +204,7 @@ export function EditStockDialog({
                 <h3 className="font-medium text-green-900">Edição Autorizada</h3>
               </div>
               <p className="text-sm text-green-700">
-                Você pode agora editar o estoque do item. Informe o motivo da alteração.
+                Informe o novo estoque e o motivo. A alteração fica registrada no histórico de edições do item (antes/depois, quem e por quê).
               </p>
             </div>
 
@@ -252,37 +271,6 @@ export function EditStockDialog({
                     💡 Para entradas com NF/AFM, prefira o botão <strong>"Registrar Entrada"</strong>. Use esta tela para <strong>correções manuais</strong> de estoque.
                   </p>
                 )}
-              </div>
-
-              {/* Status Ativo/Inativo */}
-              <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label htmlFor="is_active" className="text-base font-medium">
-                      Status do Item
-                    </Label>
-                    <p className="text-sm text-gray-600 mt-1">
-                      {stockForm.watch('is_active')
-                        ? 'Item ativo e visível nas listagens'
-                        : 'Item inativo e oculto das listagens'}
-                    </p>
-                  </div>
-                  <Switch
-                    id="is_active"
-                    checked={stockForm.watch('is_active')}
-                    onCheckedChange={(checked) => stockForm.setValue('is_active', checked)}
-                  />
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <div className={`w-3 h-3 rounded-full ${
-                    stockForm.watch('is_active') ? 'bg-green-500' : 'bg-red-500'
-                  }`} />
-                  <span className={`text-sm font-medium ${
-                    stockForm.watch('is_active') ? 'text-green-700' : 'text-red-700'
-                  }`}>
-                    {stockForm.watch('is_active') ? 'ATIVO' : 'INATIVO'}
-                  </span>
-                </div>
               </div>
 
               {/* Reason */}

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
+import { useModule } from '@/contexts/module'
+import { dataBR } from '@/lib/utils/seguro'
 import {
   ArrowLeft, Package2, Pill, Plus, History,
   TrendingUp, TrendingDown, AlertTriangle,
@@ -52,6 +54,8 @@ export function ItemDetails() {
   const location = useLocation()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { activeModule, activeStock } = useModule()
+  const [searchParams] = useSearchParams()
   const [item, setItem] = useState<Item | null>(null)
   const [loading, setLoading] = useState(true)
   const [stockHistory, setStockHistory] = useState<StockEntry[]>([])
@@ -62,8 +66,23 @@ export function ItemDetails() {
   const [success, setSuccess] = useState<string | null>(null)
   // Nome do fornecedor amarrado (busca via FK supplier_id)
   const [supplierName, setSupplierName] = useState<string | null>(null)
+  const [erroHistorico, setErroHistorico] = useState<string | null>(null)
+  // Saldo NO ESTOQUE ATIVO (satelite/CAF) — item.current_stock e o global
+  const [saldoLocal, setSaldoLocal] = useState<number | null>(null)
 
-  const type = location.pathname.includes('/pharmacy') ? 'pharmacy' : 'warehouse'
+  // Tipo do catalogo: ?tipo= explicito (SAT_T lista material dentro da
+  // farmacia), senao pela rota. Antes so olhava '/pharmacy' e a rota
+  // /farmacia/inventory/:id caia em 'warehouse' -> "Item nao encontrado".
+  const tipoParam = searchParams.get('tipo')
+  const type: 'pharmacy' | 'warehouse' =
+    tipoParam === 'pharmacy' || tipoParam === 'warehouse'
+      ? tipoParam
+      : location.pathname.includes('/pharmacy') || location.pathname.startsWith('/farmacia/')
+        ? 'pharmacy'
+        : 'warehouse'
+  // Mostra o saldo do estoque ativo so quando se esta na farmacia e o estoque
+  // ativo guarda este tipo de item (SAT_T guarda material).
+  const estoqueLocal = activeModule === 'farmacia' && activeStock && activeStock.itemType === type ? activeStock : null
 
   const isAdmin = user?.role === 'administrador'
   const isWarehouse = type === 'warehouse'
@@ -74,6 +93,30 @@ export function ItemDetails() {
       loadStockHistory()
     }
   }, [id, type])
+
+  useEffect(() => {
+    let vivo = true
+    async function carregarSaldoLocal() {
+      if (!id || !estoqueLocal) { setSaldoLocal(null); return }
+      const { data, error: eSaldo } = await supabase
+        .from('item_stocks')
+        .select('quantity')
+        .eq('item_id', id)
+        .eq('item_type', type)
+        .eq('location_id', estoqueLocal.id)
+        .maybeSingle()
+      if (!vivo) return
+      if (eSaldo) {
+        console.error('Error loading local stock:', eSaldo)
+        setSaldoLocal(null)
+        setError('Não foi possível carregar o saldo deste estoque.')
+        return
+      }
+      setSaldoLocal(Number(data?.quantity ?? 0))
+    }
+    carregarSaldoLocal()
+    return () => { vivo = false }
+  }, [id, type, estoqueLocal?.id])
 
   async function loadItem() {
     try {
@@ -105,10 +148,13 @@ export function ItemDetails() {
   async function loadStockHistory() {
     try {
       if (!id) return
+      setErroHistorico(null)
       const data = await itemsService.getStockHistory(id, type)
       setStockHistory(data)
     } catch (error) {
       console.error('Error loading stock history:', error)
+      setStockHistory([])
+      setErroHistorico('Não foi possível carregar o histórico do item.')
     }
   }
 
@@ -151,21 +197,23 @@ export function ItemDetails() {
     )
   }
 
+  const saldoExibido = saldoLocal ?? item.current_stock
+
   const getStockStatusColor = () => {
-    if (item.current_stock === 0) {
+    if (saldoExibido === 0) {
       return 'text-red-600 bg-red-50 border-red-200'
     }
-    if (item.current_stock <= item.min_stock) {
+    if (saldoExibido <= item.min_stock) {
       return 'text-yellow-600 bg-yellow-50 border-yellow-200'
     }
     return 'text-green-600 bg-green-50 border-green-200'
   }
 
   const getStockStatusText = () => {
-    if (item.current_stock === 0) {
+    if (saldoExibido === 0) {
       return 'Sem Estoque'
     }
-    if (item.current_stock <= item.min_stock) {
+    if (saldoExibido <= item.min_stock) {
       return 'Estoque Baixo'
     }
     return 'Estoque Normal'
@@ -216,7 +264,7 @@ export function ItemDetails() {
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">{item.name}</h1>
                 <div className="flex items-center gap-2 mt-1">
-                  <span className="text-sm text-gray-500">{item.code}</span>
+                  <span className="text-sm text-gray-500">{item.code || 'sem código'}</span>
                   <span className="text-sm text-gray-500">•</span>
                   <span className="text-sm text-gray-500">{item.category}</span>
                 </div>
@@ -285,10 +333,12 @@ export function ItemDetails() {
                 <Package2 className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">Estoque Atual</p>
+                <p className="text-sm text-gray-500">
+                  Estoque Atual{estoqueLocal && saldoLocal !== null ? ` — ${estoqueLocal.label}` : ''}
+                </p>
                 <div className="flex items-baseline gap-2">
                   <p className="text-lg font-semibold text-gray-900">
-                    {item.current_stock}
+                    {saldoExibido}
                   </p>
                   <p className="text-sm text-gray-500">{item.unit}</p>
                 </div>
@@ -414,6 +464,12 @@ export function ItemDetails() {
           </div>
 
           <TabsContent value="timeline" className="p-6">
+            {erroHistorico && (
+              <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700 flex items-center justify-between gap-3">
+                <span>{erroHistorico}</span>
+                <Button variant="outline" size="sm" onClick={loadStockHistory}>Tentar de novo</Button>
+              </div>
+            )}
             <div className="flow-root">
               <ul role="list" className="-mb-8">
                 {stockHistory.map((event, eventIdx) => (
@@ -496,7 +552,7 @@ export function ItemDetails() {
                                   {event.expiry_date && (
                                     <p>
                                       <span className="font-medium">Validade:</span>{' '}
-                                      {safeFormat(event.expiry_date, "dd/MM/yyyy")}
+                                      {dataBR(event.expiry_date)}
                                     </p>
                                   )}
                                   {event.supplier && (
@@ -508,7 +564,7 @@ export function ItemDetails() {
                                   {event.unit_price && (
                                     <p>
                                       <span className="font-medium">Valor Unitário:</span>{' '}
-                                      R$ {event.unit_price.toFixed(2)}
+                                      R$ {Number(event.unit_price).toFixed(2)}
                                     </p>
                                   )}
                                   {event.invoice_number && (
@@ -520,13 +576,13 @@ export function ItemDetails() {
                                   {event.invoice_date && (
                                     <p>
                                       <span className="font-medium">Data da Emissão da NF:</span>{' '}
-                                      {safeFormat(event.invoice_date, "dd/MM/yyyy")}
+                                      {dataBR(event.invoice_date)}
                                     </p>
                                   )}
                                   {event.delivery_date && (
                                     <p>
                                       <span className="font-medium">Entrega:</span>{' '}
-                                      {safeFormat(event.delivery_date, "dd/MM/yyyy")}
+                                      {dataBR(event.delivery_date)}
                                     </p>
                                   )}
                                   {event.afm_number && (
@@ -550,7 +606,7 @@ export function ItemDetails() {
                                   {event.invoice_total_value && (
                                     <p>
                                       <span className="font-medium">Valor Total da Nota:</span>{' '}
-                                      R$ {event.invoice_total_value.toFixed(2)}
+                                      R$ {Number(event.invoice_total_value).toFixed(2)}
                                     </p>
                                   )}
                                 </div>
@@ -874,6 +930,7 @@ export function ItemDetails() {
       {item && (
         <StockConfigDialog
           item={item}
+          type={type}
           open={showConfigDialog}
           onOpenChange={setShowConfigDialog}
           onSuccess={() => {
@@ -888,6 +945,7 @@ export function ItemDetails() {
       {item && isAdmin && (
         <EditStockDialog
           item={item}
+          type={type}
           open={showEditStockDialog}
           onOpenChange={setShowEditStockDialog}
           onSuccess={() => {

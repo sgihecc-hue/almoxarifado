@@ -9,6 +9,9 @@ import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { auditLogService } from '@/lib/services/audit-log'
 import type { AuditLogEntry, AuditOrigem } from '@/lib/services/audit-log'
+import { hojeLocal } from '@/lib/utils/seguro'
+
+const PAGINA = 500
 
 const ENTITIES = [
   'pharmacy_dispensations',
@@ -54,8 +57,12 @@ export function HistoricoGlobal() {
   const [expanded, setExpanded] = useState<string | null>(null)
 
   const [search, setSearch] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  // Periodo padrao: ultimos 7 dias (a busca agora varre o banco; sem periodo
+  // ficaria lenta). Pode ser ampliado nos campos de data.
+  const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 6); return hojeLocal(d) })
+  const [dateTo, setDateTo] = useState(() => hojeLocal())
+  const [temMais, setTemMais] = useState(false)
+  const [carregandoMais, setCarregandoMais] = useState(false)
   const [actorId, setActorId] = useState('')
   const [origem, setOrigem] = useState<AuditOrigem | ''>('')
   const [entity, setEntity] = useState('')
@@ -63,25 +70,44 @@ export function HistoricoGlobal() {
 
   const [actors, setActors] = useState<Array<{ id: string; full_name: string }>>([])
 
+  const filtrosAtuais = () => ({
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    actorId: actorId || undefined,
+    origem: origem || undefined,
+    entity: entity || undefined,
+    action: action || undefined,
+    search: search || undefined,
+    limit: PAGINA,
+  })
+
   async function load() {
     try {
       setLoading(true)
       setError(null)
-      const r = await auditLogService.list({
-        dateFrom: dateFrom || undefined,
-        dateTo: dateTo || undefined,
-        actorId: actorId || undefined,
-        origem: origem || undefined,
-        entity: entity || undefined,
-        action: action || undefined,
-        search: search || undefined,
-        limit: 500,
-      })
+      const r = await auditLogService.list({ ...filtrosAtuais(), offset: 0 })
       setRows(r)
+      setTemMais(r.length === PAGINA)
     } catch (e: any) {
       setError(e?.message || 'Erro ao carregar histórico')
+      setRows([])
+      setTemMais(false)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function carregarMais() {
+    if (carregandoMais) return
+    try {
+      setCarregandoMais(true)
+      const r = await auditLogService.list({ ...filtrosAtuais(), offset: rows.length })
+      setRows((atual) => [...atual, ...r])
+      setTemMais(r.length === PAGINA)
+    } catch (e: any) {
+      setError(e?.message || 'Erro ao carregar mais eventos')
+    } finally {
+      setCarregandoMais(false)
     }
   }
 
@@ -94,7 +120,7 @@ export function HistoricoGlobal() {
 
   useEffect(() => {
     if (!isAdmin) return
-    const t = setTimeout(load, 300)
+    const t = setTimeout(load, 500)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, dateFrom, dateTo, actorId, origem, entity, action])
@@ -172,7 +198,8 @@ export function HistoricoGlobal() {
 
       {error && (
         <div className="p-4 rounded-xl bg-red-100 border border-red-200 flex items-center gap-2 text-red-800 text-sm">
-          <AlertCircle size={16} /> {error}
+          <AlertCircle size={16} /> <span className="flex-1">{error}</span>
+          <Button variant="outline" size="sm" onClick={load}>Tentar de novo</Button>
         </div>
       )}
 
@@ -193,6 +220,12 @@ export function HistoricoGlobal() {
               <tr>
                 <td colSpan={7} className="text-center py-12" style={{ color: txtMut }}>
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" /> Carregando...
+                </td>
+              </tr>
+            ) : error && rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="text-center py-12" style={{ color: '#ef4444' }}>
+                  Dados não carregados.
                 </td>
               </tr>
             ) : rows.length === 0 ? (
@@ -253,8 +286,13 @@ export function HistoricoGlobal() {
         </table>
       </div>
 
-      <div className="text-sm" style={{ color: txtMut }}>
-        {rows.length} evento(s) — mostrando até 500 mais recentes.
+      <div className="flex items-center gap-3 text-sm" style={{ color: txtMut }}>
+        <span>{rows.length} evento(s) no período{temMais ? ' (há mais)' : ''}.</span>
+        {temMais && (
+          <Button variant="outline" size="sm" onClick={carregarMais} disabled={carregandoMais}>
+            {carregandoMais ? 'Carregando…' : `Carregar mais ${PAGINA}`}
+          </Button>
+        )}
       </div>
     </div>
   )

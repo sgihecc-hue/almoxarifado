@@ -449,10 +449,25 @@ class ItemsService {
       }
 
       const stockHistory: StockEntry[] = [];
-      
+
+      // Paginacao local (de 1000 em 1000): o PostgREST corta em 1000 linhas
+      // em silencio. Erro de qualquer fonte SOBE — antes cada consulta que
+      // falhava so ia pro console e a linha do tempo saia incompleta, como se
+      // o item nao tivesse aquele historico.
+      const todas = async <T,>(montar: (de: number, ate: number) => PromiseLike<{ data: T[] | null; error: any }>): Promise<T[]> => {
+        const saida: T[] = []
+        for (let de = 0; de < 200000; de += 1000) {
+          const { data, error } = await montar(de, de + 999)
+          if (error) throw error
+          const lote = data ?? []
+          saida.push(...lote)
+          if (lote.length < 1000) break
+        }
+        return saida
+      }
+
       // Get stock additions from expiry tracking
-      let expiryData: any[] | null = null
-      const { data: expiryResult, error: expiryError } = await supabase
+      const expiryData: any[] = await todas<any>((de, ate) => supabase
         .from('expiry_tracking')
         .select(`
           id,
@@ -473,46 +488,31 @@ class ItemsService {
         `)
         .eq('item_id', id)
         .order('created_at', { ascending: false })
+        .order('id')
+        .range(de, ate))
 
-      if (expiryError) {
-        if (expiryError.code === 'PGRST205' || expiryError.message?.includes('not find the table')) {
-          console.warn('Table expiry_tracking does not exist yet')
-        } else {
-          console.error('Error fetching expiry data:', expiryError)
-        }
-      } else {
-        expiryData = expiryResult
-      }
-
-      // Get audit logs for stock updates
-      let auditLogs: any[] | null = null
-      const { data: auditResult, error: auditError } = await supabase
-        .from('audit_logs')
-        .select(`
-          id,
-          action,
-          old_data,
-          new_data,
-          changed_by,
-          created_at
-        `)
-        .eq('table_name', this.getTableName(type))
-        .eq('record_id', id)
-        .order('created_at', { ascending: false })
-
-      if (auditError) {
-        if (auditError.code === 'PGRST200' || auditError.message?.includes('Could not find a relationship')) {
-          console.warn('audit_logs relationship not configured yet')
-        } else {
-          console.error('Error fetching audit logs:', auditError)
-        }
-      } else {
-        auditLogs = auditResult
-      }
+      // Get audit logs for stock updates (so almox: na farmacia o saldo e
+      // movido pelo livro-razao, que ja entra abaixo)
+      const auditLogs: any[] = type === 'warehouse'
+        ? await todas<any>((de, ate) => supabase
+            .from('audit_logs')
+            .select(`
+              id,
+              action,
+              old_data,
+              new_data,
+              changed_by,
+              created_at
+            `)
+            .eq('table_name', this.getTableName(type))
+            .eq('record_id', id)
+            .order('created_at', { ascending: false })
+            .order('id')
+            .range(de, ate))
+        : []
 
       // Get requests that include this item
-      let requestItems: any[] | null = null
-      const { data: requestResult, error: requestError } = await supabase
+      const requestItems: any[] = await todas<any>((de, ate) => supabase
         .from('request_items')
         .select(`
           id,
@@ -528,189 +528,173 @@ class ItemsService {
         `)
         .eq(type === 'pharmacy' ? 'pharmacy_item_id' : 'warehouse_item_id', id)
         .order('created_at', { ascending: false })
-
-      if (requestError) {
-        if (requestError.code === '42703' || requestError.message?.includes('does not exist')) {
-          console.warn('Column or table issue in request_items query')
-        } else {
-          console.error('Error fetching requests:', requestError)
-        }
-      } else {
-        requestItems = requestResult
-      }
+        .order('id')
+        .range(de, ate))
 
       // Fetch user details for requests separately to avoid ambiguous relationships
-      const userIds = requestItems?.map(item => {
-        if (!item.requests) return null;
+      const userIds = [...new Set(requestItems.map(item => {
         if (!item.requests) return null;
         const request = item.requests as any;
         return request.requester_id;
-      }).filter(Boolean) || [];
+      }).filter(Boolean))];
 
-      const { data: users, error: usersError } = await supabase
-        .from('users')
-        .select('id, full_name')
-        .in('id', userIds)
-
-      if (usersError) {
-        console.error('Error fetching users:', usersError);
-        throw usersError;
+      const userMap = new Map<string, string>()
+      for (let i = 0; i < userIds.length; i += 200) {
+        const { data: users, error: usersError } = await supabase
+          .from('users')
+          .select('id, full_name')
+          .in('id', userIds.slice(i, i + 200))
+        if (usersError) {
+          console.error('Error fetching users:', usersError);
+          throw usersError;
+        }
+        ;(users || []).forEach((u: any) => userMap.set(u.id, u.full_name))
       }
-
-      // Create a map of user IDs to names
-      const userMap = new Map(users?.map(user => [user.id, user.full_name]));
 
       // Add expiry tracking entries to stock history
-      if (expiryData) {
-        expiryData.forEach(entry => {
-          const createdByUser = entry.created_by_user as unknown as { full_name: string } | null;
-          stockHistory.push({
-            id: entry.id,
-            type: 'addition',
-            quantity: entry.initial_quantity,
-            description: 'Adição de estoque',
-            created_by: createdByUser?.full_name || 'Sistema',
-            created_at: entry.created_at,
-            batch_number: entry.batch_number,
-            expiry_date: entry.expiry_date,
-            invoice_number: entry.invoice_number || undefined,
-            invoice_date: entry.invoice_date || undefined,
-            delivery_date: entry.delivery_date || undefined,
-            afm_number: entry.afm_number || undefined,
-            supplier_cnpj: entry.supplier_cnpj || undefined,
-            supplier_name: entry.supplier_name || undefined,
-            invoice_total_value: entry.invoice_total_value || undefined
-          });
+      expiryData.forEach(entry => {
+        const createdByUser = entry.created_by_user as unknown as { full_name: string } | null;
+        stockHistory.push({
+          id: entry.id,
+          type: 'addition',
+          quantity: entry.initial_quantity,
+          description: 'Adição de estoque',
+          created_by: createdByUser?.full_name || 'Sistema',
+          created_at: entry.created_at,
+          batch_number: entry.batch_number,
+          expiry_date: entry.expiry_date,
+          invoice_number: entry.invoice_number || undefined,
+          invoice_date: entry.invoice_date || undefined,
+          delivery_date: entry.delivery_date || undefined,
+          afm_number: entry.afm_number || undefined,
+          supplier_cnpj: entry.supplier_cnpj || undefined,
+          supplier_name: entry.supplier_name || undefined,
+          invoice_total_value: entry.invoice_total_value || undefined
         });
-      }
+      });
 
-      // Add audit log entries for stock updates
-      if (auditLogs) {
-        auditLogs.forEach(log => {
-          const oldData = log.old_data as any;
-          const newData = log.new_data as any;
+      // Alteracoes de current_stock no audit_logs: NAO viram mais "solicitacao"
+      // nem "adicao". Toda baixa/entrada ja grava o proprio evento (solicitacao,
+      // lote, movimento) e o audit_logs registra o mesmo saldo mudando — virar
+      // 'request' contava em dobro "Total de Solicitacoes". Ficam na linha do
+      // tempo como 'movement' (ajuste do saldo no cadastro), fora dos contadores.
+      auditLogs.forEach(log => {
+        const oldData = log.old_data as any;
+        const newData = log.new_data as any;
 
-          if (log.action === 'UPDATE' && oldData?.current_stock !== newData?.current_stock) {
-            const quantity = newData?.current_stock - oldData?.current_stock;
-            if (quantity !== 0 && !expiryData?.some(e => e.created_at === log.created_at)) {
-              stockHistory.push({
-                id: log.id,
-                type: quantity > 0 ? 'addition' : 'request',
-                quantity: Math.abs(quantity),
-                description: quantity > 0 ? 'Ajuste de estoque (aumento)' : 'Ajuste de estoque (redução)',
-                created_by: 'Sistema',
-                created_at: log.created_at
-              })
-            }
+        if (log.action === 'UPDATE' && oldData?.current_stock !== newData?.current_stock) {
+          const quantity = Number(newData?.current_stock) - Number(oldData?.current_stock);
+          if (Number.isFinite(quantity) && quantity !== 0 && !expiryData.some(e => e.created_at === log.created_at)) {
+            stockHistory.push({
+              id: log.id,
+              type: 'movement',
+              quantity: Math.abs(quantity),
+              description: `Saldo do cadastro alterado (${oldData?.current_stock} → ${newData?.current_stock})`,
+              created_by: 'Sistema',
+              created_at: log.created_at,
+              status: quantity > 0 ? 'in' : 'out',
+            })
           }
-        });
-      }
+        }
+      });
 
       // Add request entries to stock history
-      if (requestItems) {
-        requestItems.forEach(request => {
-          if (!request.requests) return;
-          const requestData = request.requests as any;
-          if (requestData.status !== 'cancelled') {
-            stockHistory.push({
-              id: request.id,
-              type: 'request',
-              quantity: request.approved_quantity || request.quantity,
-              description: `Solicitação #${request.request_id}`,
-              created_by: userMap.get(requestData.requester_id) || 'Sistema',
-              created_at: request.created_at,
-              reference_id: request.request_id,
-              status: requestData.status
-            });
-          }
-        });
-      }
+      requestItems.forEach(request => {
+        if (!request.requests) return;
+        const requestData = request.requests as any;
+        if (requestData.status !== 'cancelled') {
+          stockHistory.push({
+            id: request.id,
+            type: 'request',
+            quantity: request.approved_quantity || request.quantity,
+            description: `Solicitação #${request.request_id}`,
+            created_by: userMap.get(requestData.requester_id) || 'Sistema',
+            created_at: request.created_at,
+            reference_id: request.request_id,
+            status: requestData.status
+          });
+        }
+      });
 
       // ---------------------------------------------------------------
-      // Livro-razão (stock_movements) — SÓ FARMÁCIA.
+      // Livro-razão (stock_movements) — farmácia E almoxarifado.
       //
-      // Sem isto a linha do tempo era cega para tudo que a farmácia faz de
-      // verdade: dispensação, devolução, transferência entre satélites,
-      // baixa avulsa e ajuste não apareciam em lugar nenhum. Quem dispensou
-      // um medicamento era informação que existia no banco e não na tela.
+      // Sem isto a linha do tempo era cega para dispensação, devolução,
+      // transferência, baixa avulsa e ajuste (e, no almox, para a saída
+      // avulsa por setor, que só existe aqui).
       //
       // Dois tipos ficam DE FORA de propósito, porque já estão na lista por
       // outra fonte e entrariam em duplicidade:
       //   SOLICITACAO  -> já vem de request_items acima
       //   ENTRADA_NF   -> já vem de expiry_tracking acima
-      //
-      // O ramo 'warehouse' não é tocado: continua exatamente como estava.
+      // Paginado (antes .limit(300): item muito dispensado perdia o histórico).
       // ---------------------------------------------------------------
-      if (type === 'pharmacy') {
-        try {
-          const { data: movs, error: movErr } = await supabase
-            .from('stock_movements')
-            .select(`
-              id, movement_type, direction, quantity, performed_at, notes,
-              performed_by,
-              expiry_tracking:expiry_tracking!stock_movements_expiry_tracking_id_fkey(batch_number, expiry_date),
-              origem:stock_locations!stock_movements_source_location_id_fkey(code),
-              destino:stock_locations!stock_movements_target_location_id_fkey(code)
-            `)
-            .eq('item_id', id)
-            .eq('item_type', 'pharmacy')
-            .not('movement_type', 'in', '("SOLICITACAO","ENTRADA_NF")')
-            .order('performed_at', { ascending: false })
-            .limit(300)
+      const movs: any[] = await todas<any>((de, ate) => supabase
+        .from('stock_movements')
+        .select(`
+          id, movement_type, direction, quantity, performed_at, notes,
+          performed_by, destino_nome,
+          expiry_tracking:expiry_tracking!stock_movements_expiry_tracking_id_fkey(batch_number, expiry_date),
+          origem:stock_locations!stock_movements_source_location_id_fkey(code),
+          destino:stock_locations!stock_movements_target_location_id_fkey(code)
+        `)
+        .eq('item_id', id)
+        .eq('item_type', type)
+        .not('movement_type', 'in', '("SOLICITACAO","ENTRADA_NF")')
+        .order('performed_at', { ascending: false })
+        .order('id')
+        .range(de, ate))
 
-          if (movErr) {
-            console.error('Error fetching stock movements:', movErr)
-          } else if (movs && movs.length > 0) {
-            const autorIds = [...new Set(movs.map((m: any) => m.performed_by).filter(Boolean))]
-            const autores = new Map<string, string>()
-            if (autorIds.length > 0) {
-              const { data: us } = await supabase
-                .from('users').select('id, full_name').in('id', autorIds)
-              ;(us || []).forEach((u: any) => autores.set(u.id, u.full_name))
-            }
-
-            const ACAO: Record<string, string> = {
-              PRESCRICAO: 'Dispensação',
-              DEVOLUCAO_INT: 'Devolução da enfermagem',
-              SAIDA_AVULSA: 'Baixa (quebra, vencimento, empréstimo)',
-              TRANSFERENCIA: 'Transferência entre estoques',
-              AJUSTE: 'Ajuste manual',
-              RETORNO_EMPRESTIMO: 'Retorno de empréstimo',
-            }
-
-            movs.forEach((m: any) => {
-              const local = m.direction === 'out' ? m.origem?.code : m.destino?.code
-              const acao = ACAO[m.movement_type] || m.movement_type
-              stockHistory.push({
-                id: `mov_${m.id}`,
-                type: 'movement',
-                quantity: m.quantity,
-                description: local ? `${acao} · ${local}` : acao,
-                created_by: autores.get(m.performed_by) || 'Sistema',
-                created_at: m.performed_at,
-                batch_number: m.expiry_tracking?.batch_number || undefined,
-                expiry_date: m.expiry_tracking?.expiry_date || undefined,
-                status: m.direction, // 'in' | 'out' — a tela usa pra cor e sinal
-              })
-            })
-          }
-        } catch (e) {
-          console.error('Error building movement history:', e)
+      if (movs.length > 0) {
+        const autorIds = [...new Set(movs.map((m: any) => m.performed_by).filter(Boolean))] as string[]
+        const autores = new Map<string, string>()
+        for (let i = 0; i < autorIds.length; i += 200) {
+          const { data: us, error: eUs } = await supabase
+            .from('users').select('id, full_name').in('id', autorIds.slice(i, i + 200))
+          if (eUs) throw eUs
+          ;(us || []).forEach((u: any) => autores.set(u.id, u.full_name))
         }
+
+        const ACAO: Record<string, string> = {
+          PRESCRICAO: 'Dispensação',
+          DEVOLUCAO_INT: 'Devolução da enfermagem',
+          SAIDA_AVULSA: type === 'warehouse' ? 'Saída avulsa' : 'Baixa (quebra, vencimento, empréstimo)',
+          TRANSFERENCIA: 'Transferência entre estoques',
+          AJUSTE: 'Ajuste manual',
+          RETORNO_EMPRESTIMO: 'Retorno de empréstimo',
+        }
+
+        movs.forEach((m: any) => {
+          const local = m.direction === 'out' ? m.origem?.code : m.destino?.code
+          const acao = ACAO[m.movement_type] || m.movement_type
+          const partes = [acao, local, m.direction === 'out' ? m.destino_nome : null].filter(Boolean)
+          stockHistory.push({
+            id: `mov_${m.id}`,
+            type: 'movement',
+            quantity: m.quantity,
+            description: partes.join(' · '),
+            created_by: autores.get(m.performed_by) || 'Sistema',
+            created_at: m.performed_at,
+            batch_number: m.expiry_tracking?.batch_number || undefined,
+            expiry_date: m.expiry_tracking?.expiry_date || undefined,
+            status: m.direction, // 'in' | 'out' — a tela usa pra cor e sinal
+          })
+        })
       }
 
       // Sort by date (newest first)
       const uniqueHistory = stockHistory.filter((item, index, self) =>
         index === self.findIndex(t => t.id === item.id)
       );
-      
-      return uniqueHistory.sort((a, b) => 
+
+      return uniqueHistory.sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
     } catch (error) {
       console.error('Error fetching stock history:', error)
-      // Return empty array instead of throwing to prevent crashes
-      return []
+      // Erro SOBE: a tela mostra "nao foi possivel carregar o historico" com
+      // "Tentar de novo" em vez de uma linha do tempo vazia/incompleta.
+      throw error instanceof Error ? error : new Error('Erro ao carregar o histórico do item')
     }
   }
 

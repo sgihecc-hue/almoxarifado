@@ -18,6 +18,7 @@ import { useAuth } from '@/contexts/auth'
 import { supabase } from '@/lib/supabase'
 import { pharmacyStockById } from '@/lib/constants/stock-locations'
 import type { Item, FilterOptions } from '@/lib/services/items'
+import { buscarTodas, hojeLocal, normalizarBusca } from '@/lib/utils/seguro'
 
 interface WarehouseItemsProps {
   // Quando um satelite (ex.: SAT_T) opera sobre itens do almoxarifado, a rota
@@ -45,6 +46,9 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [selectedItem, setSelectedItem] = useState<Item | null>(null)
   const [hideZeroStock, setHideZeroStock] = useState(true)
+  // N16: categorias reais do cadastro (DISTINCT), guardadas da carga sem
+  // filtro de categoria (senao a lista encolhe ao filtrar).
+  const [categoriasReais, setCategoriasReais] = useState<string[]>([])
   const [showEditItemDialog, setShowEditItemDialog] = useState(false)
   // Saldo local (item_id -> quantity NESTE location) quando ha locationId.
   // Vazio => usa o current_stock global do cadastro.
@@ -122,6 +126,12 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
       setError(null)
       const data = await itemsService.getByType('warehouse', filters)
       setItems(data)
+      if (!filters.categories?.length) {
+        setCategoriasReais(
+          [...new Set(data.map((i) => (i.category as string | null) ?? '').filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+        )
+      }
 
       // Consumo/dia calculado das saídas reais (últimos 30 dias).
       const { data: consumo, error: consumoErr } = await supabase.rpc('warehouse_consumo_diario')
@@ -147,14 +157,18 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
         // Lotes reais deste local. A tela mostrava warehouse_items.batch_number
         // — um campo unico do cadastro — entao um item com varios lotes exibia
         // so um, e quem entrou sem preencher esse campo aparecia sem lote.
-        const { data: lotes, error: lotesErr } = await supabase
-          .from('expiry_tracking')
-          .select('item_id, batch_number, expiry_date, current_quantity')
-          .eq('location_id', locationId)
-          .order('expiry_date', { ascending: true, nullsFirst: false })
-        if (lotesErr) throw lotesErr
+        // Paginado: o PostgREST corta em 1000 linhas em silencio.
+        const lotes = await buscarTodas<any>((de, ate) =>
+          supabase
+            .from('expiry_tracking')
+            .select('id, item_id, batch_number, expiry_date, current_quantity')
+            .eq('location_id', locationId)
+            .order('expiry_date', { ascending: true, nullsFirst: false })
+            .order('id')
+            .range(de, ate)
+        )
         const mapa = new Map<string, LoteLocal[]>()
-        for (const l of (lotes ?? []) as any[]) {
+        for (const l of lotes as any[]) {
           const lista = mapa.get(l.item_id) ?? []
           lista.push({ batch_number: l.batch_number, expiry_date: l.expiry_date, current_quantity: l.current_quantity })
           mapa.set(l.item_id, lista)
@@ -189,9 +203,10 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
   const handleExport = async () => {
     try {
       setError(null)
+      // Exporta exatamente as linhas da tela, com o saldo do LOCAL exibido.
       await itemsService.exportToExcel(
-        filteredItems,
-        `itens_almoxarifado_${new Date().toISOString().split('T')[0]}`
+        filteredItems.map((i) => ({ ...i, current_stock: getLocalQty(i) })),
+        `itens_almoxarifado_${hojeLocal()}`
       )
     } catch (error) {
       console.error('Error exporting items:', error)
@@ -213,8 +228,8 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
 
     if (typeof aValue === 'string' && typeof bValue === 'string') {
       return sortDirection === 'asc' 
-        ? aValue.localeCompare(bValue)
-        : bValue.localeCompare(aValue)
+        ? aValue.localeCompare(bValue, 'pt-BR')
+        : bValue.localeCompare(aValue, 'pt-BR')
     }
 
     if (typeof aValue === 'number' && typeof bValue === 'number') {
@@ -226,15 +241,22 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
     return 0
   })
 
+  const termo = normalizarBusca(searchTerm)
+  const casaBusca = (item: Item) =>
+    termo === '' ||
+    normalizarBusca(item.name).includes(termo) ||
+    normalizarBusca(item.code).includes(termo)
+
   const filteredItems = sortedItems
     .filter(item => !hideZeroStock || getLocalQty(item) > 0)
-    .filter(item =>
-      searchTerm === '' ||
-      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.code?.toLowerCase().includes(searchTerm.toLowerCase())
-    )
+    .filter(casaBusca)
 
   const zeroStockCount = sortedItems.filter(item => getLocalQty(item) === 0).length
+  // L5: a lista abre com "ocultar zerados" ligado; quem busca um item zerado
+  // via "nenhum item" e achava que o item nao existia. Conta os escondidos.
+  const zeradosOcultosNaBusca = hideZeroStock && termo !== ''
+    ? sortedItems.filter(item => getLocalQty(item) <= 0 && casaBusca(item)).length
+    : 0
 
   if (loading) {
     return (
@@ -332,12 +354,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
               </Button>
             )}
             <AdvancedFilters
-              categories={[
-                'Material de Escritório',
-                'Material de Limpeza',
-                'Equipamentos',
-                'Outros'
-              ]}
+              categories={categoriasReais}
               onFilterChange={setFilters}
               defaultFilters={filters}
             />
@@ -368,6 +385,16 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+        {zeradosOcultosNaBusca > 0 && (
+          <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+            <span>
+              {zeradosOcultosNaBusca} {zeradosOcultosNaBusca === 1 ? 'item zerado oculto' : 'itens zerados ocultos'} nesta busca
+            </span>
+            <Button variant="outline" size="sm" onClick={() => setHideZeroStock(false)}>
+              Mostrar
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Inventory Table — barra de rolagem sempre visivel embaixo. */}
@@ -579,6 +606,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
       {selectedItem && (
         <EditStockDialog
           item={selectedItem}
+          type="warehouse"
           open={showEditStockDialog}
           onOpenChange={setShowEditStockDialog}
           onSuccess={() => {

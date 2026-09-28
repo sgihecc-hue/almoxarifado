@@ -10,6 +10,7 @@ import { useTheme } from '@/contexts/theme'
 import { Undo2, Loader2, Download, Search, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
+import { dataBR as dataBRSeguro, hojeLocal, normalizarBusca } from '@/lib/utils/seguro'
 import { MOTIVO_OPTIONS } from '@/pages/estoque/devolucao'
 
 type Linha = {
@@ -45,10 +46,12 @@ const MAX_ROWS = 20000
 const PAGE_SIZE = 50
 const ORIGEM_SEM = 'Origem não informada'
 
-const iso = (d: Date) => d.toISOString().slice(0, 10)
-const dataBR = (d: string | null) => (d ? new Date(d).toLocaleDateString('pt-BR') : '—')
+// Data local (toISOString vira o dia seguinte depois das 21h) e 'YYYY-MM-DD'
+// sem voltar um dia (validade e coluna date).
+const iso = (d: Date) => hojeLocal(d)
+const dataBR = (d: string | null) => dataBRSeguro(d)
 const rotuloMotivo = (v: string | null) => MOTIVO_OPTIONS.find((o) => o.value === v)?.label ?? v ?? '—'
-const porNome = (a: string, b: string) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' })
+const porNome = (a: string | null, b: string | null) => (a ?? '').localeCompare(b ?? '', 'pt-BR', { sensitivity: 'base' })
 
 // Filtros ficam salvos no navegador (pedido da Andressa, 16/09/2026): recarregar
 // a página não apaga o que foi escolhido. "Limpar tudo" continua zerando.
@@ -100,8 +103,10 @@ export function FarmaciaDevolucoesReport() {
 
   const hoje = new Date()
   const [salvo] = useState(() => lerFiltros(CHAVE_FILTROS))
-  const [dataDe, setDataDe] = useState<string>(salvo.dataDe ?? iso(new Date(hoje.getTime() - 29 * 86400000)))
-  const [dataAte, setDataAte] = useState<string>(salvo.dataAte ?? iso(hoje))
+  // Periodo NAO e restaurado do navegador (abria num periodo velho sem o
+  // usuario perceber): sempre os ultimos 30 dias.
+  const [dataDe, setDataDe] = useState<string>(iso(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - 29)))
+  const [dataAte, setDataAte] = useState<string>(iso(hoje))
   const [rows, setRows] = useState<Linha[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
@@ -117,8 +122,8 @@ export function FarmaciaDevolucoesReport() {
   const [busca, setBusca] = useState<string>(salvo.busca ?? '')
 
   useEffect(() => {
-    gravarFiltros(CHAVE_FILTROS, { dataDe, dataAte, modo, estoque, origem, motivo, status, busca })
-  }, [dataDe, dataAte, modo, estoque, origem, motivo, status, busca])
+    gravarFiltros(CHAVE_FILTROS, { modo, estoque, origem, motivo, status, busca })
+  }, [modo, estoque, origem, motivo, status, busca])
   const [page, setPage] = useState(0)
 
   // Só a busca mais recente vale (a busca vai em vários blocos).
@@ -174,13 +179,13 @@ export function FarmaciaDevolucoesReport() {
   }), [rows])
 
   const filtradas = useMemo(() => {
-    const t = busca.trim().toLowerCase()
+    const t = normalizarBusca(busca)
     return rows.filter((r) => {
       if (estoque && r.estoque_codigo !== estoque) return false
       if (origem && r.origem !== origem) return false
       if (motivo && r.motivo !== motivo) return false
       if (status !== 'todas' && r.status !== status) return false
-      if (t && !`${r.item} ${r.codigo ?? ''} ${r.prontuario ?? ''}`.toLowerCase().includes(t)) return false
+      if (t && !normalizarBusca(`${r.item ?? ''} ${r.codigo ?? ''} ${r.prontuario ?? ''}`).includes(t)) return false
       return true
     })
   }, [rows, estoque, origem, motivo, status, busca])

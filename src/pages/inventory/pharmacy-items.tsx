@@ -21,6 +21,7 @@ import { AdvancedFilters } from '@/components/inventory/advanced-filters'
 import { EditStockDialog } from '@/components/inventory/edit-stock-dialog'
 import { DeleteItemDialog } from '@/components/inventory/delete-item-dialog'
 import { EditItemDialog } from '@/components/inventory/edit-item-dialog'
+import { buscarTodas, hojeLocal, normalizarBusca } from '@/lib/utils/seguro'
 import { useAuth } from '@/contexts/auth'
 import { useModule } from '@/contexts/module'
 import type { Item, FilterOptions } from '@/lib/services/items'
@@ -227,8 +228,9 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       setShelfByItem(shelves)
       return result
     } catch (e) {
-      console.error('loadAllPharmacyStocks failed (continuando sem saldos por local):', e)
-      return new Map()
+      // Erro nao vira "saldo 0" em todos os itens: sobe para loadItems.
+      console.error('loadAllPharmacyStocks failed:', e)
+      throw new Error('Erro ao carregar os saldos por local.')
     }
   }
 
@@ -245,17 +247,21 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       const result = new Map<string, LotRow[]>()
       // Material (SAT_T/warehouse) não tem lote/validade — sai sem lotes.
       if (isWarehouseStock) return result
-      // Paginação simples — 5000 lotes deve ser suficiente para o estoque atual.
-      let query = supabase
-        .from('expiry_tracking')
-        .select('item_id, batch_number, expiry_date, current_quantity')
-        .gt('current_quantity', 0)
-        .order('expiry_date', { ascending: true, nullsFirst: false })
-        .limit(5000)
-      if (effectiveLocationId) query = query.eq('location_id', effectiveLocationId)
-      const { data, error } = await query
-      if (error) throw error
-      for (const row of (data || []) as Array<LotRow & { item_id: string }>) {
+      // Paginado de 1000 em 1000: o .limit(5000) antigo parava em 1000 (teto
+      // do PostgREST) e ja sao ~969 lotes com saldo — lote sumiria da tela.
+      type LinhaLote = LotRow & { id: string; item_id: string }
+      const data = await buscarTodas<LinhaLote>((de, ate) => {
+        let query = supabase
+          .from('expiry_tracking')
+          .select('id, item_id, batch_number, expiry_date, current_quantity')
+          .gt('current_quantity', 0)
+        if (effectiveLocationId) query = query.eq('location_id', effectiveLocationId)
+        return query
+          .order('expiry_date', { ascending: true, nullsFirst: false })
+          .order('id')
+          .range(de, ate) as unknown as PromiseLike<{ data: LinhaLote[] | null; error: unknown }>
+      })
+      for (const row of data) {
         const list = result.get(row.item_id) ?? []
         list.push({
           batch_number: row.batch_number,
@@ -266,16 +272,20 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       }
       return result
     } catch (e) {
-      console.error('loadAllLots failed (continuando sem lotes):', e)
-      return new Map()
+      // Erro nao vira "item sem lote": sobe para loadItems mostrar a faixa
+      // de erro com "Tentar Novamente".
+      console.error('loadAllLots failed:', e)
+      throw new Error('Erro ao carregar os lotes do estoque.')
     }
   }
 
   const handleExport = async () => {
     try {
+      // Exporta exatamente as linhas da tela, com o saldo do LOCAL ativo
+      // (o current_stock do cadastro e o global, diferente do que aparece).
       await itemsService.exportToExcel(
-        filteredItems,
-        `itens_farmacia_${new Date().toISOString().split('T')[0]}`
+        filteredItems.map((i) => ({ ...i, current_stock: getLocalQty(i) })),
+        `itens_farmacia_${hojeLocal()}`
       )
     } catch (error) {
       console.error('Error exporting items:', error)
@@ -367,7 +377,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     const bValue = b[sortColumn as keyof Item]
 
     if (typeof aValue === 'string' && typeof bValue === 'string') {
-      return aValue.localeCompare(bValue) * dir
+      return aValue.localeCompare(bValue, 'pt-BR') * dir
     }
     if (typeof aValue === 'number' && typeof bValue === 'number') {
       return (aValue - bValue) * dir
@@ -375,11 +385,17 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     return 0
   })
 
+  // N16: categorias do filtro = as que existem no cadastro carregado (DISTINCT).
+  // A lista fixa ('Medicamentos', 'Material Hospitalar') nao casava com o
+  // cadastro real (MEDICAMENTO, MAT/MED...) e o filtro zerava a lista.
+  const categoriasReais = [...new Set(items.map((i) => (i.category as string | null) ?? '').filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+
   const filteredItems = sortedItems
     .filter(item =>
-      searchTerm === '' ||
-      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.code?.toLowerCase().includes(searchTerm.toLowerCase())
+      searchTerm.trim() === '' ||
+      normalizarBusca(item.name).includes(normalizarBusca(searchTerm)) ||
+      normalizarBusca(item.code).includes(normalizarBusca(searchTerm))
     )
     .filter(item => !filters.categories?.length || filters.categories.includes(item.category))
     .filter(item => !filters.status?.length || filters.status.includes(statusLocal(item)))
@@ -516,7 +532,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
               </Button>
             )}
             <AdvancedFilters
-              categories={['Medicamentos', 'Material Hospitalar']}
+              categories={categoriasReais}
               onFilterChange={setFilters}
               defaultFilters={filters}
             />
@@ -849,7 +865,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                           )}
                           {/* Rotulo visivel: so o icone de olho ninguem descobria que
                               existe linha do tempo, entradas e saidas do item. */}
-                          <Button variant="ghost" size="sm" onClick={() => navigate(`/inventory/pharmacy/${item.id}`)} title="Linha do tempo, entradas e saídas do item" className="h-8 px-2 gap-1.5">
+                          <Button variant="ghost" size="sm" onClick={() => navigate(`/inventory/${catalogItemType}/${item.id}`)} title="Linha do tempo, entradas e saídas do item" className="h-8 px-2 gap-1.5">
                             <History className="w-4 h-4" />
                             <span className="hidden sm:inline text-xs">Histórico</span>
                           </Button>
@@ -889,6 +905,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       {selectedItem && (
         <EditStockDialog
           item={selectedItem}
+          type={catalogItemType}
           open={showEditStockDialog}
           onOpenChange={setShowEditStockDialog}
           onSuccess={() => {
@@ -916,7 +933,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       {selectedItem && (
         <EditItemDialog
           item={selectedItem}
-          type="pharmacy"
+          type={catalogItemType}
           open={showEditItemDialog}
           onOpenChange={(open) => {
             setShowEditItemDialog(open)

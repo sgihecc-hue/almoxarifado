@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { 
   Calendar, 
   BarChart3, 
@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { format, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns'
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { itemsService } from '@/lib/services/items'
 import { departmentsService } from '@/lib/services/departments'
@@ -40,6 +40,48 @@ import { ConsumptionLineChart } from '@/components/charts/consumption-line-chart
 import { DepartmentPieChart } from '@/components/charts/department-pie-chart'
 import type { Item } from '@/lib/services/items'
 import type { Department } from '@/lib/types/departments'
+import { buscarTodas, dataBR, hojeLocal, normalizarBusca, parseDataLocal } from '@/lib/utils/seguro'
+
+const SEM_CATEGORIA = 'Sem categoria'
+
+// Linha crua de v_warehouse_consumption
+interface LinhaView {
+  source_id: string
+  item_id: string
+  quantity: number
+  department_id: string | null
+  consumption_date: string
+  origem: string
+  lote: string | null
+  validade: string | null
+  destino_texto: string | null
+}
+
+interface ItemConsumo {
+  id: string
+  name: string
+  code: string | null
+  unit: string | null
+  category: string | null
+  price: number | null
+  last_purchase_price: number | null
+}
+
+// Linha resolvida (item/setor/valor) exatamente como entra na tela
+interface LinhaConsumo {
+  date: string
+  itemId: string
+  itemName: string
+  code: string
+  unit: string
+  category: string
+  department: string
+  origem: string
+  lote: string | null
+  validade: string | null
+  quantity: number
+  value: number
+}
 
 // Types for consumption data
 interface ConsumptionData {
@@ -94,10 +136,11 @@ export function WarehouseConsumptionReport() {
   const [items, setItems] = useState<Item[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
+  const [carregandoConsumo, setCarregandoConsumo] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily')
   const [dateRange, setDateRange] = useState<{start: Date, end: Date}>({
-    start: subDays(new Date(), 1),
+    start: new Date(),
     end: new Date()
   })
   const [consumptionData, setConsumptionData] = useState<ConsumptionData[]>([])
@@ -110,15 +153,17 @@ export function WarehouseConsumptionReport() {
     showValueData: true,
     includeLowStockWarnings: true,
     topItemsCount: 10,
-    // Categorias reais do almoxarifado (conferido no banco). As antigas
-    // ('Material de Escritório' etc.) nao existem em nenhum item.
-    categories: ['MATERIAL HOSPITALAR', 'MATERIAL DE EXPEDIENTE', 'EPI'],
+    // Categorias EXCLUIDAS do relatorio (vazio = todas). Antes era uma lista
+    // fixa de categorias incluidas: item sem categoria (11 no cadastro) ou com
+    // categoria nova sumia do relatorio sem aviso. As opcoes do dialogo vem
+    // das categorias reais (DISTINCT) dos itens.
+    categories: [],
     showDepartmentBreakdown: true,
     showCategoryBreakdown: true
   })
   const [customDateRange, setCustomDateRange] = useState<{start: string, end: string}>({
-    start: format(dateRange.start, 'yyyy-MM-dd'),
-    end: format(dateRange.end, 'yyyy-MM-dd')
+    start: hojeLocal(dateRange.start),
+    end: hojeLocal(dateRange.end)
   })
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all')
@@ -127,6 +172,13 @@ export function WarehouseConsumptionReport() {
   const [selectedItem, setSelectedItem] = useState<string>('all')
   const [showItemFilter, setShowItemFilter] = useState(false)
   const [itemSearchTerm, setItemSearchTerm] = useState('')
+
+  // Linhas de consumo ja resolvidas (item, setor, valor) e FILTRADAS como
+  // estao na tela — a exportacao detalhada usa exatamente estas linhas.
+  const [linhasTela, setLinhasTela] = useState<LinhaConsumo[]>([])
+  const [categoriasDisponiveis, setCategoriasDisponiveis] = useState<string[]>([])
+  const [recarregar, setRecarregar] = useState(0)
+  const consultaAtual = useRef(0)
 
   // Load items and departments on component mount
   useEffect(() => {
@@ -142,7 +194,8 @@ export function WarehouseConsumptionReport() {
 
     switch (period) {
       case 'daily':
-        start = subDays(today, 1)
+        // "Diario" = so hoje (antes subDays(1): cobria ontem + hoje)
+        start = today
         break
       case 'weekly':
         start = startOfWeek(today, { weekStartsOn: 1 }) // Week starts on Monday
@@ -153,13 +206,13 @@ export function WarehouseConsumptionReport() {
         end = endOfMonth(today)
         break
       default:
-        start = subDays(today, 1)
+        start = today
     }
 
     setDateRange({ start, end })
     setCustomDateRange({
-      start: format(start, 'yyyy-MM-dd'),
-      end: format(end, 'yyyy-MM-dd')
+      start: hojeLocal(start),
+      end: hojeLocal(end)
     })
   }, [period])
 
@@ -169,7 +222,7 @@ export function WarehouseConsumptionReport() {
 
     if (settings.autoRefresh && !loading) {
       intervalId = window.setInterval(() => {
-        loadItems()
+        setRecarregar((n) => n + 1)
       }, settings.refreshInterval * 60 * 1000)
     }
 
@@ -178,32 +231,25 @@ export function WarehouseConsumptionReport() {
     }
   }, [settings.autoRefresh, settings.refreshInterval, loading])
 
-  // Process consumption data when items change or date range changes or department/item selection changes
+  // O consumo NAO depende mais da lista de itens/setores ja carregada: antes
+  // ele rodava quando `items` chegava e resolvia o setor com `departments`
+  // que podia ainda estar vazio (corrida) -> relatorio zerado. Agora busca
+  // item e setor pelos ids que vieram da view, sem filtro de ativo (item
+  // inativado continua aparecendo no consumo do periodo em que foi usado).
   useEffect(() => {
-    if (items.length > 0) {
-      loadConsumptionFromDatabase()
-    }
-  }, [items, dateRange, selectedDepartment, selectedItem])
+    loadConsumptionFromDatabase()
+  }, [dateRange, selectedDepartment, selectedItem, settings.categories, recarregar])
 
   async function loadItems() {
     try {
       setLoading(true)
       setError(null)
-      // getByType('warehouse') consulta so warehouse_items — getAll() (usado
-      // antes) junta farmacia+almoxarifado, e o filtro por categoria abaixo
-      // usava nomes ficticios ('Material de Escritorio' etc.) que nao existem
-      // no cadastro real (que e MATERIAL HOSPITALAR / MATERIAL DE EXPEDIENTE
-      // / EPI). Resultado: a lista de itens ficava sempre vazia — nenhum
-      // item pra filtrar e o relatorio inteiro (Visao Geral/Por Categoria)
-      // sem dados, pra qualquer usuario, desde sempre.
+      // Lista para o filtro "Filtrar por Item" (so itens ativos do almox).
       const data = await itemsService.getByType('warehouse')
-
-      const warehouseItems = settings.categories.length === 0
-        ? data
-        : data.filter(item => settings.categories.includes(item.category))
-
-      setItems(warehouseItems)
-      
+      setItems(data)
+      setCategoriasDisponiveis(
+        [...new Set(data.map((i) => (i.category as string | null) ?? SEM_CATEGORIA))].sort((a, b) => a.localeCompare(b))
+      )
     } catch (error) {
       console.error('Error loading items:', error)
       setError('Erro ao carregar itens. Por favor, tente novamente.')
@@ -222,147 +268,165 @@ export function WarehouseConsumptionReport() {
     }
   }
 
+  const statsVazias = (): ConsumptionStats => ({
+    totalQuantity: 0,
+    totalValue: 0,
+    averageQuantity: 0,
+    averageValue: 0,
+    maxQuantity: 0,
+    maxDate: hojeLocal(),
+    items: [],
+    byDepartment: [],
+    byCategory: []
+  })
+
   async function loadConsumptionFromDatabase() {
+    const minhaConsulta = ++consultaAtual.current
     try {
       setError(null)
+      setCarregandoConsumo(true)
 
-      // v_warehouse_consumption une as 3 fontes reais de saida do almoxarifado:
-      // solicitacao entregue (a maioria — debitada por trigger, sem tabela de
-      // historico propria), saida avulsa/quebra (stock_movements) e lancamento
-      // manual (warehouse_consumption_entries, tela do admin). Essa ultima
-      // tabela sozinha (usada antes aqui) tinha 0 linhas desde que existe —
-      // o relatorio mostrava 0 pra qualquer item, qualquer periodo, sempre.
-      const { data: rows, error: consumptionError } = await supabase
-        .from('v_warehouse_consumption')
-        .select('item_id, quantity, department_id, consumption_date')
-        .gte('consumption_date', format(dateRange.start, 'yyyy-MM-dd'))
-        .lte('consumption_date', format(dateRange.end, 'yyyy-MM-dd'))
-        .order('consumption_date', { ascending: true })
+      // v_warehouse_consumption une as fontes reais de saida do almoxarifado:
+      // solicitacao entregue, saida avulsa (stock_movements), saida direta
+      // concluida (warehouse_dispatches) e lancamento manual. Paginado: o
+      // PostgREST corta em 1000 linhas em silencio (setembro ja passa de 2 mil).
+      const inicio = hojeLocal(dateRange.start)
+      const fim = hojeLocal(dateRange.end)
+      const rows = await buscarTodas<LinhaView>((de, ate) =>
+        supabase
+          .from('v_warehouse_consumption')
+          .select('source_id, item_id, quantity, department_id, consumption_date, origem, lote, validade, destino_texto')
+          .gte('consumption_date', inicio)
+          .lte('consumption_date', fim)
+          .order('consumption_date', { ascending: true })
+          .order('source_id', { ascending: true })
+          .range(de, ate) as unknown as PromiseLike<{ data: LinhaView[] | null; error: unknown }>
+      )
 
-      if (consumptionError) {
-        console.error('Error fetching warehouse consumption data:', consumptionError)
-        throw new Error('Erro ao carregar dados de consumo do banco')
+      // Item e setor pelos ids da propria view (sem filtro de ativo).
+      const itemIds = [...new Set(rows.map((r) => r.item_id).filter(Boolean))]
+      const depIds = [...new Set(rows.map((r) => r.department_id).filter(Boolean))] as string[]
+      const itemById = new Map<string, ItemConsumo>()
+      for (let i = 0; i < itemIds.length; i += 300) {
+        const { data, error: eItens } = await supabase
+          .from('warehouse_items')
+          .select('id, name, code, unit, category, price, last_purchase_price')
+          .in('id', itemIds.slice(i, i + 300))
+        if (eItens) throw eItens
+        for (const it of (data || []) as ItemConsumo[]) itemById.set(it.id, it)
+      }
+      const deptById = new Map<string, string>()
+      for (let i = 0; i < depIds.length; i += 300) {
+        const { data, error: eSetores } = await supabase
+          .from('departments')
+          .select('id, name')
+          .in('id', depIds.slice(i, i + 300))
+        if (eSetores) throw eSetores
+        for (const d of (data || []) as Array<{ id: string; name: string }>) deptById.set(d.id, d.name)
       }
 
-      if (!rows || !Array.isArray(rows)) {
-        console.warn('No warehouse consumption data found')
-        setConsumptionData([])
-        setStats({
-          totalQuantity: 0,
-          totalValue: 0,
-          averageQuantity: 0,
-          averageValue: 0,
-          maxQuantity: 0,
-          maxDate: format(new Date(), 'yyyy-MM-dd'),
-          items: [],
-          byDepartment: [],
-          byCategory: []
-        })
-        return
-      }
+      if (minhaConsulta !== consultaAtual.current) return // resposta velha
 
-      // A view so devolve ids — resolve item/setor com o que ja esta
-      // carregado no componente (items ja filtrado por categoria valida).
-      const itemById = new Map(items.map(i => [i.id, i]))
-      const deptById = new Map(departments.map(d => [d.id, d]))
-
-      const processedEntries = rows
-        .map(row => {
+      const excluidas = new Set(settings.categories)
+      const linhas: LinhaConsumo[] = rows
+        .map((row) => {
           const item = itemById.get(row.item_id)
-          const department = deptById.get(row.department_id)
-          if (!item || !department) return null
-          return { item, department, quantity: Number(row.quantity), date: row.consumption_date }
+          const setor = (row.department_id && deptById.get(row.department_id))
+            || (row.origem === 'saida_direta' && row.destino_texto ? `Saída direta: ${row.destino_texto}` : null)
+            || row.destino_texto
+            || 'Sem setor'
+          const categoria = item?.category ?? SEM_CATEGORIA
+          // Preco: price esta vazio em ~metade do cadastro -> ultimo preco de compra.
+          const preco = Number(item?.price ?? item?.last_purchase_price ?? 0) || 0
+          const quantidade = Number(row.quantity) || 0
+          return {
+            date: row.consumption_date,
+            itemId: row.item_id,
+            itemName: item?.name ?? '(item não encontrado)',
+            code: item?.code ?? '',
+            unit: item?.unit ?? '',
+            category: categoria,
+            department: setor,
+            origem: row.origem,
+            lote: row.lote,
+            validade: row.validade,
+            quantity: quantidade,
+            value: preco * quantidade,
+          }
         })
-        .filter((e): e is { item: Item; department: Department; quantity: number; date: string } => e !== null)
-      
-      // Filter by department if selected
-      const departmentFilteredEntries = selectedDepartment !== 'all' 
-        ? processedEntries.filter(entry => entry.department.name === selectedDepartment)
-        : processedEntries
-      
-      // Filter by item if selected
-      const itemFilteredEntries = selectedItem !== 'all'
-        ? departmentFilteredEntries.filter(entry => entry.item.id === selectedItem)
-        : departmentFilteredEntries
-      
+        .filter((l) => !excluidas.has(l.category))
+        .filter((l) => selectedDepartment === 'all' || l.department === selectedDepartment)
+        .filter((l) => selectedItem === 'all' || l.itemId === selectedItem)
+
+      setLinhasTela(linhas)
+
       // Initialize data structure
       const consumptionByDate: Record<string, { quantity: number, value: number }> = {}
       const itemConsumption: Record<string, { id: string, name: string, quantity: number, value: number }> = {}
       const departmentConsumption: Record<string, { quantity: number, value: number }> = {}
       const categoryConsumption: Record<string, { quantity: number, value: number }> = {}
-      
-      // Process each consumption entry
-      itemFilteredEntries.forEach(entry => {
-        if (!entry || !entry.item || !entry.department) {
-          console.warn('Invalid entry data:', entry)
-          return
-        }
-        
+
+      linhas.forEach(entry => {
         const date = entry.date
-        const itemPrice = typeof entry.item.price === 'number' ? entry.item.price : 0
-        const value = itemPrice * entry.quantity
-        
-        // Add to consumption by date
+        const value = entry.value
+
         if (!consumptionByDate[date]) {
           consumptionByDate[date] = { quantity: 0, value: 0 }
         }
         consumptionByDate[date].quantity += entry.quantity
         consumptionByDate[date].value += value
-        
-        // Add to item consumption
-        if (!itemConsumption[entry.item.id]) {
-          itemConsumption[entry.item.id] = {
-            id: entry.item.id,
-            name: entry.item.name,
+
+        if (!itemConsumption[entry.itemId]) {
+          itemConsumption[entry.itemId] = {
+            id: entry.itemId,
+            name: entry.itemName,
             quantity: 0,
             value: 0
           }
         }
-        itemConsumption[entry.item.id].quantity += entry.quantity
-        itemConsumption[entry.item.id].value += value
-        
-        // Add to department consumption
-        if (!departmentConsumption[entry.department.name]) {
-          departmentConsumption[entry.department.name] = { quantity: 0, value: 0 }
+        itemConsumption[entry.itemId].quantity += entry.quantity
+        itemConsumption[entry.itemId].value += value
+
+        if (!departmentConsumption[entry.department]) {
+          departmentConsumption[entry.department] = { quantity: 0, value: 0 }
         }
-        departmentConsumption[entry.department.name].quantity += entry.quantity
-        departmentConsumption[entry.department.name].value += value
-        
-        // Add to category consumption
-        if (!categoryConsumption[entry.item.category]) {
-          categoryConsumption[entry.item.category] = { quantity: 0, value: 0 }
+        departmentConsumption[entry.department].quantity += entry.quantity
+        departmentConsumption[entry.department].value += value
+
+        if (!categoryConsumption[entry.category]) {
+          categoryConsumption[entry.category] = { quantity: 0, value: 0 }
         }
-        categoryConsumption[entry.item.category].quantity += entry.quantity
-        categoryConsumption[entry.item.category].value += value
+        categoryConsumption[entry.category].quantity += entry.quantity
+        categoryConsumption[entry.category].value += value
       })
-      
+
       // Convert to array format for charts
       const consumptionArray = Object.entries(consumptionByDate).map(([date, data]) => ({
         date,
         quantity: Math.round(data.quantity * 100) / 100, // Round to 2 decimal places
         value: Math.round(data.value * 100) / 100
       })).sort((a, b) => a.date.localeCompare(b.date))
-      
+
       setConsumptionData(consumptionArray)
-      
+
       // Calculate statistics
       if (consumptionArray.length > 0) {
         const totalQuantity = consumptionArray.reduce((sum, item) => sum + item.quantity, 0)
         const totalValue = consumptionArray.reduce((sum, item) => sum + item.value, 0)
         const averageQuantity = totalQuantity / consumptionArray.length
         const averageValue = totalValue / consumptionArray.length
-        
+
         // Find max consumption day
-        const maxConsumptionItem = consumptionArray.reduce((max, item) => 
-          item.quantity > max.quantity ? item : max, 
+        const maxConsumptionItem = consumptionArray.reduce((max, item) =>
+          item.quantity > max.quantity ? item : max,
           consumptionArray[0]
         )
-        
+
         // Sort items by consumption
         const topItems = Object.values(itemConsumption)
           .sort((a, b) => b.quantity - a.quantity)
           .slice(0, settings.topItemsCount)
-        
+
         // Process department breakdown
         const departmentStats = Object.entries(departmentConsumption).map(([department, data]) => ({
           department,
@@ -370,7 +434,7 @@ export function WarehouseConsumptionReport() {
           value: Math.round(data.value * 100) / 100,
           percentage: totalQuantity > 0 ? (data.quantity / totalQuantity) * 100 : 0
         })).sort((a, b) => b.quantity - a.quantity)
-        
+
         // Process category breakdown
         const categoryStats = Object.entries(categoryConsumption).map(([category, data]) => ({
           category,
@@ -378,7 +442,7 @@ export function WarehouseConsumptionReport() {
           value: Math.round(data.value * 100) / 100,
           percentage: totalQuantity > 0 ? (data.quantity / totalQuantity) * 100 : 0
         })).sort((a, b) => b.quantity - a.quantity)
-        
+
         setStats({
           totalQuantity: Math.round(totalQuantity * 100) / 100,
           totalValue: Math.round(totalValue * 100) / 100,
@@ -391,100 +455,52 @@ export function WarehouseConsumptionReport() {
           byCategory: categoryStats
         })
       } else {
-        // Set empty stats if no data
-        setStats({
-          totalQuantity: 0,
-          totalValue: 0,
-          averageQuantity: 0,
-          averageValue: 0,
-          maxQuantity: 0,
-          maxDate: format(new Date(), 'yyyy-MM-dd'),
-          items: [],
-          byDepartment: [],
-          byCategory: []
-        })
+        setStats(statsVazias())
       }
     } catch (error) {
+      if (minhaConsulta !== consultaAtual.current) return
       console.error('Error processing consumption data:', error)
+      // Erro nao vira relatorio zerado: limpa e mostra a faixa com "Tentar de novo".
       setError('Erro ao carregar dados de consumo do banco.')
-      // Set empty data on error
       setConsumptionData([])
-      setStats({
-        totalQuantity: 0,
-        totalValue: 0,
-        averageQuantity: 0,
-        averageValue: 0,
-        maxQuantity: 0,
-        maxDate: format(new Date(), 'yyyy-MM-dd'),
-        items: [],
-        byDepartment: [],
-        byCategory: []
-      })
+      setLinhasTela([])
+      setStats(null)
+    } finally {
+      if (minhaConsulta === consultaAtual.current) setCarregandoConsumo(false)
     }
   }
 
   const handleCustomDateChange = () => {
-    try {
-      const start = new Date(customDateRange.start)
-      const end = new Date(customDateRange.end)
-      
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        throw new Error('Data inválida')
-      }
-      
-      if (start > end) {
-        throw new Error('Data inicial deve ser anterior à data final')
-      }
-      
-      setDateRange({ start, end })
-      // Use a string literal instead of 'custom'
-      setPeriod(period)
-    } catch (error) {
-      console.error('Error setting custom date range:', error)
-      setError('Erro ao definir período personalizado. Verifique as datas.')
+    // parseDataLocal: new Date('YYYY-MM-DD') e meia-noite UTC = dia anterior
+    // aqui (UTC-3) — o periodo personalizado andava 1 dia para tras.
+    const start = parseDataLocal(customDateRange.start)
+    const end = parseDataLocal(customDateRange.end)
+
+    if (!start || !end) {
+      setError('Data inválida. Verifique as datas do período personalizado.')
+      return
     }
+    if (start > end) {
+      setError('A data inicial deve ser anterior à data final.')
+      return
+    }
+    setError(null)
+    setDateRange({ start, end })
   }
 
   // Exportacao DETALHADA: uma linha por saida, com item, setor, lote e
-  // validade (pedido de 22/09/2026). A exportacao de cima traz so o total do
-  // dia. Lote vem de v_warehouse_consumption: o informado no atendimento
-  // (quando o almox informou) ou o lote do movimento avulso.
-  const [exportandoDetalhe, setExportandoDetalhe] = useState(false)
-  const handleExportDetalhado = async () => {
-    setExportandoDetalhe(true)
+  // validade (pedido de 22/09/2026). Usa exatamente as linhas da tela (mesmo
+  // periodo, setor, item e categorias), todas, sem corte de 1000.
+  const handleExportDetalhado = () => {
     try {
-      const { data: linhas, error: e1 } = await supabase
-        .from('v_warehouse_consumption')
-        .select('item_id, quantity, department_id, consumption_date, origem, lote, validade')
-        .gte('consumption_date', format(dateRange.start, 'yyyy-MM-dd'))
-        .lte('consumption_date', format(dateRange.end, 'yyyy-MM-dd'))
-        .order('consumption_date', { ascending: true })
-        .limit(20000)
-      if (e1) throw e1
-      const rows = (linhas || []) as Array<{ item_id: string; quantity: number; department_id: string | null;
-        consumption_date: string; origem: string; lote: string | null; validade: string | null }>
-      const itemIds = [...new Set(rows.map((r) => r.item_id))]
-      const depIds = [...new Set(rows.map((r) => r.department_id).filter(Boolean))] as string[]
-      const itens = new Map<string, { name: string; code: string | null; unit: string | null }>()
-      for (let i = 0; i < itemIds.length; i += 300) {
-        const { data } = await supabase.from('warehouse_items').select('id, name, code, unit').in('id', itemIds.slice(i, i + 300))
-        for (const it of (data || []) as any[]) itens.set(it.id, it)
-      }
-      const setores = new Map<string, string>()
-      if (depIds.length) {
-        const { data } = await supabase.from('departments').select('id, name').in('id', depIds)
-        for (const d of (data || []) as any[]) setores.set(d.id, d.name)
-      }
-      const dataBR = (d: string | null) => (d ? d.slice(0, 10).split('-').reverse().join('/') : '')
-      const origemLabel: Record<string, string> = { solicitacao: 'Solicitação', avulsa: 'Saída avulsa', manual: 'Lançamento manual' }
+      const origemLabel: Record<string, string> = { solicitacao: 'Solicitação', avulsa: 'Saída avulsa', manual: 'Lançamento manual', saida_direta: 'Saída direta' }
       const cel = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
-      const cab = ['Data', 'Código', 'Item', 'Unidade', 'Quantidade', 'Setor', 'Origem', 'Lote', 'Validade']
-      const corpo = rows.map((r) => {
-        const it = itens.get(r.item_id)
-        return [dataBR(r.consumption_date), it?.code ?? '', it?.name ?? '', it?.unit ?? '', r.quantity,
-          r.department_id ? (setores.get(r.department_id) ?? '') : '', origemLabel[r.origem] ?? r.origem,
-          r.lote ?? '', dataBR(r.validade)].map(cel).join(';')
-      })
+      const cab = ['Data', 'Código', 'Item', 'Unidade', 'Categoria', 'Quantidade', 'Valor (R$)', 'Setor/Destino', 'Origem', 'Lote', 'Validade']
+      const corpo = linhasTela.map((r) =>
+        [dataBR(r.date), r.code, r.itemName, r.unit, r.category, r.quantity,
+          r.value.toFixed(2).replace('.', ','), r.department, origemLabel[r.origem] ?? r.origem,
+          r.lote ?? '', r.validade ? dataBR(r.validade) : ''].map(cel).join(';')
+      )
       // ';' e BOM: e o que o Excel em portugues abre direto, com acento certo.
       const csv = String.fromCharCode(0xfeff) + [cab.map(cel).join(';'), ...corpo].join('\n')
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -495,8 +511,6 @@ export function WarehouseConsumptionReport() {
     } catch (error) {
       console.error('Error exporting detailed data:', error)
       setError('Erro ao exportar o detalhado.')
-    } finally {
-      setExportandoDetalhe(false)
     }
   }
 
@@ -542,10 +556,11 @@ export function WarehouseConsumptionReport() {
   }
 
   // Filter items for the item selector
-  const filteredItems = items.filter(item => 
-    !itemSearchTerm || 
-    item.name.toLowerCase().includes(itemSearchTerm.toLowerCase()) ||
-    item.code?.toLowerCase().includes(itemSearchTerm.toLowerCase())
+  const termoItem = normalizarBusca(itemSearchTerm)
+  const filteredItems = items.filter(item =>
+    !termoItem ||
+    normalizarBusca(item.name).includes(termoItem) ||
+    normalizarBusca(item.code).includes(termoItem)
   )
 
   if (loading) {
@@ -604,11 +619,11 @@ export function WarehouseConsumptionReport() {
               variant="outline"
               size="sm"
               onClick={handleExportDetalhado}
-              disabled={exportandoDetalhe}
+              disabled={carregandoConsumo || linhasTela.length === 0}
               title="Uma linha por saída, com item, setor, lote e validade"
             >
               <Download className="w-4 h-4 mr-2" />
-              {exportandoDetalhe ? 'Exportando…' : 'Exportar detalhado (lote/validade)'}
+              Exportar detalhado (lote/validade)
             </Button>
             {isAdmin && (
               <Button 
@@ -752,7 +767,8 @@ export function WarehouseConsumptionReport() {
             <Button 
               variant="outline" 
               className="w-full"
-              onClick={() => loadItems()}
+              onClick={() => { loadItems(); setRecarregar((n) => n + 1) }}
+              disabled={carregandoConsumo}
             >
               <ArrowUpDown className="w-4 h-4 mr-2" />
               Atualizar Dados
@@ -825,7 +841,14 @@ export function WarehouseConsumptionReport() {
           <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
             <div className="flex items-center gap-2 text-red-700">
               <AlertTriangle className="w-5 h-5" />
-              <p>{error}</p>
+              <p className="flex-1">{error}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { loadItems(); loadDepartments(); setRecarregar((n) => n + 1) }}
+              >
+                Tentar de novo
+              </Button>
             </div>
           </div>
         )}
@@ -929,7 +952,7 @@ export function WarehouseConsumptionReport() {
                   
                   <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
                     <p className="text-sm text-gray-700">
-                      <span className="font-medium">Dia de maior consumo:</span> {format(new Date(stats.maxDate), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })} com {stats.maxQuantity} itens
+                      <span className="font-medium">Dia de maior consumo:</span> {format(parseDataLocal(stats.maxDate) ?? new Date(), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })} com {stats.maxQuantity} itens
                     </p>
                   </div>
                 </div>
@@ -1227,53 +1250,24 @@ export function WarehouseConsumptionReport() {
               <h3 className="text-sm font-medium text-gray-900">Categorias</h3>
               
               <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="category-hospitalar"
-                    checked={settings.categories.includes('MATERIAL HOSPITALAR')}
-                    onChange={(e) => {
-                      const newCategories = e.target.checked
-                        ? [...settings.categories, 'MATERIAL HOSPITALAR']
-                        : settings.categories.filter(c => c !== 'MATERIAL HOSPITALAR')
-                      setSettings({...settings, categories: newCategories})
-                    }}
-                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <Label htmlFor="category-hospitalar">Material Hospitalar</Label>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="category-expediente"
-                    checked={settings.categories.includes('MATERIAL DE EXPEDIENTE')}
-                    onChange={(e) => {
-                      const newCategories = e.target.checked
-                        ? [...settings.categories, 'MATERIAL DE EXPEDIENTE']
-                        : settings.categories.filter(c => c !== 'MATERIAL DE EXPEDIENTE')
-                      setSettings({...settings, categories: newCategories})
-                    }}
-                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <Label htmlFor="category-expediente">Material de Expediente</Label>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="category-epi"
-                    checked={settings.categories.includes('EPI')}
-                    onChange={(e) => {
-                      const newCategories = e.target.checked
-                        ? [...settings.categories, 'EPI']
-                        : settings.categories.filter(c => c !== 'EPI')
-                      setSettings({...settings, categories: newCategories})
-                    }}
-                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <Label htmlFor="category-epi">EPI</Label>
-                </div>
+                {/* Categorias reais do cadastro (DISTINCT). Marcado = entra no relatorio. */}
+                {[...categoriasDisponiveis, ...settings.categories.filter(c => !categoriasDisponiveis.includes(c))].map((cat) => (
+                  <div key={cat} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`category-${cat}`}
+                      checked={!settings.categories.includes(cat)}
+                      onChange={(e) => {
+                        const excluidas = e.target.checked
+                          ? settings.categories.filter(c => c !== cat)
+                          : [...settings.categories, cat]
+                        setSettings({...settings, categories: excluidas})
+                      }}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <Label htmlFor={`category-${cat}`}>{cat}</Label>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
