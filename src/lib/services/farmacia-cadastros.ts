@@ -3,6 +3,7 @@
 // Sao 3 CRUDs simples + helpers de admissao do paciente.
 // =====================================================================
 
+import { exigirLinhas, hojeLocal } from '@/lib/utils/seguro'
 import { supabase } from '../supabase'
 import type {
   Supplier,
@@ -95,11 +96,14 @@ class SuppliersService {
   }
 
   async deactivate(id: string): Promise<void> {
-    const { error } = await supabase
+    // .select('id') + exigirLinhas: RLS negando devolve 0 linhas SEM erro
+    const r = await supabase
       .from('suppliers')
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', id)
-    if (error) throw new Error('Erro ao desativar: ' + error.message)
+      .select('id')
+    if (r.error) throw new Error('Erro ao desativar: ' + r.error.message)
+    exigirLinhas(r, 'Não foi possível salvar: sem permissão ou registro não encontrado.')
   }
 }
 
@@ -175,11 +179,14 @@ class PrescribersService {
   }
 
   async deactivate(id: string): Promise<void> {
-    const { error } = await supabase
+    // .select('id') + exigirLinhas: RLS negando devolve 0 linhas SEM erro
+    const r = await supabase
       .from('prescribers')
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', id)
-    if (error) throw new Error('Erro ao desativar: ' + error.message)
+      .select('id')
+    if (r.error) throw new Error('Erro ao desativar: ' + r.error.message)
+    exigirLinhas(r, 'Não foi possível salvar: sem permissão ou registro não encontrado.')
   }
 }
 
@@ -261,9 +268,12 @@ class PatientsService {
         .from('patient_admissions')
         .insert({
           patient_id: data.id,
-          admission_date: input.admission_date || new Date().toISOString().slice(0, 10),
+          admission_date: input.admission_date || hojeLocal(),
         })
-      if (e2) console.error('Falha ao criar admissao do paciente:', e2)
+      if (e2) {
+        console.error('Falha ao criar admissao do paciente:', e2)
+        throw new Error('Paciente cadastrado, mas a internação não foi aberta: ' + e2.message + '. Use "Internar" na lista.')
+      }
     }
 
     return data as Patient
@@ -281,11 +291,14 @@ class PatientsService {
   }
 
   async deactivate(id: string): Promise<void> {
-    const { error } = await supabase
+    // .select('id') + exigirLinhas: RLS negando devolve 0 linhas SEM erro
+    const r = await supabase
       .from('patients')
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', id)
-    if (error) throw new Error('Erro ao desativar: ' + error.message)
+      .select('id')
+    if (r.error) throw new Error('Erro ao desativar: ' + r.error.message)
+    exigirLinhas(r, 'Não foi possível salvar: sem permissão ou registro não encontrado.')
   }
 
   // ---------- Admissoes ----------
@@ -323,12 +336,16 @@ class PatientsService {
       .from('patient_admissions')
       .insert({
         patient_id: patientId,
-        admission_date: admissionDate || new Date().toISOString().slice(0, 10),
+        admission_date: admissionDate || hojeLocal(),
         created_by: userData.user?.id ?? null,
       })
       .select('*')
       .single()
-    if (error) throw new Error('Erro ao abrir internação: ' + error.message)
+    if (error) {
+      // indice unico: uma internacao aberta por paciente (duplo clique)
+      if (error.code === '23505') throw new Error('Paciente já possui uma internação em aberto.')
+      throw new Error('Erro ao abrir internação: ' + error.message)
+    }
     return data as PatientAdmission
   }
 
@@ -351,7 +368,7 @@ class PatientsService {
       .eq('id', admissionId)
       .is('discharge_date', null) // proteje contra dupla alta
       .select('*')
-      .single()
+      .maybeSingle()
     if (error) throw new Error('Erro ao dar alta: ' + error.message)
     if (!data) throw new Error('Internação não encontrada ou já encerrada.')
     return data as PatientAdmission

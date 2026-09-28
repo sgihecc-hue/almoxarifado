@@ -1,3 +1,4 @@
+import { exigirLinhas } from '@/lib/utils/seguro'
 import { supabase } from '../supabase'
 
 export interface ExternalUnit {
@@ -44,11 +45,14 @@ class ExternalUnitsService {
   }
 
   async deactivate(id: string): Promise<void> {
-    const { error } = await supabase
+    // .select('id') + exigirLinhas: RLS negando devolve 0 linhas SEM erro
+    const r = await supabase
       .from('external_units')
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', id)
-    if (error) throw new Error('Erro ao desativar: ' + error.message)
+      .select('id')
+    if (r.error) throw new Error('Erro ao desativar: ' + r.error.message)
+    exigirLinhas(r, 'Não foi possível salvar: sem permissão ou registro não encontrado.')
   }
 }
 

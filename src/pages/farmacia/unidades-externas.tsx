@@ -29,12 +29,15 @@ export function UnidadesExternas() {
     return u.name.toLowerCase().includes(q) || (digits.length > 0 && (u.cnpj || '').includes(digits))
   })
 
+  const [loadError, setLoadError] = useState<string | null>(null)
   const load = useCallback(async () => {
     setLoading(true)
     try {
       setUnits(await externalUnitsService.list(true))
+      setLoadError(null)
     } catch (e) {
       console.error(e)
+      setLoadError('Erro ao carregar as unidades: ' + getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -76,12 +79,15 @@ export function UnidadesExternas() {
   }
 
   async function toggleActive(u: ExternalUnit) {
+    if (u.is_active && !window.confirm(`Desativar a unidade externa "${u.name}"? Ela some das listas de destino/origem.`)) return
     try {
       if (u.is_active) await externalUnitsService.deactivate(u.id)
       else await externalUnitsService.update(u.id, { is_active: true })
+      setToast(u.is_active ? 'Desativada.' : 'Reativada.')
       await load()
     } catch (e) {
       console.error(e)
+      setLoadError('Não foi possível alterar: ' + getErrorMessage(e))
     }
   }
 
@@ -111,6 +117,12 @@ export function UnidadesExternas() {
       </div>
 
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
+        {loadError && (
+          <div className="p-3 text-sm text-red-700 bg-red-50 border-b border-red-200 flex items-center justify-between gap-2">
+            <span>{loadError}</span>
+            <button className="underline text-xs" onClick={() => load()}>Tentar de novo</button>
+          </div>
+        )}
         {loading ? (
           <div className="p-10 text-center text-gray-400"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></div>
         ) : filtered.length === 0 ? (
