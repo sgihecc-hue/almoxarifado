@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { buscarTodas, fimDiaISO, hojeLocal, inicioDiaISO, normalizarBusca } from '@/lib/utils/seguro'
 import { format, subDays } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 
@@ -38,23 +39,42 @@ interface MovementRow {
   batch_number: string | null
   expiry_date: string | null
   notes: string | null
-  source_kind: 'stock_entries' | 'warehouse_dispatch' | 'request'
+  source_kind: 'stock_entries' | 'warehouse_dispatch' | 'request' | 'pharmacy_loan' | 'stock_movement'
   is_active: boolean
 }
 
-const ENTRY_SUBTYPES = ['Compra', 'Empréstimo', 'Doação', 'Permuta', 'Inventário']
+// Tipos reais gravados (conferido no banco em 28/09/2026). As saidas do
+// livro-razao (stock_movements) entraram na view nessa data: dispensacao,
+// saida avulsa, devolucao interna, estorno, ajuste e transferencia p/ setor.
+const ENTRY_SUBTYPES = [
+  'Compra',
+  'Empréstimo',
+  'Pagamento de empréstimo',
+  'Doação',
+  'Permuta',
+  'Devolução',
+  'Inventário',
+  'Devolução interna',
+  'Estorno de dispensação',
+  'Ajuste',
+]
 const EXIT_SUBTYPES = [
   'Consumo interno',
+  'Solicitação',
+  'Dispensação',
+  'Saída avulsa',
+  'Saída avulsa externa',
+  'Transferência para setor',
   'Empréstimo',
   'Doação',
   'Permuta',
   'Transferência',
-  'Solicitação',
+  'Ajuste',
   'Outro',
 ]
 
 // Considerado consumo externo (saída para fora do hospital ou não-consumo direto)
-const EXTERNAL_SUBTYPES = new Set(['Empréstimo', 'Doação', 'Permuta', 'Transferência'])
+const EXTERNAL_SUBTYPES = new Set(['Empréstimo', 'Doação', 'Permuta', 'Transferência', 'Saída avulsa externa'])
 
 const fmtBRL = (n: number | null | undefined) =>
   n == null
@@ -74,8 +94,8 @@ const fmtDate = (s: string | null | undefined) => {
 }
 
 export function MovementsReport() {
-  const today = format(new Date(), 'yyyy-MM-dd')
-  const sevenAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
+  const today = hojeLocal()
+  const sevenAgo = hojeLocal(subDays(new Date(), 30))
 
   const [startDate, setStartDate] = useState(sevenAgo)
   const [endDate, setEndDate] = useState(today)
@@ -106,22 +126,25 @@ export function MovementsReport() {
     try {
       setLoading(true)
       setError(null)
-      let q = supabase
-        .from('v_inventory_movements')
-        .select('*')
-        .gte('movement_date', `${startDate}T00:00:00`)
-        .lte('movement_date', `${endDate}T23:59:59`)
-        .order('movement_date', { ascending: false })
-        .limit(5000)
-
-      if (!showCancelled) q = q.eq('is_active', true)
-      if (direction !== 'todas') q = q.eq('direction', direction)
-      if (subtype !== 'todos') q = q.eq('subtype', subtype)
-      if (itemType !== 'todos') q = q.eq('item_type', itemType)
-
-      const { data, error } = await q
-      if (error) throw error
-      setRows((data as MovementRow[]) || [])
+      // Pagina de 1000 em 1000: o PostgREST corta em 1000 linhas em silencio
+      // (o .limit(5000) antigo parava em 1000 — 30 dias ja passam de 2 mil).
+      // Datas com fuso -03:00: sem fuso o banco entende UTC e cortava 3h.
+      const data = await buscarTodas<MovementRow>((de, ate) => {
+        let q = supabase
+          .from('v_inventory_movements')
+          .select('*')
+          .gte('movement_date', inicioDiaISO(startDate))
+          .lte('movement_date', fimDiaISO(endDate))
+        if (!showCancelled) q = q.eq('is_active', true)
+        if (direction !== 'todas') q = q.eq('direction', direction)
+        if (subtype !== 'todos') q = q.eq('subtype', subtype)
+        if (itemType !== 'todos') q = q.eq('item_type', itemType)
+        return q
+          .order('movement_date', { ascending: false })
+          .order('movement_id', { ascending: true })
+          .range(de, ate) as unknown as PromiseLike<{ data: MovementRow[] | null; error: unknown }>
+      })
+      setRows(data)
     } catch (e: any) {
       console.error('Error loading movements:', e)
       setError(getErrorMessage(e))
@@ -132,13 +155,13 @@ export function MovementsReport() {
 
   const filtered = useMemo(() => {
     if (!search.trim()) return rows
-    const q = search.toLowerCase()
+    const q = normalizarBusca(search)
     return rows.filter(
       (r) =>
-        (r.item_name || '').toLowerCase().includes(q) ||
-        (r.item_code || '').toLowerCase().includes(q) ||
-        (r.origin_or_destination || '').toLowerCase().includes(q) ||
-        (r.invoice_number || '').toLowerCase().includes(q)
+        normalizarBusca(r.item_name).includes(q) ||
+        normalizarBusca(r.item_code).includes(q) ||
+        normalizarBusca(r.origin_or_destination).includes(q) ||
+        normalizarBusca(r.invoice_number).includes(q)
     )
   }, [rows, search])
 
@@ -151,15 +174,29 @@ export function MovementsReport() {
     let consumoExternoValor = 0
     let solicitacaoQty = 0
     let solicitacaoValor = 0
+    // Fora do consumo: devolucoes/estornos/ajustes (retornos internos) e a
+    // reposicao CAF -> satelite da farmacia (a solicitacao de farmacia so
+    // move estoque dentro da farmacia; o consumo real e a dispensacao).
+    let retornoQty = 0
+    let ajusteSaidaQty = 0
+    let reposicaoQty = 0
 
     for (const r of filtered) {
       const q = Number(r.quantity || 0)
       const v = Number(r.total_value || 0)
       if (r.direction === 'entrada') {
-        entradaQty += q
-        entradaValor += v
+        if (r.source_kind === 'stock_movement') {
+          retornoQty += q
+        } else {
+          entradaQty += q
+          entradaValor += v
+        }
       } else {
-        if (r.subtype === 'Consumo interno') {
+        if (r.subtype === 'Ajuste') {
+          ajusteSaidaQty += q
+        } else if (r.subtype === 'Solicitação' && r.item_type === 'pharmacy') {
+          reposicaoQty += q
+        } else if (r.subtype === 'Consumo interno') {
           consumoInternoQty += q
           consumoInternoValor += v
         } else if (r.subtype === 'Solicitação') {
@@ -191,6 +228,9 @@ export function MovementsReport() {
       solicitacaoValor,
       consumoTotalQty,
       consumoTotalValor,
+      retornoQty,
+      ajusteSaidaQty,
+      reposicaoQty,
     }
   }, [filtered])
 
@@ -298,8 +338,8 @@ export function MovementsReport() {
               className="mt-1 w-full h-9 rounded-md border border-input bg-white px-3 py-1 text-sm"
             >
               <option value="todas">Todas</option>
-              <option value="entrada">Entradas (NF)</option>
-              <option value="saida">Saídas (consumo)</option>
+              <option value="entrada">Entradas</option>
+              <option value="saida">Saídas</option>
             </select>
           </div>
           <div>
@@ -371,7 +411,8 @@ export function MovementsReport() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <SummaryCard
           icon={<ArrowDownToLine className="w-5 h-5" />}
-          label="Entradas (NF)"
+          label="Entradas"
+          hint="NF, doação, empréstimo, permuta, inventário"
           qty={totals.entradaQty}
           value={totals.entradaValor}
           color="emerald"
@@ -382,7 +423,7 @@ export function MovementsReport() {
           qty={totals.consumoInternoQty + totals.solicitacaoQty}
           value={totals.consumoInternoValor + totals.solicitacaoValor}
           color="blue"
-          hint="Saída direta + solicitações"
+          hint="Saída direta, solicitações, dispensações e saídas avulsas"
         />
         <SummaryCard
           icon={<ArrowUpFromLine className="w-5 h-5" />}
@@ -401,9 +442,18 @@ export function MovementsReport() {
         />
       </div>
 
+      <p className="text-xs text-gray-500 -mt-2">
+        Fora do consumo: devoluções internas/estornos {fmtNum(totals.retornoQty)} · ajustes de saída{' '}
+        {fmtNum(totals.ajusteSaidaQty)} · reposição interna da farmácia (CAF → satélite){' '}
+        {fmtNum(totals.reposicaoQty)}
+      </p>
+
       {error && (
-        <div className="p-4 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
-          {error}
+        <div className="p-4 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700 flex items-center justify-between gap-3">
+          <span>Não foi possível carregar as movimentações: {error}</span>
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            Tentar de novo
+          </Button>
         </div>
       )}
 
@@ -418,6 +468,8 @@ export function MovementsReport() {
           <div className="text-center py-12 text-gray-500">
             <Loader2 className="w-6 h-6 animate-spin inline-block mr-2" /> Carregando...
           </div>
+        ) : error ? (
+          <div className="text-center py-12 text-red-600">Dados não carregados (veja o erro acima).</div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             Nenhuma movimentação no período/filtros selecionados.
