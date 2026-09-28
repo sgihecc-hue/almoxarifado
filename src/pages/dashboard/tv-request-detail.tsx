@@ -4,30 +4,24 @@ import {
   ArrowLeft,
   Pill,
   Package2,
-  Truck,
-  CheckCircle2,
   Loader2,
   AlertCircle,
-  Search,
   User,
   Building2,
   Hash,
   Check,
-  Undo2
+  Undo2,
+  Info
 } from 'lucide-react'
 import { tvRequestService } from '@/lib/services/tv-requests'
-import { employeesService } from '@/lib/services/employees'
 import { RequestStatusBadge } from '@/components/request-status-badge'
 import { formatRequestNumber } from '@/lib/utils/request'
-import type { TVRequest, SuppliedItemData } from '@/lib/services/tv-requests'
-import type { Employee } from '@/lib/types/employees'
+import type { TVRequest } from '@/lib/services/tv-requests'
 
-const OBSERVATION_OPTIONS = [
-  '',
-  'Opção 1',
-  'Opção 2',
-  'Opção 3'
-]
+// PAINEL DE TV = SO LEITURA (auditoria 28/09/2026). "Saiu para entrega" e
+// "Solicitacao concluida" mudavam o status direto no banco, sem a baixa
+// conferida, sem lote e — sem login — sem efeito nenhum, mas a TV mostrava
+// "Concluida". Atender e entregar e pelo sistema, no detalhe do pedido.
 
 const themes = {
   pharmacy: {
@@ -70,19 +64,6 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Item form state
-  const [suppliedItems, setSuppliedItems] = useState<Map<string, SuppliedItemData>>(new Map())
-
-  // Workflow state: 1 = fill items, 2 = enter matricula, 3 = done
-  const [workflowStep, setWorkflowStep] = useState<1 | 2 | 3>(1)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-
-  // Employee state
-  const [matriculaInput, setMatriculaInput] = useState('')
-  const [employee, setEmployee] = useState<Employee | null>(null)
-  const [searchingEmployee, setSearchingEmployee] = useState(false)
-  const [employeeError, setEmployeeError] = useState<string | null>(null)
-
   const loadRequest = useCallback(async () => {
     if (!id) return
     try {
@@ -94,25 +75,6 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
         return
       }
       setRequest(data)
-
-      // Initialize supplied items form state
-      const itemsMap = new Map<string, SuppliedItemData>()
-      data.items.forEach(item => {
-        itemsMap.set(item.id, {
-          id: item.id,
-          supplied_quantity: item.supplied_quantity ?? item.approved_quantity ?? item.quantity,
-          observation: item.observation || '',
-          is_checked: item.is_checked || false
-        })
-      })
-      setSuppliedItems(itemsMap)
-
-      // Set workflow step based on current status
-      if (data.status === 'delivered') {
-        setWorkflowStep(2)
-      } else if (data.status === 'completed') {
-        setWorkflowStep(3)
-      }
     } catch (err) {
       console.error('Error loading request:', err)
       setError('Erro ao carregar solicitação')
@@ -124,87 +86,6 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
   useEffect(() => {
     loadRequest()
   }, [loadRequest])
-
-  // Update a single item field
-  const updateItem = (itemId: string, field: keyof SuppliedItemData, value: any) => {
-    setSuppliedItems(prev => {
-      const newMap = new Map(prev)
-      const current = newMap.get(itemId)
-      if (current) {
-        newMap.set(itemId, { ...current, [field]: value })
-      }
-      return newMap
-    })
-  }
-
-  // Handle "Saiu para entrega"
-  const handleMarkAsDelivered = async () => {
-    if (!request) return
-    setIsSubmitting(true)
-    try {
-      const items = Array.from(suppliedItems.values())
-      const success = await tvRequestService.markAsDelivered(request.id, items)
-      if (success) {
-        setWorkflowStep(2)
-        // Reload to get updated status
-        await loadRequest()
-      } else {
-        setError('Erro ao marcar como entregue. Tente novamente.')
-      }
-    } catch (err) {
-      console.error('Error marking as delivered:', err)
-      setError('Erro ao processar. Tente novamente.')
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  // Search employee by matricula
-  const handleSearchEmployee = async () => {
-    if (!matriculaInput.trim()) return
-    setSearchingEmployee(true)
-    setEmployeeError(null)
-    setEmployee(null)
-    try {
-      const emp = await employeesService.getByMatricula(matriculaInput.trim())
-      if (emp) {
-        setEmployee(emp)
-      } else {
-        setEmployeeError('Funcionário não encontrado com esta matrícula')
-      }
-    } catch (err) {
-      setEmployeeError('Erro ao buscar funcionário')
-    } finally {
-      setSearchingEmployee(false)
-    }
-  }
-
-  // Handle "Solicitação Concluída"
-  const handleComplete = async () => {
-    if (!request || !employee) return
-    setIsSubmitting(true)
-    try {
-      const success = await tvRequestService.completeRequest(
-        request.id,
-        employee.matricula,
-        employee.id
-      )
-      if (success) {
-        setWorkflowStep(3)
-        // Navigate back after a short delay
-        setTimeout(() => {
-          navigate(`/tv/${type}`)
-        }, 2000)
-      } else {
-        setError('Erro ao concluir solicitação. Tente novamente.')
-      }
-    } catch (err) {
-      console.error('Error completing request:', err)
-      setError('Erro ao processar. Tente novamente.')
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
 
   if (loading) {
     return (
@@ -316,8 +197,7 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
           {/* Table rows */}
           <div className="divide-y divide-gray-700">
             {request.items.map((item, index) => {
-              const itemData = suppliedItems.get(item.id)
-              const isEditable = !readOnly && workflowStep === 1 && ['approved', 'processing'].includes(request.status)
+              const itemData = item
 
               return (
                 <div
@@ -363,40 +243,12 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
 
                     {/* Supplied quantity (editable) */}
                     <div className="col-span-2 text-center">
-                      {isEditable ? (
-                        <input
-                          type="number"
-                          min={0}
-                          max={item.item_current_stock}
-                          value={(itemData?.supplied_quantity ?? 0) === 0 ? '' : itemData?.supplied_quantity}
-                          placeholder="0"
-                          onFocus={(e) => e.target.select()}
-                          onChange={(e) => updateItem(item.id, 'supplied_quantity', e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0))}
-                          onWheel={(e) => e.currentTarget.blur()}
-                          className="w-20 mx-auto bg-gray-700 border border-gray-600 rounded px-2 py-1 text-center text-white text-sm focus:border-blue-500 focus:outline-none"
-                        />
-                      ) : (
-                        <span className="text-sm text-white">{itemData?.supplied_quantity ?? '-'}</span>
-                      )}
+                      <span className="text-sm text-white">{itemData.supplied_quantity ?? '—'}</span>
                     </div>
 
                     {/* Observation (dropdown) */}
                     <div className="col-span-3 text-center">
-                      {isEditable ? (
-                        <select
-                          value={itemData?.observation || ''}
-                          onChange={(e) => updateItem(item.id, 'observation', e.target.value)}
-                          className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-sm focus:border-blue-500 focus:outline-none"
-                        >
-                          {OBSERVATION_OPTIONS.map(opt => (
-                            <option key={opt} value={opt}>
-                              {opt || '-- Selecione --'}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="text-sm text-gray-300">{itemData?.observation || '-'}</span>
-                      )}
+                      <span className="text-sm text-gray-300">{itemData?.observation || '-'}</span>
                     </div>
 
                     {/* Última coluna: em modo somente-leitura (Histórico do
@@ -412,13 +264,6 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
                           <Undo2 className="w-3.5 h-3.5" />
                           Estornar
                         </button>
-                      ) : isEditable ? (
-                        <input
-                          type="checkbox"
-                          checked={itemData?.is_checked || false}
-                          onChange={(e) => updateItem(item.id, 'is_checked', e.target.checked)}
-                          className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500 focus:ring-offset-gray-800 cursor-pointer"
-                        />
                       ) : (
                         <span className={`inline-flex items-center justify-center w-5 h-5 rounded ${
                           itemData?.is_checked ? 'bg-green-900 text-green-300' : 'bg-gray-700 text-gray-500'
@@ -434,130 +279,13 @@ export function TVRequestDetail({ type }: TVRequestDetailProps) {
           </div>
         </div>
 
-        {/* ============================================ */}
-        {/* WORKFLOW ACTIONS */}
-        {/* ============================================ */}
-
-        {/* Step 1: "Saiu para entrega" button — oculto no modo somente-leitura
-            (aberto pelo Histórico). Atendimento só pelo painel principal. */}
-        {!readOnly && workflowStep === 1 && ['approved', 'processing'].includes(request.status) && (
-          <div className="mt-6 flex justify-center">
-            <button
-              onClick={handleMarkAsDelivered}
-              disabled={isSubmitting}
-              className={`flex items-center gap-3 px-8 py-4 rounded-xl text-lg font-semibold transition-all
-                bg-orange-700 hover:bg-orange-600 text-white shadow-lg hover:shadow-xl
-                disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              {isSubmitting ? (
-                <Loader2 className="w-6 h-6 animate-spin" />
-              ) : (
-                <Truck className="w-6 h-6" />
-              )}
-              Saiu para Entrega
-            </button>
-          </div>
-        )}
-
-        {/* Step 2: Employee matricula input (appears after delivery).
-            Oculto no modo somente-leitura (Histórico). */}
-        {!readOnly && workflowStep === 2 && (
-          <div className="mt-6 bg-gray-800 rounded-xl border border-gray-700 p-6">
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-              <User className="w-5 h-5 text-gray-400" />
-              Confirmação de Recebimento
-            </h3>
-
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex-1 max-w-xs">
-                <label className="block text-sm text-gray-400 mb-1">Matrícula do Funcionário</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={matriculaInput}
-                    onChange={(e) => {
-                      setMatriculaInput(e.target.value)
-                      setEmployee(null)
-                      setEmployeeError(null)
-                    }}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSearchEmployee()}
-                    placeholder="Digite a matrícula..."
-                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
-                  />
-                  <button
-                    onClick={handleSearchEmployee}
-                    disabled={searchingEmployee || !matriculaInput.trim()}
-                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {searchingEmployee ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Search className="w-5 h-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Employee error */}
-            {employeeError && (
-              <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg text-red-300 text-sm">
-                {employeeError}
-              </div>
-            )}
-
-            {/* Employee info card */}
-            {employee && (
-              <div className="mb-6 p-4 bg-green-900/20 border border-green-700 rounded-lg">
-                <div className="flex items-center gap-3 mb-2">
-                  <CheckCircle2 className="w-5 h-5 text-green-400" />
-                  <span className="text-green-300 font-medium">Funcionário encontrado</span>
-                </div>
-                <div className="grid grid-cols-3 gap-4 text-sm">
-                  <div>
-                    <span className="text-gray-400">Nome:</span>
-                    <p className="text-white font-medium">{employee.full_name}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-400">Matrícula:</span>
-                    <p className="text-white font-medium">{employee.matricula}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-400">Cargo:</span>
-                    <p className="text-white font-medium">{employee.cargo || '-'}</p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Complete button */}
-            {employee && (
-              <div className="flex justify-center">
-                <button
-                  onClick={handleComplete}
-                  disabled={isSubmitting}
-                  className="flex items-center gap-3 px-8 py-4 rounded-xl text-lg font-semibold transition-all
-                    bg-emerald-700 hover:bg-emerald-600 text-white shadow-lg hover:shadow-xl
-                    disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSubmitting ? (
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="w-6 h-6" />
-                  )}
-                  Solicitação Concluída
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Step 3: Success message */}
-        {workflowStep === 3 && (
-          <div className="mt-6 p-6 bg-emerald-900/20 border border-emerald-700 rounded-xl text-center">
-            <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
-            <h3 className="text-xl font-bold text-emerald-300 mb-2">Solicitação Concluída!</h3>
-            <p className="text-gray-400">Redirecionando ao painel...</p>
+        {!readOnly && ['pending', 'approved', 'processing'].includes(request.status) && (
+          <div className="mt-6 p-4 bg-gray-800 border border-gray-700 rounded-xl flex items-start gap-3 text-gray-300 text-sm">
+            <Info className="w-5 h-5 text-gray-400 flex-shrink-0" />
+            <span>
+              Painel somente leitura. Para atender, informar a quantidade fornecida e marcar a entrega,
+              abra esta solicitação no sistema (Solicitações → detalhe do pedido).
+            </span>
           </div>
         )}
       </div>

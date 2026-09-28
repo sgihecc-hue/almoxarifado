@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Loader2, AlertCircle, CheckCircle2, XCircle, PackageCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/auth'
 import { useModule } from '@/contexts/module'
 import { kitsService, SAT_T_ID } from '@/lib/services/kits'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { lerQuantidade, dataBR } from '@/lib/utils/seguro'
 import type { Request } from '@/lib/services/requests'
 
 // Atendimento do PEDIDO DE ENFERMAGEM pela Satelite Terreo.
@@ -28,7 +29,7 @@ interface Linha {
   warehouse_item_id: string
   nome: string
   pedido: number
-  quantidade: number
+  quantidade: string   // texto do campo; convertido so ao enviar
   lote: string
 }
 
@@ -45,6 +46,8 @@ export function AtenderPedidoEnfermagem({ request, onDone }: { request: Request;
   const [salvando, setSalvando] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ok, setOk] = useState<string | null>(null)
+  // Trava de duplo clique; apos sucesso o botao nao reabilita.
+  const salvandoRef = useRef(false)
 
   const aberto = ['pending', 'approved', 'processing'].includes(request.status)
   const papelPode = ['administrador', 'gestor', 'atendente', 'pharmacist'].includes(user?.role || '')
@@ -61,7 +64,7 @@ export function AtenderPedidoEnfermagem({ request, onDone }: { request: Request;
       warehouse_item_id: i.warehouse_item_id || i.item?.id,
       nome: i.item_name || i.item?.name || 'Item',
       pedido: i.quantity,
-      quantidade: i.quantity,
+      quantidade: String(i.quantity),
       lote: '',
     })))
   }, [request])
@@ -102,25 +105,28 @@ export function AtenderPedidoEnfermagem({ request, onDone }: { request: Request;
   }
 
   async function atender() {
+    if (salvandoRef.current) return
     setError(null)
-    if (linhas.some((l) => !Number.isFinite(l.quantidade) || l.quantidade < 0)) {
-      setError('Quantidade inválida em alguma linha.'); return
+    const qtds = linhas.map((l) => lerQuantidade(l.quantidade))
+    if (qtds.some((q) => q === null || q < 0)) {
+      setError('Quantidade inválida em alguma linha: use número inteiro (0 = não fornecido).'); return
     }
-    if (linhas.every((l) => l.quantidade === 0)) {
+    if (qtds.every((q) => q === 0)) {
       setError('Nenhum item fornecido. Se não há como atender, use Recusar.'); return
     }
+    salvandoRef.current = true
     setSalvando(true)
     try {
-      const r = await kitsService.atender(request.id, linhas.map((l) => ({
+      const r = await kitsService.atender(request.id, linhas.map((l, i) => ({
         request_item_id: l.request_item_id,
-        quantity: l.quantidade,
+        quantity: qtds[i] as number,
         expiry_tracking_id: l.lote || null,
       })), notes)
       setOk(`Pedido ${r.numero} atendido: ${r.quantidade_total} un baixadas da Satélite Térreo.`)
       setTimeout(onDone, 1200)
     } catch (e) {
       setError(getErrorMessage(e))
-    } finally {
+      salvandoRef.current = false
       setSalvando(false)
     }
   }
@@ -128,6 +134,8 @@ export function AtenderPedidoEnfermagem({ request, onDone }: { request: Request;
   async function recusar() {
     setError(null)
     if (!motivoRecusa.trim()) { setError('Informe o motivo da recusa.'); return }
+    if (salvandoRef.current) return
+    salvandoRef.current = true
     setSalvando(true)
     try {
       await kitsService.recusar(request.id, motivoRecusa)
@@ -135,7 +143,7 @@ export function AtenderPedidoEnfermagem({ request, onDone }: { request: Request;
       setTimeout(onDone, 1000)
     } catch (e) {
       setError(getErrorMessage(e))
-    } finally {
+      salvandoRef.current = false
       setSalvando(false)
     }
   }
@@ -162,15 +170,15 @@ export function AtenderPedidoEnfermagem({ request, onDone }: { request: Request;
         <tbody>
           {linhas.map((l, idx) => {
             const saldo = saldos[l.warehouse_item_id] ?? 0
-            const falta = l.quantidade > saldo
+            const falta = (lerQuantidade(l.quantidade) ?? 0) > saldo
             return (
               <tr key={l._key} className="border-t border-gray-100">
                 <td className="py-2 pr-2">{l.nome}</td>
                 <td className="py-2 text-right">{l.pedido}</td>
                 <td className={`py-2 text-right ${falta ? 'text-red-600 font-medium' : 'text-gray-500'}`}>{saldo}</td>
                 <td className="py-2 pl-3">
-                  <Input type="number" min={0} value={l.quantidade} className="h-8"
-                    onChange={(e) => setLinhas((p) => p.map((x, i) => i === idx ? { ...x, quantidade: Number(e.target.value) } : x))} />
+                  <Input type="text" inputMode="numeric" value={l.quantidade} className="h-8"
+                    onChange={(e) => setLinhas((p) => p.map((x, i) => i === idx ? { ...x, quantidade: e.target.value.replace(/\D/g, '') } : x))} />
                 </td>
                 <td className="py-2">
                   <select value={l.lote}
@@ -179,7 +187,7 @@ export function AtenderPedidoEnfermagem({ request, onDone }: { request: Request;
                     <option value="">— sem lote —</option>
                     {(lotes[l.warehouse_item_id] || []).map((lt) => (
                       <option key={lt.id} value={lt.id}>
-                        {lt.batch_number || 's/n'}{lt.expiry_date ? ` · ${new Date(lt.expiry_date).toLocaleDateString('pt-BR')}` : ''} ({lt.current_quantity})
+                        {lt.batch_number || 's/n'}{lt.expiry_date ? ` · ${dataBR(lt.expiry_date)}` : ''} ({lt.current_quantity})
                       </option>
                     ))}
                   </select>

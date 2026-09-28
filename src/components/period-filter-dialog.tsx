@@ -14,14 +14,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { format } from 'date-fns'
+import { parseDataLocal } from '@/lib/utils/seguro'
 
 const periodSchema = z.object({
   startDate: z.string().min(1, 'Data inicial é obrigatória'),
   endDate: z.string().min(1, 'Data final é obrigatória'),
 }).refine((data) => {
-  const start = new Date(data.startDate)
-  const end = new Date(data.endDate)
-  return start <= end
+  return data.startDate <= data.endDate
 }, {
   message: "Data inicial deve ser menor ou igual à data final",
   path: ["endDate"]
@@ -57,8 +56,10 @@ export function PeriodFilterDialog({
   const onSubmit = async (data: PeriodFormData) => {
     try {
       setLoading(true)
-      const startDate = new Date(data.startDate)
-      const endDate = new Date(data.endDate)
+      // parseDataLocal: new Date('YYYY-MM-DD') e meia-noite UTC = dia anterior
+      // no fuso -03:00 (o filtro comecava um dia antes).
+      const startDate = parseDataLocal(data.startDate) ?? new Date()
+      const endDate = parseDataLocal(data.endDate) ?? new Date()
       
       // Set time to start and end of day
       startDate.setHours(0, 0, 0, 0)

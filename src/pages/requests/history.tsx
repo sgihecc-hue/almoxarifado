@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import { requestService } from '@/lib/services/requests'
+import { useListaSolicitacoes, periodoParaFiltro } from '@/lib/utils/request-lista'
 import { RequestStatusBadge } from '@/components/request-status-badge'
 import { getDepartmentName } from '@/lib/constants/departments'
 import { ExportDialog } from '@/components/export-dialog'
@@ -25,8 +25,6 @@ export function RequestHistory() {
   const navigate = useNavigate()
   const location = useLocation()
   const { activeStock } = useModule()
-  const [requests, setRequests] = useState<Request[]>([])
-  const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'approved' | 'rejected' | 'cancelled'>('all')
   // Default do tipo vem do path: no almox (/almox/*) começa em 'warehouse'
@@ -39,21 +37,13 @@ export function RequestHistory() {
   const [showPeriodDialog, setShowPeriodDialog] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultDateRange())
 
-  useEffect(() => {
-    loadRequests()
-  }, [])
-
-  async function loadRequests() {
-    try {
-      setLoading(true)
-      const data = await requestService.getAll()
-      setRequests(data.filter(r => ['approved', 'rejected', 'cancelled', 'completed'].includes(r.status)))
-    } catch (error) {
-      console.error('Error loading requests:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  // Filtro no banco. 'delivered' entra: pedido da farmacia entregue que
+  // aguarda a confirmacao do setor sumia do Historico.
+  const { requests, loading, erro: erroLista, recarregar } = useListaSolicitacoes({
+    type: requestType,
+    statuses: ['approved', 'delivered', 'rejected', 'cancelled', 'completed'],
+    ...periodoParaFiltro(dateRange),
+  })
 
   const getRequestStats = () => {
     const filteredByType = requests.filter(r => r.type === requestType)
@@ -389,6 +379,13 @@ export function RequestHistory() {
         </div>
       </div>
 
+      {erroLista && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
+          <p className="text-sm text-red-700">{erroLista}</p>
+          <Button variant="outline" size="sm" onClick={() => recarregar()}>Tentar de novo</Button>
+        </div>
+      )}
+
       {/* Requests List */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
@@ -469,7 +466,7 @@ export function RequestHistory() {
         onOpenChange={setShowPeriodDialog}
         onFilter={handlePeriodFilter}
         defaultStartDate={dateRange.startDate}
-        defaultEndDate={dateRange.endDate}
+        defaultEndDate={dateRange.endDate ?? new Date()}
       />
 
       <ExportDialog

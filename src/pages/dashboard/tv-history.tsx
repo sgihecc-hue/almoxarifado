@@ -17,6 +17,7 @@ import { formatRequestNumber } from '@/lib/utils/request'
 import type { TVRequest } from '@/lib/services/tv-requests'
 import type { Department } from '@/lib/types/departments'
 import type { RequestStatus } from '@/lib/services/requests'
+import { hojeLocal } from '@/lib/utils/seguro'
 
 /* ── Theme A: Menta + Verde (escuro) ── */
 const THEME_A = {
@@ -156,6 +157,7 @@ export function TVHistory({ type }: TVHistoryProps) {
   const [requests, setRequests] = useState<TVRequest[]>([])
   const [, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
+  const [erroCarga, setErroCarga] = useState<string | null>(null)
   // Restauração de scroll (só almox): guarda a posição da JANELA ao abrir um
   // pedido e devolve ao voltar, pra não perder o lugar na lista. (A página
   // rola na window, não num container interno.)
@@ -171,7 +173,11 @@ export function TVHistory({ type }: TVHistoryProps) {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
-  useEffect(() => { loadData() }, [])
+  // Recarrega quando o periodo muda: a data e filtrada NO BANCO (dia local) e
+  // paginada. Sem data escolhida, os ultimos 30 dias (antes: so os 200 mais
+  // recentes, e o filtro de data comparava em UTC — 21h-24h caia no dia seguinte).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadData() }, [dateFrom, dateTo])
 
   // Desliga a restauração automática do navegador (que, em SPA, joga a página
   // pro topo e atropela a nossa restauração manual). Só enquanto o histórico
@@ -204,14 +210,21 @@ export function TVHistory({ type }: TVHistoryProps) {
   async function loadData() {
     setLoading(true)
     try {
+      const trintaDias = new Date()
+      trintaDias.setDate(trintaDias.getDate() - 30)
       const [reqs, depts] = await Promise.all([
-        tvRequestService.getAll(type),
+        tvRequestService.getAll(type, undefined, {
+          de: dateFrom || (dateTo ? undefined : hojeLocal(trintaDias)),
+          ate: dateTo || undefined,
+        }),
         departmentsService.getAll()
       ])
       setRequests(reqs)
       setDepartments(depts)
+      setErroCarga(null)
     } catch (error) {
       console.error('Error loading data:', error)
+      setErroCarga('Não foi possível carregar o histórico. Toque em atualizar para tentar de novo.')
     } finally {
       setLoading(false)
     }
@@ -223,11 +236,11 @@ export function TVHistory({ type }: TVHistoryProps) {
       if (priorityFilter !== 'all' && req.priority !== priorityFilter) return false
       if (departmentFilter !== 'all' && req.department !== departmentFilter) return false
       if (dateFrom) {
-        const reqDate = new Date(req.created_at).toISOString().split('T')[0]
+        const reqDate = hojeLocal(new Date(req.created_at))
         if (reqDate < dateFrom) return false
       }
       if (dateTo) {
-        const reqDate = new Date(req.created_at).toISOString().split('T')[0]
+        const reqDate = hojeLocal(new Date(req.created_at))
         if (reqDate > dateTo) return false
       }
       if (searchQuery.trim()) {
@@ -473,6 +486,10 @@ export function TVHistory({ type }: TVHistoryProps) {
               borderTopColor: 'transparent', borderRadius: '50%',
               animation: 'spin 1s linear infinite',
             }} />
+          </div>
+        ) : erroCarga ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: '#f87171', fontSize: 15 }}>
+            {erroCarga}
           </div>
         ) : filteredRequests.length === 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: theme.textMuted, fontSize: 15 }}>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Boxes, Package, Search, Plus, Trash2, Loader2, AlertCircle, CheckCircle2, UserPlus, Users,
@@ -11,6 +11,7 @@ import { useAuth } from '@/contexts/auth'
 import { kitsService, type Kit } from '@/lib/services/kits'
 import { patientsService } from '@/lib/services/farmacia-cadastros'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { termoIlike } from '@/lib/utils/seguro'
 
 // PEDIDO DE ENFERMAGEM — kits e material avulso, sempre com paciente.
 // Atendido pela Farmacia Satelite Terreo. Spec:
@@ -64,6 +65,11 @@ export function NovoPedidoEnfermagem() {
   const [itensBusca, setItensBusca] = useState<ItemBusca[]>([])
 
   const [submitting, setSubmitting] = useState(false)
+  // Duplo clique criava dois pedidos: o botao reabilitava no finally, antes do
+  // navigate de 1,4s. Agora: trava por ref, nao reabilita apos sucesso, e a
+  // chave do formulario faz o banco devolver o mesmo pedido se chegar 2x.
+  const enviandoRef = useRef(false)
+  const chaveEnvioRef = useRef<string>(crypto.randomUUID())
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
@@ -85,7 +91,7 @@ export function NovoPedidoEnfermagem() {
         .from('patients')
         .select('id, full_name, medical_record_number')
         .eq('is_active', true)
-        .or(`full_name.ilike.%${q}%,medical_record_number.ilike.%${q}%`)
+        .or(`full_name.ilike.${termoIlike(q)},medical_record_number.ilike.${termoIlike(q)}`)
         .order('full_name')
         .limit(10)
       setPacientes((data || []) as Paciente[])
@@ -101,7 +107,7 @@ export function NovoPedidoEnfermagem() {
         .from('warehouse_items')
         .select('id, name, code, unit')
         .eq('is_active', true)
-        .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+        .or(`name.ilike.${termoIlike(q)},code.ilike.${termoIlike(q)}`)
         .order('name')
         .limit(20)
       setItensBusca((data || []) as ItemBusca[])
@@ -212,26 +218,34 @@ export function NovoPedidoEnfermagem() {
           : 'Adicione ao menos um kit ou item avulso.')
       return
     }
+    if (enviandoRef.current) return
+    enviandoRef.current = true
     setSubmitting(true)
     try {
-      const r = await kitsService.criarPedido({
-        department_id: user!.department_id!,
-        kits: kitsEscolhidos.map((k) => ({
+      // Mesma chamada de kitsService.criarPedido, com a chave de envio.
+      const { data, error: rpcErr } = await supabase.rpc('criar_pedido_enfermagem', {
+        p_department_id: user!.department_id!,
+        p_kits: kitsEscolhidos.map((k) => ({
           kit_id: k.kit_id,
-          kit_name: k.kit_name,
-          pacientes: k.pacientes,
+          pacientes: k.pacientes.map((p) => ({ patient_id: p.patient_id, quantity: p.quantity })),
         })),
-        avulsos: avulsos.map((a) => ({
-          item_id: a.item_id, item_name: a.item_name, unit: a.unit,
-          patient_id: a.patient_id, patient_name: a.patient_name, quantity: a.quantity,
+        p_avulsos: avulsos.map((a) => ({
+          item_id: a.item_id,
+          patient_id: a.patient_id,
+          quantity: a.quantity,
         })),
-        justification,
+        p_priority: 'medium',
+        p_justification: justification?.trim() || null,
+        p_notes: null,
+        p_chave: chaveEnvioRef.current,
       })
+      if (rpcErr) throw rpcErr
+      const r = data as { request_number: number }
       setToast(`Pedido ${r.request_number} enviado para a Satélite Térreo.`)
       setTimeout(() => navigate('/requests'), 1400)
     } catch (e) {
       setError(getErrorMessage(e))
-    } finally {
+      enviandoRef.current = false
       setSubmitting(false)
     }
   }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   PackageCheck,
@@ -18,6 +18,8 @@ import { requestService } from '@/lib/services/requests'
 import { formatRequestNumber } from '@/lib/utils/request'
 import { useModule } from '@/contexts/module'
 import { departmentBelongsToStock } from '@/lib/constants/stock-locations'
+import { lerQuantidade } from '@/lib/utils/seguro'
+import { getErrorMessage } from '@/lib/utils/error-messages'
 
 interface RequestItem {
   id: string
@@ -48,6 +50,9 @@ interface MaterialReceiptForm {
   batch_number: string
   expiry_date: string
   quantity: string
+  // Conversao explicita da unidade do almox (caixa/pacote) para a unidade
+  // contada aqui. 1 = mesma unidade. O banco recusa recebido > fornecido x fator.
+  fator: string
   unit: string
   // Item que NAO chegou. Fica de fora da confirmacao em vez de travar o pedido
   // inteiro: os que chegaram sao creditados e este continua pendente.
@@ -80,6 +85,9 @@ export function ReceiptConfirmation() {
   const [requests, setRequests] = useState<DeliveredRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [confirming, setConfirming] = useState<string | null>(null)
+  const confirmandoRef = useRef(false)
+  // Erro ao carregar: antes a tela mostrava "Nenhum pedido aguardando".
+  const [erroCarga, setErroCarga] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   // Formulário da conferência de material, indexado por request_item_id.
   const [forms, setForms] = useState<Record<string, MaterialReceiptForm>>({})
@@ -175,6 +183,7 @@ export function ReceiptConfirmation() {
                 batch_number: ri.almox_batch_number ?? '',
                 expiry_date: ri.almox_expiry_date ?? '',
                 quantity: '',
+                fator: '1',
                 unit: 'UN',
               }
               return {
@@ -201,9 +210,10 @@ export function ReceiptConfirmation() {
 
       setForms(novosForms)
       setRequests(mapped)
+      setErroCarga(null)
     } catch (err) {
       console.error('ReceiptConfirmation.loadMaterialRequests:', err)
-      showToast('Erro ao carregar pedidos de material.', 'error')
+      setErroCarga('Não foi possível carregar os pedidos de material. ' + getErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -280,9 +290,10 @@ export function ReceiptConfirmation() {
       }))
 
       setRequests(mapped)
+      setErroCarga(null)
     } catch (err) {
       console.error('ReceiptConfirmation.loadDeliveredRequests:', err)
-      showToast('Erro ao carregar pedidos entregues.', 'error')
+      setErroCarga('Não foi possível carregar os pedidos entregues. ' + getErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -300,7 +311,8 @@ export function ReceiptConfirmation() {
   // Conferência de material: manda lote/validade/quantidade de cada item pra
   // RPC, que credita o estoque DESTE local. Não mexe no almoxarifado.
   async function handleConfirmMaterial(req: DeliveredRequest) {
-    if (!activeStock) return
+    if (!activeStock || confirmandoRef.current) return
+    confirmandoRef.current = true
     try {
       setConfirming(req.id)
 
@@ -310,21 +322,35 @@ export function ReceiptConfirmation() {
       // creditados. Quem esquecer de preencher ve TODOS os faltantes de uma
       // vez, em vez de descobrir um por clique.
       const semQuantidade: string[] = []
+      const acimaDoFornecido: string[] = []
+      const conversoes: string[] = []
       const payload: Array<Record<string, unknown>> = []
 
       for (const item of req.items) {
         const f = forms[item.id]
         if (f?.nao_recebido) continue
-        const digitado = (f?.quantity ?? '').trim()
-        const qtd = Number(digitado)
-        if (digitado === '' || !Number.isFinite(qtd) || qtd <= 0) {
+        const qtd = lerQuantidade(f?.quantity)
+        if (qtd === null || qtd <= 0) {
           semQuantidade.push(item.item_name)
           continue
+        }
+        const fator = lerQuantidade(f?.fator || '1')
+        if (fator === null || fator < 1 || fator > 1000) {
+          throw new Error(`Fator de conversão inválido em "${item.item_name}" (use um inteiro de 1 a 1000).`)
+        }
+        const limite = item.quantity * fator
+        if (qtd > limite) {
+          acimaDoFornecido.push(`${item.item_name}: recebido ${qtd}, fornecido ${item.quantity} ${item.item_unit ?? ''} x ${fator} = ${limite}`)
+          continue
+        }
+        if (fator !== 1) {
+          conversoes.push(`${item.item_name}: ${item.quantity} ${item.item_unit ?? ''} x ${fator} = ${limite} UN (recebido ${qtd})`)
         }
         payload.push({
           request_item_id: item.id,
           item_id: f.item_id,
-          quantity: Math.trunc(qtd),
+          quantity: qtd,
+          fator,
           batch_number: f.batch_number?.trim() || null,
           expiry_date: f.expiry_date || null,
           unit: f.unit?.trim() || null,
@@ -339,8 +365,15 @@ export function ReceiptConfirmation() {
             : `${semQuantidade.length} itens sem quantidade: ${lista}. Informe a quantidade de cada um ou marque "nao chegou".`,
         )
       }
+      if (acimaDoFornecido.length > 0) {
+        throw new Error(`Quantidade recebida maior que o fornecido pelo almoxarifado — confira a contagem ou o fator: ${acimaDoFornecido.join('; ')}`)
+      }
       if (payload.length === 0) {
         throw new Error('Nenhum item conferido. Informe a quantidade de pelo menos um item.')
+      }
+      if (conversoes.length > 0 &&
+          !window.confirm(`Confirme a conversão de unidade:\n\n${conversoes.join('\n')}\n\nO estoque da ${activeStock.label} será creditado nessas quantidades.`)) {
+        return
       }
 
       const { error } = await supabase.rpc('confirmar_recebimento_material', {
@@ -362,13 +395,16 @@ export function ReceiptConfirmation() {
       await loadMaterialRequests()
     } catch (err: any) {
       console.error('ReceiptConfirmation.handleConfirmMaterial:', err)
-      showToast(err?.message ?? 'Erro ao registrar recebimento.', 'error')
+      showToast(getErrorMessage(err), 'error')
     } finally {
       setConfirming(null)
+      confirmandoRef.current = false
     }
   }
 
   async function handleConfirm(req: DeliveredRequest) {
+    if (confirmandoRef.current) return
+    confirmandoRef.current = true
     try {
       setConfirming(req.id)
       await requestService.confirmReceipt(req.id)
@@ -376,9 +412,10 @@ export function ReceiptConfirmation() {
       setRequests((prev) => prev.filter((r) => r.id !== req.id))
     } catch (err: any) {
       console.error('ReceiptConfirmation.handleConfirm:', err)
-      showToast(err?.message ?? 'Erro ao confirmar recebimento.', 'error')
+      showToast(getErrorMessage(err), 'error')
     } finally {
       setConfirming(null)
+      confirmandoRef.current = false
     }
   }
 
@@ -421,8 +458,17 @@ export function ReceiptConfirmation() {
         )}
       </div>
 
+      {erroCarga && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
+          <p className="text-sm text-red-700">{erroCarga}</p>
+          <Button variant="outline" size="sm" onClick={() => (isMaterial ? loadMaterialRequests() : loadDeliveredRequests())}>
+            Tentar de novo
+          </Button>
+        </div>
+      )}
+
       {/* Empty state */}
-      {requests.length === 0 && (
+      {requests.length === 0 && !erroCarga && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-16 text-center">
           <div className="flex flex-col items-center gap-4">
             <div className="p-4 bg-gray-100 rounded-full">
@@ -576,7 +622,7 @@ export function ReceiptConfirmation() {
                               não chegou
                             </label>
                           </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
                             {/* Lote e Validade vem do ALMOXARIFADO e sao so
                                 leitura: quem recebe nao digita data nem lote,
                                 so conta e digita a quantidade. */}
@@ -618,6 +664,32 @@ export function ReceiptConfirmation() {
                                 className="w-full px-3 py-2 text-base font-semibold tabular-nums text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-300 disabled:bg-gray-100 disabled:text-gray-400"
                               />
                             </div>
+                            {/* Fator: quantas unidades desta farmacia vem em
+                                cada unidade do almox (ex. caixa com 100 = 100).
+                                1 = mesma unidade. Limita o recebido. */}
+                            <div>
+                              <label className="block text-[11px] text-gray-500 mb-1">
+                                Un. por {item.item_unit || 'UN'}
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="off"
+                                value={f?.fator ?? '1'}
+                                disabled={!!f?.nao_recebido}
+                                onFocus={(e) => e.currentTarget.select()}
+                                onChange={(e) => updateForm(item.id, 'fator', e.target.value.replace(/\D/g, ''))}
+                                className="w-full px-3 py-2 text-base tabular-nums text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-300 disabled:bg-gray-100 disabled:text-gray-400"
+                              />
+                              {(() => {
+                                const fat = lerQuantidade(f?.fator || '1') ?? 1
+                                return (
+                                  <p className="text-[10px] text-gray-500 mt-1">
+                                    {item.quantity} {item.item_unit || 'UN'} × {fat} = {(item.quantity * fat).toLocaleString('pt-BR')} UN (máx.)
+                                  </p>
+                                )
+                              })()}
+                            </div>
                             {/* Unidade e informativa: o valor gravado continua
                                 o mesmo de antes ('UN'), so deixou de ser
                                 digitavel — quem recebe so conta a quantidade. */}
@@ -633,8 +705,9 @@ export function ReceiptConfirmation() {
                     })}
                   </div>
                   <p className="text-[11px] text-gray-400 mt-3">
-                    Conte o que chegou e digite na unidade desta farmácia — o almoxarifado trabalha em
-                    caixa/pacote e não existe conversão automática.
+                    Conte o que chegou e digite na unidade desta farmácia. Se o almoxarifado mandou em
+                    caixa/pacote, informe quantas unidades vêm em cada uma: o recebido não pode passar do
+                    fornecido × esse número.
                   </p>
                 </div>
               )}

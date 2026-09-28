@@ -1,5 +1,6 @@
 import { validateUUID, sanitizeInput } from '../utils/sanitize'
 import { supabase } from '../supabase'
+import { buscarTodas } from '../utils/seguro'
 
 export type RequestStatus =
   | 'pending'
@@ -13,10 +14,25 @@ export type RequestStatus =
 type Priority = 'low' | 'medium' | 'high'
 export type RequestType = 'pharmacy' | 'warehouse'
 
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache duration
+/**
+ * Filtro das listas de solicitacoes. Tudo e filtrado NO BANCO: antes a lista
+ * trazia so os 100 pedidos mais recentes de qualquer tipo/status e filtrava
+ * no navegador — pedido mais antigo que os 100 ultimos sumia das telas.
+ */
+export interface FiltroSolicitacoes {
+  type?: RequestType
+  statuses?: RequestStatus[]
+  /** created_at >= desde */
+  desde?: Date | null
+  /** created_at <= ate (null = sem limite: pedido novo sempre aparece) */
+  ate?: Date | null
+  requesterId?: string
+}
 
-// Request cache to prevent duplicate requests and improve performance
-const requestCache = new Map<string, { data: any; timestamp: number }>()
+/** Mensagem quando o pedido mudou entre abrir a tela e clicar. */
+export const MSG_PEDIDO_ALTERADO = 'Este pedido já foi alterado por outra pessoa. Recarregue a página para ver a situação atual.'
+
+// Sem cache: o cache de 5 min escondia pedidos novos e mostrava status velho.
 
 export interface Request {
   id: string
@@ -117,35 +133,45 @@ class RequestService {
     RequestService.lastRequestTime = Date.now();
   }
 
-  // Add cache helper methods
-  private getCachedData(key: string): any | null {
-    const cached = requestCache.get(key)
-    if (!cached) return null
-    
-    if (Date.now() - cached.timestamp > CACHE_DURATION) {
-      requestCache.delete(key)
-      return null
-    }
-    
-    return cached.data
-  }
-
+  /** Mantido por compatibilidade: nao ha mais cache. */
   clearCache(): void {
-    requestCache.clear()
+    /* sem cache */
   }
 
-  private setCachedData(key: string, data: any): void {
-    requestCache.set(key, { data, timestamp: Date.now() })
+  /**
+   * Update de status que so vale se o pedido AINDA estiver num dos status
+   * esperados. 0 linhas = alguem mudou antes (ou sem permissao): erro claro,
+   * nunca "sucesso" silencioso.
+   */
+  private async atualizarStatus(
+    id: string,
+    esperados: RequestStatus[],
+    valores: Record<string, unknown>,
+  ): Promise<void> {
+    const { data, error } = await supabase
+      .from('requests')
+      .update(valores)
+      .eq('id', id)
+      .in('status', esperados)
+      .select('id')
+    if (error) throw new Error(error.message)
+    if (!data || data.length === 0) {
+      const { data: atual } = await supabase.from('requests').select('status').eq('id', id).maybeSingle()
+      if (atual && !esperados.includes(atual.status as RequestStatus)) throw new Error(MSG_PEDIDO_ALTERADO)
+      throw new Error('Não foi possível alterar a solicitação: sem permissão ou solicitação não encontrada.')
+    }
   }
 
-  async getAll(): Promise<Request[]> {
+  /**
+   * Lista solicitacoes filtrando tipo/status/periodo/solicitante no banco e
+   * paginando (buscarTodas passa do teto de 1000 linhas do PostgREST).
+   * Erro vira excecao — a tela mostra "nao foi possivel carregar", nunca
+   * "nenhuma solicitacao".
+   */
+  async getAll(filtro: FiltroSolicitacoes = {}): Promise<Request[]> {
     try {
-      // Check cache first
-      const cacheKey = 'all_requests'
-      const cached = this.getCachedData(cacheKey)
-      if (cached) return cached
-
-      const { data: requests, error } = await supabase
+      const montar = (de: number, ate: number) => {
+        let q = supabase
         .from('requests')
         .select(`
           *,
@@ -212,18 +238,17 @@ class RequestService {
             )
           )
         `)
-        .order('created_at', { ascending: false })
-        .limit(100) // Reasonable limit for better performance
-
-      if (error) {
-        console.error('Database error:', error)
-        return []
+        if (filtro.type) q = q.eq('type', filtro.type)
+        if (filtro.statuses && filtro.statuses.length > 0) q = q.in('status', filtro.statuses)
+        if (filtro.desde) q = q.gte('created_at', filtro.desde.toISOString())
+        if (filtro.ate) q = q.lte('created_at', filtro.ate.toISOString())
+        if (filtro.requesterId) q = q.eq('requester_id', filtro.requesterId)
+        return q
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true })
+          .range(de, ate)
       }
-
-      if (!Array.isArray(requests)) {
-        console.error('Invalid requests data format')
-        return []
-      }
+      const requests = await buscarTodas<any>(montar, { tamanho: 500 })
 
       const processedRequests = (requests || [])
         .filter(request => request && request.id && typeof request === 'object')
@@ -301,15 +326,13 @@ class RequestService {
             return null
           }
         })
-        .filter(request => request) // Remove failed processing results
-      
-      // Cache the results
-      this.setCachedData('all_requests', processedRequests)
+        .filter(request => request) as Request[] // Remove failed processing results
+
       return processedRequests
     } catch (error) {
       console.error('Error fetching requests:', error)
-      // Return empty array instead of throwing to prevent app crashes
-      return []
+      const msg = (error as any)?.message ? `: ${(error as any).message}` : ''
+      throw new Error(`Não foi possível carregar as solicitações${msg}`)
     }
   }
 
@@ -369,13 +392,6 @@ class RequestService {
       if (!validateUUID(id)) {
         throw new Error('Invalid request ID format')
       }
-
-      await this.checkRateLimit()
-      
-      // Check cache first
-      const cacheKey = `request_${id}`
-      const cached = this.getCachedData(cacheKey)
-      if (cached) return cached
 
       const { data: request, error } = await supabase
         .from('requests')
@@ -498,9 +514,7 @@ class RequestService {
           reason: sanitizeInput(history.reason || '')
         }))
       }
-      
-      // Cache the result
-      this.setCachedData(cacheKey, processedRequest)
+
       return processedRequest
     } catch (error) {
       console.error('Error fetching request:', error)
@@ -508,6 +522,12 @@ class RequestService {
     }
   }
 
+  /**
+   * Cria a solicitacao numa transacao so (RPC criar_solicitacao): cabecalho e
+   * itens juntos. Antes eram duas gravacoes — se a dos itens falhasse ficava
+   * um pedido vazio na fila. `chave` (uuid gerado uma vez por formulario)
+   * impede pedido duplicado por duplo clique/reenvio.
+   */
   async create(data: {
     type: RequestType
     priority: Priority
@@ -521,6 +541,7 @@ class RequestService {
      * do solicitante via departments.default_pharmacy_location_id (ou _warehouse).
      */
     source_location_id?: string | null
+    chave?: string
     items: Array<{
       item_id: string
       quantity: number
@@ -535,123 +556,65 @@ class RequestService {
       if (!data.priority || !['low', 'medium', 'high'].includes(data.priority)) {
         throw new Error('Prioridade inválida')
       }
-      
+
       if (!data.department || sanitizeInput(data.department).trim() === '') {
         throw new Error('Departamento é obrigatório')
       }
-      
+
       if (!data.created_by || !validateUUID(data.created_by)) {
         throw new Error('Usuário criador é obrigatório')
       }
-      
+
       if (!data.items || data.items.length === 0) {
         throw new Error('Pelo menos um item deve ser solicitado')
       }
-      
+
       if (data.items.length > 50) {
         throw new Error('Máximo de 50 itens por solicitação')
       }
-      
-      // Validate items
+
       for (const item of data.items) {
-        if (!item || typeof item !== 'object' || !item.item_id) {
-          throw new Error('Item é obrigatório')
+        if (!item || typeof item !== 'object' || !item.item_id || !validateUUID(item.item_id)) {
+          throw new Error('Item inválido na solicitação')
         }
-        if (!validateUUID(item.item_id)) {
-          throw new Error('ID do item é obrigatório')
-        }
-        if (typeof item.quantity !== 'number' || item.quantity <= 0) {
-          throw new Error('Quantidade deve ser maior que zero')
-        }
-        if (item.quantity > 10000) {
-          throw new Error('Quantidade deve ser maior que zero')
+        if (!Number.isInteger(item.quantity) || item.quantity <= 0 || item.quantity > 10000) {
+          throw new Error('Quantidade deve ser um número inteiro de 1 a 10000')
         }
       }
 
-      await this.checkRateLimit()
-      
-      // Clear cache after creating new request
-      requestCache.clear()
+      const { data: r, error } = await supabase.rpc('criar_solicitacao', {
+        p_type: data.type,
+        p_priority: data.priority,
+        p_department_id: data.department,
+        p_items: data.items.map((i) => ({ item_id: i.item_id, quantity: i.quantity })),
+        p_destination_department_id: data.destination_department || null,
+        p_justification: sanitizeInput(data.justification || ''),
+        p_notes: data.notes ? sanitizeInput(data.notes) : null,
+        p_source_location_id: data.source_location_id ?? null,
+        p_chave: data.chave ?? null,
+      })
+      if (error) throw new Error(error.message)
+      const requestId = (r as { request_id?: string } | null)?.request_id
+      if (!requestId) throw new Error('O banco não devolveu a solicitação criada.')
 
-      // Deduz o estoque de origem a partir do departamento, se nao veio explicito.
-      // Regra: departments.default_pharmacy_location_id (type='pharmacy') ou
-      //        departments.default_warehouse_location_id (type='warehouse').
-      let resolvedSourceLocationId: string | null = data.source_location_id ?? null
-      if (!resolvedSourceLocationId && data.department) {
-        const { data: dept, error: deptErr } = await supabase
-          .from('departments')
-          .select('default_pharmacy_location_id, default_warehouse_location_id')
-          .eq('id', data.department)
-          .maybeSingle()
-        if (deptErr) {
-          console.warn('Falha ao buscar default location do departamento:', deptErr)
-        } else if (dept) {
-          resolvedSourceLocationId =
-            data.type === 'pharmacy'
-              ? (dept.default_pharmacy_location_id as string | null) ?? null
-              : (dept.default_warehouse_location_id as string | null) ?? null
-        }
-      }
-
-      // First, create the request
-      const insertData: any = {
-        type: data.type,
-        priority: data.priority,
-        department_id: data.department,
-        justification: sanitizeInput(data.justification || ''),
-        requester_id: data.created_by,
-        status: 'pending',
-        source_location_id: resolvedSourceLocationId,
-      }
-      if (data.destination_department) {
-        insertData.destination_department_id = data.destination_department
-      }
-      if (data.notes) {
-        insertData.notes = sanitizeInput(data.notes)
-      }
-
-      const { data: request, error: requestError } = await supabase
-        .from('requests')
-        .insert(insertData)
-        .select()
-        .single()
-
-      if (requestError) throw requestError
-
-      // Fetch item names for the request items
-      const table = data.type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
-      const itemIds = data.items.map(item => item.item_id)
-      const { data: itemsData } = await supabase
-        .from(table)
-        .select('id, name')
-        .in('id', itemIds)
-      const itemNamesMap = new Map((itemsData || []).map(i => [i.id, i.name]))
-
-      // Then, create the request items
-      const { error: itemsError } = await supabase
-        .from('request_items')
-        .insert(
-          data.items.map(item => ({
-            request_id: request.id,
-            item_type: data.type,
-            [data.type === 'pharmacy' ? 'pharmacy_item_id' : 'warehouse_item_id']: item.item_id,
-            item_name: itemNamesMap.get(item.item_id) || 'Item',
-            quantity: item.quantity
-          }))
-        )
-
-      if (itemsError) throw itemsError
-
-      // Return the newly created request
-      return this.getById(request.id)
+      return this.getById(requestId)
     } catch (error) {
       console.error('Error creating request:', error)
       throw error
     }
   }
 
+  /**
+   * Aprovar.
+   * - Farmacia: RPC atender_solicitacao_farmacia (uma transacao): grava o
+   *   fornecido de cada item, confere lotes x fornecido e marca como entregue.
+   *   O solicitante confirma o recebimento depois (ai o estoque se move).
+   *   `itemQuantities` = quantidade FORNECIDA por item.
+   * - Almoxarifado: so passa para 'approved' (se ainda estiver pendente) e
+   *   registra a quantidade aprovada. A baixa acontece ao entregar.
+   */
   async approve(
-    id: string, 
+    id: string,
     itemQuantities: Record<string, number>,
     comments?: string
   ): Promise<Request> {
@@ -661,99 +624,58 @@ class RequestService {
       }
 
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('User not authenticated')
+      if (!user) throw new Error('Usuário não autenticado')
 
-      await this.checkRateLimit()
-      
-      // Clear cache after approval
-      requestCache.clear()
-
-      // Get the request to access item information
-      const request = await this.getById(id)
-      if (!request) throw new Error('Request not found')
-
-      // Validate item quantities
       for (const [itemId, quantity] of Object.entries(itemQuantities)) {
         if (!validateUUID(itemId)) {
-          throw new Error(`Invalid item ID: ${itemId}`)
+          throw new Error('Item inválido na solicitação')
         }
-        if (typeof quantity !== 'number' || quantity < 0 || quantity > 10000) {
-          throw new Error(`Invalid quantity for item ${itemId}`)
+        if (!Number.isInteger(quantity) || quantity < 0 || quantity > 10000) {
+          throw new Error('Quantidade inválida: use número inteiro de 0 a 10000')
         }
       }
 
-      // Aprovar tem dois comportamentos, dependendo do tipo:
-      // - Farmacia: aprovar ja marca como entregue (delivered_at/by = agora).
-      //   Fluxo: pending -> approve -> delivered -> confirm receipt -> completed.
-      //   O solicitante confirma recebimento no fim.
-      // - Almoxarifado: aprovar so seta 'approved'. Staff depois clica
-      //   "Marcar como Entregue" e o pedido vai direto pra 'completed'
-      //   (nao ha confirmacao de recebimento pra almox).
-      const now = new Date().toISOString()
-      const isPharmacy = request.type === 'pharmacy'
-      const approvalUpdate = isPharmacy
-        ? {
-            status: 'delivered' as const,
-            approved_at: now,
-            approved_by: user.id,
-            delivered_at: now,
-            delivered_by: user.id,
-          }
-        : {
-            status: 'approved' as const,
-            approved_at: now,
-            approved_by: user.id,
-          }
-      const { data: updatedRequest, error: requestError } = await supabase
-        .from('requests')
-        .update(approvalUpdate)
-        .eq('id', id)
-        .select()
-        .single()
+      const { data: atual, error: atualErr } = await supabase
+        .from('requests').select('type, status').eq('id', id).maybeSingle()
+      if (atualErr) throw new Error(atualErr.message)
+      if (!atual) throw new Error('Solicitação não encontrada')
+      if (atual.status !== 'pending') throw new Error(MSG_PEDIDO_ALTERADO)
 
-      if (requestError) throw requestError
-
-      // Fetch all original request items to preserve their data
-      const { data: originalItems, error: originalItemsError } = await supabase
-        .from('request_items')
-        .select('*')
-        .eq('request_id', id)
-
-      if (originalItemsError) throw originalItemsError
-      if (!originalItems) throw new Error('Original request items not found')
-
-      // Create a map of original items for easy lookup
-      const originalItemsMap = originalItems.reduce((acc, item) => {
-        acc[item.id] = item
-        return acc
-      }, {} as Record<string, any>)
-
-      // Update approved_quantity de cada item. Antes usava .upsert() que
-      // dispara semantica INSERT+UPDATE — e o RLS de INSERT em
-      // request_items exige que o user seja o requester original, o que
-      // faz o approve falhar com HTTP 400 quando quem aprova NAO eh quem
-      // criou a solicitacao. UPDATE simples so passa pela policy
-      // "Managers can update request items" (isso ja permite admin/gestor/
-      // atendente). Nada mais precisa ser preservado — os outros campos
-      // ja existem no banco.
-      for (const [itemId, approvedQuantity] of Object.entries(itemQuantities)) {
-        const originalItem = originalItemsMap[itemId]
-        if (!originalItem) {
-          throw new Error(`Request item ${itemId} not found`)
+      if (atual.type === 'pharmacy') {
+        const { error } = await supabase.rpc('atender_solicitacao_farmacia', {
+          p_request_id: id,
+          p_itens: Object.entries(itemQuantities).map(([request_item_id, q]) => ({
+            request_item_id, supplied_quantity: q,
+          })),
+          p_notes: comments ? sanitizeInput(comments) : null,
+        })
+        if (error) throw new Error(error.message)
+      } else {
+        await this.atualizarStatus(id, ['pending'], {
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+          approved_by: user.id,
+        })
+        // Quantidade aprovada e so referencia (a baixa usa o FORNECIDO).
+        for (const [itemId, approvedQuantity] of Object.entries(itemQuantities)) {
+          const { error: itemError } = await supabase
+            .from('request_items')
+            .update({ approved_quantity: approvedQuantity })
+            .eq('id', itemId)
+            .eq('request_id', id)
+          if (itemError) throw new Error(itemError.message)
         }
-        const { error: itemError } = await supabase
-          .from('request_items')
-          .update({ approved_quantity: approvedQuantity })
-          .eq('id', itemId)
-        if (itemError) throw itemError
       }
 
-      // Add approval comment if provided
       if (comments) {
-        await this.addComment(id, sanitizeInput(comments))
+        try {
+          await this.addComment(id, sanitizeInput(comments))
+        } catch (commentErr) {
+          console.warn('Comment failed but approval was successful:', commentErr)
+        }
       }
 
-      return this.getById(updatedRequest.id)
+      return this.getById(id)
     } catch (error) {
       console.error('Error approving request:', error)
       throw error
@@ -774,28 +696,12 @@ class RequestService {
       if (authError) throw new Error('Erro de autenticação: ' + authError.message)
       if (!user) throw new Error('Usuário não autenticado')
 
-      requestCache.clear()
-
-      const { data: updatedRequest, error } = await supabase
-        .from('requests')
-        .update({
-          status: 'rejected',
-          rejected_at: new Date().toISOString(),
-          rejected_by: user.id,
-          rejection_reason: sanitizeInput(reason)
-        })
-        .eq('id', id)
-        .select('id, status')
-        .maybeSingle()
-
-      if (error) {
-        console.error('reject: update error', error)
-        throw new Error('Erro ao rejeitar: ' + error.message)
-      }
-
-      if (!updatedRequest) {
-        throw new Error('Solicitação não encontrada ou sem permissão')
-      }
+      await this.atualizarStatus(id, ['pending'], {
+        status: 'rejected',
+        rejected_at: new Date().toISOString(),
+        rejected_by: user.id,
+        rejection_reason: sanitizeInput(reason)
+      })
 
       // Add comment (non-blocking)
       try {
@@ -804,7 +710,7 @@ class RequestService {
         console.warn('Comment failed but rejection was successful:', commentErr)
       }
 
-      return this.getById(updatedRequest.id)
+      return this.getById(id)
     } catch (error) {
       console.error('Error rejecting request:', error)
       throw error
@@ -821,17 +727,7 @@ class RequestService {
       if (authError) throw new Error('Erro de autenticação: ' + authError.message)
       if (!user) throw new Error('Usuário não autenticado')
 
-      requestCache.clear()
-
-      const { data: updatedRequest, error } = await supabase
-        .from('requests')
-        .update({ status: 'processing' })
-        .eq('id', id)
-        .select('id, status')
-        .maybeSingle()
-
-      if (error) throw new Error('Erro ao processar: ' + error.message)
-      if (!updatedRequest) throw new Error('Solicitação não encontrada ou sem permissão')
+      await this.atualizarStatus(id, ['approved'], { status: 'processing' })
 
       try {
         await this.addComment(id, 'Iniciado o processamento da solicitação')
@@ -839,13 +735,19 @@ class RequestService {
         console.warn('Comment failed but processing started:', commentErr)
       }
 
-      return this.getById(updatedRequest.id)
+      return this.getById(id)
     } catch (error) {
       console.error('Error starting request processing:', error)
       throw error
     }
   }
 
+  /**
+   * Entrega do ALMOXARIFADO: fecha o pedido direto ('completed'). A baixa do
+   * estoque e feita no banco (gatilho) pela quantidade FORNECIDA de cada item
+   * — fornecido vazio ou saldo insuficiente fazem o banco recusar, com a
+   * mensagem do item. Farmacia nao passa por aqui (entrega = Aprovar).
+   */
   async markAsDelivered(id: string, deliveryNotes?: string, receivedByEmployeeId?: string): Promise<Request> {
     try {
       if (!validateUUID(id)) {
@@ -856,56 +758,26 @@ class RequestService {
       if (authError) throw new Error('Erro de autenticação: ' + authError.message)
       if (!user) throw new Error('Usuário não autenticado')
 
-      requestCache.clear()
+      const { data: atual, error: atualErr } = await supabase
+        .from('requests').select('type').eq('id', id).maybeSingle()
+      if (atualErr) throw new Error(atualErr.message)
+      if (!atual) throw new Error('Solicitação não encontrada')
+      if (atual.type === 'pharmacy') {
+        throw new Error('Solicitação da farmácia é entregue pelo botão Aprovar.')
+      }
 
-      // Diferenca por tipo:
-      // - Almoxarifado: nao ha confirmacao de recebimento — "entregue" fecha
-      //   o pedido direto (status='completed').
-      // - Farmacia: fica 'delivered' pra o solicitante confirmar recebimento.
-      const existing = await this.getById(id)
-      const isPharmacy = existing?.type === 'pharmacy'
       const now = new Date().toISOString()
-      const updateData: Record<string, any> = isPharmacy
-        ? {
-            status: 'delivered',
-            delivered_at: now,
-            delivered_by: user.id,
-          }
-        : {
-            status: 'completed',
-            delivered_at: now,
-            delivered_by: user.id,
-            completed_at: now,
-            completed_by: user.id,
-          }
-
-      if (deliveryNotes) {
-        updateData.delivery_notes = sanitizeInput(deliveryNotes)
+      const updateData: Record<string, any> = {
+        status: 'completed',
+        delivered_at: now,
+        delivered_by: user.id,
+        completed_at: now,
+        completed_by: user.id,
       }
+      if (deliveryNotes) updateData.delivery_notes = sanitizeInput(deliveryNotes)
+      if (receivedByEmployeeId) updateData.received_by_employee_id = receivedByEmployeeId
 
-      if (receivedByEmployeeId) {
-        updateData.received_by_employee_id = receivedByEmployeeId
-      }
-
-      console.log('markAsDelivered: updating request', id, 'with', updateData)
-
-      const { data: updatedRequest, error } = await supabase
-        .from('requests')
-        .update(updateData)
-        .eq('id', id)
-        .select('id, status')
-        .maybeSingle()
-
-      if (error) {
-        console.error('markAsDelivered: update error', error)
-        throw new Error('Erro ao atualizar: ' + error.message)
-      }
-
-      if (!updatedRequest) {
-        throw new Error('Solicitação não encontrada ou sem permissão')
-      }
-
-      console.log('markAsDelivered: update OK, status =', updatedRequest.status)
+      await this.atualizarStatus(id, ['approved', 'processing'], updateData)
 
       // Add comment (non-blocking)
       try {
@@ -917,7 +789,7 @@ class RequestService {
         console.warn('Comment failed but delivery was successful:', commentErr)
       }
 
-      return this.getById(updatedRequest.id)
+      return this.getById(id)
     } catch (error) {
       console.error('Error marking request as delivered:', error)
       throw error
@@ -934,18 +806,17 @@ class RequestService {
       if (authError) throw new Error('Erro de autenticação: ' + authError.message)
       if (!user) throw new Error('Usuário não autenticado')
 
-      requestCache.clear()
-
       // Confirma o recebimento via RPC atômica: para solicitações de FARMÁCIA gera
       // os movimentos de estoque pelo ledger (saída no CAF + entrada no estoque do
       // satélite solicitante, quando for o caso); para ALMOXARIFADO apenas conclui
       // (a baixa já ocorreu na entrega). Registra received_by/completed_by.
+      // O banco confere quem pode confirmar e se os lotes batem com o fornecido.
       const { error } = await supabase.rpc('confirmar_recebimento_solicitacao', {
         p_request_id: id,
         p_notes: receiptNotes ? sanitizeInput(receiptNotes) : null,
       })
 
-      if (error) throw new Error('Erro ao confirmar: ' + error.message)
+      if (error) throw new Error(error.message)
 
       const message = receiptNotes
         ? `Recebimento confirmado. Observações: ${sanitizeInput(receiptNotes)}`
@@ -964,47 +835,28 @@ class RequestService {
     }
   }
 
+  /**
+   * "Concluir" da tela Em Processamento (almoxarifado): mesma entrega do
+   * markAsDelivered, sem recebedor. So vale para pedido aprovado/em
+   * processamento; a baixa e conferida no banco.
+   */
   async complete(id: string, comments?: string): Promise<Request> {
     try {
       if (!validateUUID(id)) {
         throw new Error('Invalid request ID format')
       }
-
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('User not authenticated')
-
-      await this.checkRateLimit()
-
-      requestCache.clear()
-
-      const request = await this.getById(id)
-      if (!request) throw new Error('Request not found')
-
-      const { data: updatedRequest, error } = await supabase
-        .from('requests')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          completed_by: user.id
-        })
-        .eq('id', id)
-        .select()
-        .single()
-
-      if (error) throw error
-
-      if (comments) {
-        await this.addComment(id, sanitizeInput(comments))
-      }
-
-      return this.getById(updatedRequest.id)
+      return await this.markAsDelivered(id, comments)
     } catch (error) {
       console.error('Error completing request:', error)
       throw error
     }
   }
 
-  async cancel(id: string, reason: string): Promise<Request> {
+  /**
+   * Cancelar: o solicitante so cancela pedido PENDENTE (regra da policy);
+   * quem atende cancela pendente ou aprovado.
+   */
+  async cancel(id: string, reason: string, statusPermitidos: RequestStatus[] = ['pending', 'approved']): Promise<Request> {
     try {
       if (!validateUUID(id)) {
         throw new Error('ID da solicitação inválido')
@@ -1018,22 +870,12 @@ class RequestService {
       if (authError) throw new Error('Erro de autenticação: ' + authError.message)
       if (!user) throw new Error('Usuário não autenticado')
 
-      requestCache.clear()
-
-      const { data: updatedRequest, error } = await supabase
-        .from('requests')
-        .update({
-          status: 'cancelled',
-          cancelled_at: new Date().toISOString(),
-          cancelled_by: user.id,
-          cancellation_reason: sanitizeInput(reason)
-        })
-        .eq('id', id)
-        .select('id, status')
-        .maybeSingle()
-
-      if (error) throw new Error('Erro ao cancelar: ' + error.message)
-      if (!updatedRequest) throw new Error('Solicitação não encontrada ou sem permissão')
+      await this.atualizarStatus(id, statusPermitidos, {
+        status: 'cancelled',
+        cancelled_at: new Date().toISOString(),
+        cancelled_by: user.id,
+        cancellation_reason: sanitizeInput(reason)
+      })
 
       try {
         await this.addComment(id, `Solicitação cancelada: ${sanitizeInput(reason)}`)
@@ -1041,7 +883,7 @@ class RequestService {
         console.warn('Comment failed but cancel was successful:', commentErr)
       }
 
-      return this.getById(updatedRequest.id)
+      return this.getById(id)
     } catch (error) {
       console.error('Error cancelling request:', error)
       throw error
@@ -1077,8 +919,6 @@ class RequestService {
 
       await this.checkRateLimit()
       
-      // Clear cache after adding comment
-      requestCache.clear()
 
       // Get the request to access owner information
       const request = await this.getById(requestId)

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Search, Filter, Download, AlertCircle,
@@ -12,6 +12,9 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { requestService } from '@/lib/services/requests'
+import { useListaSolicitacoes, periodoParaFiltro } from '@/lib/utils/request-lista'
+import { podeAtenderSolicitacao } from '@/lib/utils/request-scope'
+import { getErrorMessage } from '@/lib/utils/error-messages'
 import { RequestStatusBadge } from '@/components/request-status-badge'
 import { getDepartmentName } from '@/lib/constants/departments'
 import { useAuth } from '@/contexts/auth'
@@ -26,8 +29,7 @@ export function RequestPending() {
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useAuth()
-  const { activeModule, activeStock } = useModule()
-  const [requests, setRequests] = useState<Request[]>([])
+  const { activeModule, activeStock, homeModule } = useModule()
 
   // Derive the request type from the active module. Atendente não tem
   // activeModule, então usamos o path (/almox/*) para não vazar farmácia
@@ -36,36 +38,43 @@ export function RequestPending() {
     activeModule === 'almoxarifado' || location.pathname.startsWith('/almox')
       ? 'warehouse'
       : 'pharmacy'
-  const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'approved' | 'pharmacy' | 'warehouse'>('all')
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [showPeriodDialog, setShowPeriodDialog] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultDateRange())
 
-  useEffect(() => {
-    loadRequests()
-  }, [])
+  // Pendentes + aprovadas (ainda nao em processamento), filtradas no banco e
+  // atualizadas a cada 60s.
+  const { requests, loading, erro: erroLista, recarregar } = useListaSolicitacoes({
+    type: moduleRequestType,
+    statuses: ['pending', 'approved'],
+    ...periodoParaFiltro(dateRange),
+  }, { atualizarCadaMs: 60000 })
 
-  async function loadRequests() {
-    try {
-      setLoading(true)
-      const data = await requestService.getAll()
-      // Include both pending and approved (but not yet processing) requests
-      setRequests(data.filter(r => r.status === 'pending' || r.status === 'approved'))
-    } catch (error) {
-      console.error('Error loading requests:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  // Trava de duplo clique: o estado do React nao bloqueia o 2o clique no
+  // mesmo tick, o ref sim.
+  const iniciandoRef = useRef(false)
+  const [aviso, setAviso] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null)
+  const [iniciando, setIniciando] = useState<string | null>(null)
+  const podeIniciar = (request: Request) =>
+    !!user && (user.role === 'gestor' || user.role === 'administrador' || user.role === 'atendente') &&
+    request.type === 'warehouse' && podeAtenderSolicitacao(homeModule, request.type)
 
   const handleStartProcessing = async (requestId: string) => {
+    if (iniciandoRef.current) return
+    iniciandoRef.current = true
+    setIniciando(requestId)
     try {
       await requestService.startProcessing(requestId)
-      loadRequests() // Reload the requests after processing starts
+      setAviso({ tipo: 'ok', texto: 'Solicitação em processamento.' })
+      await recarregar(true)
     } catch (error) {
-      console.error('Error starting processing:', error)
+      setAviso({ tipo: 'erro', texto: getErrorMessage(error) })
+      await recarregar(true)
+    } finally {
+      iniciandoRef.current = false
+      setIniciando(null)
     }
   }
 
@@ -205,16 +214,19 @@ export function RequestPending() {
           </Button>
 
           {/* Show Start Processing button for approved requests */}
-          {request.status === 'approved' && user && (user.role === 'gestor' || user.role === 'administrador' || user.role === 'atendente') && (
+          {request.status === 'approved' && podeIniciar(request) && (
             <Button
               size="sm"
               className="bg-blue-500 hover:bg-blue-600 text-white"
+              disabled={iniciando !== null}
               onClick={(e) => {
                 e.stopPropagation()
                 handleStartProcessing(request.id)
               }}
             >
-              <PlayCircle className="w-4 h-4 mr-2" />
+              {iniciando === request.id
+                ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                : <PlayCircle className="w-4 h-4 mr-2" />}
               Iniciar Processamento
             </Button>
           )}
@@ -399,6 +411,20 @@ export function RequestPending() {
         </div>
       </div>
 
+      {aviso && (
+        <div className={`rounded-xl p-4 flex items-center justify-between gap-4 border ${aviso.tipo === 'erro' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>
+          <p className="text-sm">{aviso.texto}</p>
+          <button className="text-xs underline" onClick={() => setAviso(null)}>Fechar</button>
+        </div>
+      )}
+
+      {erroLista && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
+          <p className="text-sm text-red-700">{erroLista}</p>
+          <Button variant="outline" size="sm" onClick={() => recarregar()}>Tentar de novo</Button>
+        </div>
+      )}
+
       {/* Requests List */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
@@ -495,7 +521,7 @@ export function RequestPending() {
         onOpenChange={setShowPeriodDialog}
         onFilter={handlePeriodFilter}
         defaultStartDate={dateRange.startDate}
-        defaultEndDate={dateRange.endDate}
+        defaultEndDate={dateRange.endDate ?? new Date()}
       />
 
       <ExportDialog

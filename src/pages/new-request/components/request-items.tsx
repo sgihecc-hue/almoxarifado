@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog'
 import type { Item } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
+import { buscarTodas, lerQuantidade } from '@/lib/utils/seguro'
 import { useAuth } from '@/contexts/auth'
 import { z } from 'zod'
 
@@ -63,6 +64,7 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     defaultValues.map(v => (v._uid ? v : { ...v, _uid: makeUid() }))
   )
   const [loading, setLoading] = useState(true)
+  const [erroItens, setErroItens] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   // Sincroniza selectedItems quando defaultValues muda (ex: ao "Continuar editando" rascunho)
@@ -91,16 +93,21 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   async function loadItems() {
     try {
       setLoading(true)
+      setErroItens(null)
       const table = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
-      const { data, error } = await supabase
+      // buscarTodas: passa do teto de 1000 linhas do PostgREST.
+      const data = await buscarTodas<Item>((de, ate) => supabase
         .from(table)
         .select('*')
         .eq('is_active', true)
         .order('name')
-      if (error) throw error
-      setItems(data || [])
+        .order('id')
+        .range(de, ate))
+      setItems(data)
     } catch (error) {
       console.error('Error loading items:', error)
+      // Antes a lista ficava vazia como se nao houvesse item nenhum.
+      setErroItens('Não foi possível carregar a lista de itens. Verifique a conexão e tente de novo.')
     } finally {
       setLoading(false)
     }
@@ -212,6 +219,15 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     } finally {
       setSubmitting(false)
     }
+  }
+
+  if (erroItens) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
+        <p className="text-red-600">{erroItens}</p>
+        <Button variant="outline" onClick={() => loadItems()}>Tentar de novo</Button>
+      </div>
+    )
   }
 
   if (loading) {
@@ -358,14 +374,15 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
                             handleQuantityChange(selectedItem._uid!, 0)
                             return
                           }
-                          const n = parseInt(raw, 10)
-                          if (!isNaN(n)) {
+                          // So inteiro: '1.5' nao vira 1 em silencio.
+                          const n = lerQuantidade(raw)
+                          if (n !== null && n >= 0) {
                             handleQuantityChange(selectedItem._uid!, n)
                           }
                         }}
                         onBlur={(e) => {
-                          const n = parseInt(e.target.value, 10)
-                          if (isNaN(n) || n < 1) {
+                          const n = lerQuantidade(e.target.value)
+                          if (n === null || n < 1) {
                             handleQuantityChange(selectedItem._uid!, 1)
                           }
                         }}

@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { buscarTodas, inicioDiaISO, fimDiaISO } from '../utils/seguro'
 import type { RequestStatus, RequestType } from './requests'
 
 export interface TVRequestItem {
@@ -41,11 +42,34 @@ export interface TVRequest {
   items: TVRequestItem[]
 }
 
-export interface SuppliedItemData {
-  id: string
-  supplied_quantity: number
-  observation: string
-  is_checked: boolean
+// O painel de TV (rotas /tv/* sem login) e SO LEITURA. As acoes de escrita
+// ("Saiu para entrega" / "Solicitacao concluida") mudavam o status direto,
+// pulando a baixa com conferencia e os lotes; sem sessao o update afetava 0
+// linhas e a TV mostrava "Concluida". Atender e pelo sistema (detalhe do pedido).
+//
+// Colunas explicitas: sem login o banco so libera estas (notes/justificativa
+// podem ter nome e leito de paciente — ver migration 20260928110300).
+const COLUNAS_TV = `
+  id, type, status, priority, department_id, destination_department_id, requester_id, request_number, created_at, updated_at, delivered_at, received_at, completed_at, source_location_id,
+  dept:departments!requests_department_id_fkey(id, name),
+  dest_dept:departments!requests_destination_department_id_fkey(id, name),
+  request_items(
+    id,
+    item_type,
+    quantity,
+    approved_quantity,
+    supplied_quantity,
+    observation,
+    is_checked,
+    pharmacy_item:pharmacy_items(id, name, code, unit, current_stock),
+    warehouse_item:warehouse_items(id, name, code, unit, current_stock)
+  )
+`
+
+export interface PeriodoTV {
+  /** 'YYYY-MM-DD' (dia local, inclusive) */
+  de?: string
+  ate?: string
 }
 
 class TVRequestService {
@@ -56,39 +80,32 @@ class TVRequestService {
   // cliente — medido em ~230-290 KB por chamada, por painel, todo minuto
   // (~740 MB/dia so os dois paineis). tv-history.tsx precisa do historico
   // completo, por isso o filtro e opcional, nao embutido direto na query.
-  async getAll(type: RequestType, statuses?: RequestStatus[]): Promise<TVRequest[]> {
-    try {
-      let query = supabase
-        .from('requests')
-        .select(`
-          *,
-          dept:departments!requests_department_id_fkey(id, name),
-          dest_dept:departments!requests_destination_department_id_fkey(id, name),
-          request_items(
-            id,
-            item_type,
-            quantity,
-            approved_quantity,
-            supplied_quantity,
-            observation,
-            is_checked,
-            pharmacy_item:pharmacy_items(id, name, code, unit, current_stock),
-            warehouse_item:warehouse_items(id, name, code, unit, current_stock)
-          )
-        `)
-        .eq('type', type)
-
-      if (statuses && statuses.length > 0) {
-        query = query.in('status', statuses)
+  // Erro vira excecao (a tela mostra o erro) — antes virava lista vazia.
+  // periodo: filtro de data no banco pelo dia LOCAL (-03:00), paginado;
+  // sem periodo, os 200 mais recentes (painel ao vivo).
+  async getAll(type: RequestType, statuses?: RequestStatus[], periodo?: PeriodoTV): Promise<TVRequest[]> {
+    {
+      const montar = () => {
+        let query = supabase
+          .from('requests')
+          .select(COLUNAS_TV)
+          .eq('type', type)
+        if (statuses && statuses.length > 0) query = query.in('status', statuses)
+        if (periodo?.de) query = query.gte('created_at', inicioDiaISO(periodo.de))
+        if (periodo?.ate) query = query.lte('created_at', fimDiaISO(periodo.ate))
+        return query.order('created_at', { ascending: false }).order('id')
       }
 
-      const { data: requests, error } = await query
-        .order('created_at', { ascending: false })
-        .limit(200)
-
-      if (error) {
-        console.error('TVRequestService: Error fetching requests:', error)
-        return []
+      let requests: any[]
+      if (periodo?.de || periodo?.ate) {
+        requests = await buscarTodas<any>((de, ate) => montar().range(de, ate), { tamanho: 500 })
+      } else {
+        const { data, error } = await montar().limit(200)
+        if (error) {
+          console.error('TVRequestService: Error fetching requests:', error)
+          throw new Error('Não foi possível carregar as solicitações.')
+        }
+        requests = data || []
       }
 
       // Nomes dos solicitantes via RPC (users não é mais legível por anon)
@@ -145,39 +162,23 @@ class TVRequestService {
           items
         } as TVRequest
       })
-    } catch (error) {
-      console.error('TVRequestService: Error:', error)
-      return []
     }
   }
 
   async getById(id: string): Promise<TVRequest | null> {
     try {
-      const { data: req, error } = await supabase
+      const { data: reqData, error } = await supabase
         .from('requests')
-        .select(`
-          *,
-          dept:departments!requests_department_id_fkey(id, name),
-          dest_dept:departments!requests_destination_department_id_fkey(id, name),
-          request_items(
-            id,
-            item_type,
-            quantity,
-            approved_quantity,
-            supplied_quantity,
-            observation,
-            is_checked,
-            pharmacy_item:pharmacy_items(id, name, code, unit, current_stock),
-            warehouse_item:warehouse_items(id, name, code, unit, current_stock)
-          )
-        `)
+        .select(COLUNAS_TV)
         .eq('id', id)
         .single()
 
       if (error) {
         console.error('TVRequestService: Error fetching request:', error)
-        return null
+        if ((error as any).code === 'PGRST116') return null // nao existe
+        throw new Error('Não foi possível carregar a solicitação.')
       }
+      const req = reqData as any
 
       // Nome do solicitante via RPC (users não é mais legível por anon)
       let nameMap: Record<string, string> = {}
@@ -232,98 +233,7 @@ class TVRequestService {
       } as TVRequest
     } catch (error) {
       console.error('TVRequestService: Error:', error)
-      return null
-    }
-  }
-
-  async markAsDelivered(id: string, suppliedItems: SuppliedItemData[], deliveryNotes?: string): Promise<boolean> {
-    try {
-      // Update each request item with supplied data
-      for (const item of suppliedItems) {
-        const { error: itemError } = await supabase
-          .from('request_items')
-          .update({
-            supplied_quantity: item.supplied_quantity,
-            observation: item.observation,
-            is_checked: item.is_checked
-          })
-          .eq('id', item.id)
-
-        if (itemError) {
-          console.error('Error updating request item:', itemError)
-          return false
-        }
-      }
-
-      // Update request status to delivered
-      const updateData: any = {
-        status: 'delivered',
-        delivered_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }
-
-      if (deliveryNotes) {
-        updateData.delivery_notes = deliveryNotes
-      }
-
-      const { error } = await supabase
-        .from('requests')
-        .update(updateData)
-        .eq('id', id)
-
-      if (error) {
-        console.error('Error marking request as delivered:', error)
-        return false
-      }
-
-      // Record status change in history
-      await supabase.from('request_status_history').insert({
-        request_id: id,
-        status: 'delivered',
-        old_status: 'processing',
-        new_status: 'delivered',
-        notes: 'Saiu para entrega via Painel TV'
-      })
-
-      return true
-    } catch (error) {
-      console.error('TVRequestService: Error marking as delivered:', error)
-      return false
-    }
-  }
-
-  async completeRequest(id: string, employeeMatricula: string, employeeId: string): Promise<boolean> {
-    try {
-      const { error } = await supabase
-        .from('requests')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          received_at: new Date().toISOString(),
-          received_by_employee_id: employeeId,
-          received_by_employee_matricula: employeeMatricula,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', id)
-
-      if (error) {
-        console.error('Error completing request:', error)
-        return false
-      }
-
-      // Record status change in history
-      await supabase.from('request_status_history').insert({
-        request_id: id,
-        status: 'completed',
-        old_status: 'delivered',
-        new_status: 'completed',
-        notes: `Entrega confirmada por matrícula ${employeeMatricula} via Painel TV`
-      })
-
-      return true
-    } catch (error) {
-      console.error('TVRequestService: Error completing request:', error)
-      return false
+      throw error
     }
   }
 }

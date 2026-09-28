@@ -22,6 +22,9 @@ import { getDepartmentName } from '@/lib/constants/departments'
 import { supabase } from '@/lib/supabase'
 import { kitsService } from '@/lib/services/kits'
 import { AtenderPedidoEnfermagem } from '@/components/atender-pedido-enfermagem'
+import { exigirLinhas, lerQuantidade } from '@/lib/utils/seguro'
+import { registrarGravacao } from '@/lib/utils/request-gravacoes'
+import { getErrorMessage } from '@/lib/utils/error-messages'
 
 interface LotOption { id: string; batch_number: string; expiry_date: string | null; current_quantity: number }
 
@@ -35,7 +38,12 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   // Estoque de quem está ATENDENDO (CAF ou satélite). O isolamento dos lotes
   // depende disto — nunca mais fixar no CAF.
   const { activeStock } = useModule()
-  const [suppliedQty, setSuppliedQty] = useState<number | ''>(item.supplied_quantity ?? '')
+  // Texto do campo: vazio fica VAZIO (nao vira 0). No almox, fornecido vazio
+  // impede a entrega (o banco recusa) — quem nao forneceu digita 0.
+  const [suppliedQty, setSuppliedQty] = useState<string>(
+    item.supplied_quantity === null || item.supplied_quantity === undefined ? '' : String(item.supplied_quantity))
+  // Erro de gravacao deste item (antes so ia pro console).
+  const [erroItem, setErroItem] = useState<string | null>(null)
   // FA3: um item pode sair de VÁRIOS lotes. As linhas ficam em
   // request_item_lots (lote + quantidade). O campo antigo
   // request_items.expiry_tracking_id continua como fallback de 1 lote só.
@@ -223,7 +231,7 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     pendingLotsRef.current = novos
     if (savingLotsRef.current) return
     savingLotsRef.current = true
-    ;(async () => {
+    registrarGravacao((async () => {
       try {
         while (pendingLotsRef.current) {
           const atual = pendingLotsRef.current
@@ -233,7 +241,7 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       } finally {
         savingLotsRef.current = false
       }
-    })()
+    })()).catch(() => { /* erro ja exibido na linha */ })
   }
 
   // Grava os lotes do item (substitui as linhas anteriores).
@@ -260,7 +268,7 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
             p_batch_number: l.batch_number.trim(),
             p_expiry_date: l.expiry_date || null,
           })
-          if (error) { console.error('garantir_lote', error); resolvidos.push(null); continue }
+          if (error) throw new Error('Não foi possível criar o lote digitado: ' + error.message)
           etid = data as string
           idPorIndice[i] = etid
           criouManual = true
@@ -278,11 +286,14 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
             : x))
       }
 
-      await supabase.from('request_item_lots').delete().eq('request_item_id', item.id)
+      // Erro agora e conferido: antes o delete era recusado pela RLS sem erro,
+      // o lote antigo ficava, e a confirmacao baixava a soma (CAF em dobro).
+      const del = await supabase.from('request_item_lots').delete().eq('request_item_id', item.id)
+      if (del.error) throw new Error('Não foi possível substituir os lotes: ' + del.error.message)
       const validos = resolvidos.filter((l): l is NonNullable<typeof l> =>
         !!l && !!l.expiry_tracking_id && l.quantity > 0)
       if (validos.length > 0) {
-        await supabase.from('request_item_lots').insert(
+        const ins = await supabase.from('request_item_lots').insert(
           validos.map((l) => {
             const lo = lots.find((x) => x.id === l.expiry_tracking_id)
             return {
@@ -294,6 +305,7 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
             }
           })
         )
+        if (ins.error) throw new Error('Não foi possível gravar os lotes: ' + ins.error.message)
       }
       // Mantém o campo antigo coerente (1º lote) para telas/relatórios legados.
       await saveField('expiry_tracking_id', validos[0]?.expiry_tracking_id ?? null)
@@ -301,8 +313,11 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       // coluna Validade). Não recarrega as linhas — era isso que apagava o
       // lote manual em digitação.
       if (criouManual) await carregarOpcoesLotes()
+      setErroItem(null)
     } catch (e) {
       console.error('Erro ao salvar lotes:', e)
+      setErroItem(e instanceof Error ? e.message : 'Erro ao gravar os lotes.')
+      throw e
     }
   }
 
@@ -337,7 +352,7 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
   const sincronizarFornecido = async (linhas: typeof itemLots) => {
     const soma = linhas.reduce((s, l) => s + (Number(l.quantity) || 0), 0)
     if (soma > 0 && soma !== Number(suppliedQty)) {
-      setSuppliedQty(soma)
+      setSuppliedQty(String(soma))
       await saveField('supplied_quantity', soma)
     }
   }
@@ -357,15 +372,26 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     setNewNote('')
   }
   const [checked, setChecked] = useState(item.is_checked || false)
-  const saveField = async (field: string, value: any) => {
-    try {
-      await supabase
+  // Toda gravacao do item: confere o erro, exige a linha gravada (RLS/trava
+  // do banco devolvem 0 linhas) e se registra para Aprovar/Entregar esperarem.
+  const saveField = (field: string, value: any): Promise<void> => {
+    const p = (async () => {
+      const r = await supabase
         .from('request_items')
         .update({ [field]: value })
         .eq('id', item.id)
-    } catch (e) {
-      console.error('Error saving field:', e)
-    }
+        .select('id')
+      if (r.error) throw new Error(r.error.message)
+      exigirLinhas(r, 'Não foi possível gravar: o pedido pode ter sido alterado por outra pessoa.')
+    })()
+    registrarGravacao(p)
+    return p.then(
+      () => setErroItem(null),
+      (e) => {
+        console.error('Error saving field:', e)
+        setErroItem(e instanceof Error ? e.message : 'Erro ao gravar.')
+      },
+    )
   }
 
   // Saldo exibido na coluna "Estoque": para farmácia, é o saldo do ESTOQUE
@@ -393,17 +419,15 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
       <td className="text-center py-3 px-2">
         {canEdit ? (
           <Input
-            type="number"
-            min="0"
-            value={suppliedQty === 0 ? '' : suppliedQty}
-            placeholder="0"
+            type="text"
+            inputMode="numeric"
+            value={suppliedQty}
+            placeholder="—"
+            title="Quantidade fornecida (digite 0 se não foi fornecido)"
             onFocus={(e) => e.target.select()}
-            onChange={(e) => {
-              const val = e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0)
-              setSuppliedQty(val)
-            }}
+            onChange={(e) => setSuppliedQty(e.target.value.replace(/\D/g, ''))}
             onBlur={async () => {
-              await saveField('supplied_quantity', suppliedQty)
+              await saveField('supplied_quantity', lerQuantidade(suppliedQty))
               // Se já existe UMA linha de lote sem quantidade, ela recebe o
               // fornecido — evita ter que digitar o mesmo número de novo.
               if (itemLots.length === 1 && !(Number(itemLots[0].quantity) || 0)) {
@@ -416,6 +440,9 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
           />
         ) : (
           <span>{item.supplied_quantity ?? '—'}</span>
+        )}
+        {erroItem && (
+          <p className="text-[10px] text-red-600 mt-1 max-w-[180px] mx-auto" role="alert">{erroItem}</p>
         )}
       </td>
       {isPharmacy && (
@@ -486,9 +513,9 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                       </select>
                     )}
                     <input
-                      type="number" min={0} value={l.quantity || ''} placeholder="qtd"
+                      type="text" inputMode="numeric" value={l.quantity || ''} placeholder="qtd"
                       onChange={(e) => {
-                        const q = Math.max(0, parseInt(e.target.value) || 0)
+                        const q = lerQuantidade(e.target.value.replace(/\D/g, '')) ?? 0
                         setItemLots(itemLots.map((x, i) => i === idx ? { ...x, quantity: q } : x))
                       }}
                       onBlur={async () => {
@@ -610,12 +637,12 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
                       className="flex-1 min-w-[90px] text-sm border rounded px-2 h-8"
                     />
                     <input
-                      type="number"
-                      min="0"
+                      type="text"
+                      inputMode="numeric"
                       value={l.quantidade === '' ? '' : l.quantidade}
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
-                        const v = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0)
+                        const v = lerQuantidade(e.target.value.replace(/\D/g, '')) ?? ''
                         setAlmoxLotes(almoxLotes.map((x, i) => i === idx ? { ...x, quantidade: v } : x))
                       }}
                       onBlur={() => salvarAlmoxLotes(almoxLotes)}
@@ -769,6 +796,9 @@ export function RequestDetails() {
   const [loading, setLoading] = useState(true)
   const [commenting, setCommenting] = useState(false)
   const [comment, setComment] = useState('')
+  const [enviandoComentario, setEnviandoComentario] = useState(false)
+  const enviandoComentarioRef = useRef(false)
+  const [erroCarga, setErroCarga] = useState<string | null>(null)
   // Pedido de enfermagem: kits e pacientes. Vem vazio nos demais pedidos, e o
   // bloco nem aparece — nada muda pro almoxarifado nem pros pedidos de hoje.
   const [kitsPedido, setKitsPedido] = useState<{
@@ -811,8 +841,10 @@ export function RequestDetails() {
       if (!silent) setLoading(true)
       const data = await requestService.getById(requestId)
       setRequest(data)
+      setErroCarga(null)
     } catch (error) {
       console.error('Error loading request:', error)
+      setErroCarga(getErrorMessage(error))
     } finally {
       if (!silent) setLoading(false)
     }
@@ -960,6 +992,17 @@ export function RequestDetails() {
           <Loader2 className="w-8 h-8 text-primary-500 animate-spin mx-auto mb-4" />
           <p className="text-gray-500">Carregando solicitação...</p>
         </div>
+      </div>
+    )
+  }
+
+  if (!request && erroCarga) {
+    return (
+      <div className="text-center py-12">
+        <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+        <h2 className="text-lg font-semibold text-gray-900 mb-2">Não foi possível carregar a solicitação</h2>
+        <p className="text-gray-500 mb-6">{erroCarga}</p>
+        <Button variant="outline" onClick={() => { if (id) loadRequest(id) }}>Tentar de novo</Button>
       </div>
     )
   }
@@ -1248,22 +1291,30 @@ export function RequestDetails() {
                 </Button>
                 <Button
                   size="sm"
-                  disabled={!comment.trim() || !user}
+                  disabled={!comment.trim() || !user || enviandoComentario}
                   onClick={async () => {
-                    if (!comment.trim() || !user) return
+                    if (!comment.trim() || !user || enviandoComentarioRef.current) return
+                    enviandoComentarioRef.current = true
+                    setEnviandoComentario(true)
                     try {
                       await requestService.addComment(
                         request.id,
                         comment
                       )
-                      if (id) await loadRequest(id)
                       setCommenting(false)
                       setComment('')
+                      setError(null)
+                      if (id) await loadRequest(id, true)
                     } catch (error) {
                       console.error('Error adding comment:', error)
+                      setError(getErrorMessage(error))
+                    } finally {
+                      enviandoComentarioRef.current = false
+                      setEnviandoComentario(false)
                     }
                   }}
                 >
+                  {enviandoComentario && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
                   Enviar
                 </Button>
               </div>
