@@ -3,7 +3,7 @@
 // Tabela medication_losses
 // =====================================================================
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import {
   Trash2, Plus, Edit2, Search, Loader2, AlertCircle, X, FileSpreadsheet,
 } from 'lucide-react'
@@ -19,6 +19,9 @@ import {
 } from '@/lib/services/medication-losses'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { useAuth } from '@/contexts/auth'
+import { dataBR, hojeLocal, lerQuantidade } from '@/lib/utils/seguro'
+import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +30,14 @@ interface PharmacyItem {
   id: string
   name: string
   medication_class: string | null
+  controlled_subclass?: string | null
+}
+
+interface LotRow {
+  id: string
+  batch_number: string | null
+  expiry_date: string | null
+  current_quantity: number
 }
 
 interface StockLocation {
@@ -42,8 +53,7 @@ const MOTIVOS: MotivoPerda[] = [
 // Helpers
 // ---------------------------------------------------------------------------
 function fmtDate(d: string | null | undefined) {
-  if (!d) return '—'
-  return new Date(d + 'T00:00:00').toLocaleDateString('pt-BR')
+  return dataBR(d)
 }
 
 function fmtDateTime(d: string | null | undefined) {
@@ -68,6 +78,14 @@ function ControladoBadge({ controlado }: { controlado: boolean | null | undefine
 // ---------------------------------------------------------------------------
 export function Perdas() {
   const { mode } = useTheme()
+  const { user } = useAuth()
+  // Policies do banco: editar = administrador/gestor; excluir = administrador.
+  const podeEditar = user?.role === 'administrador' || user?.role === 'gestor'
+  const podeExcluir = user?.role === 'administrador'
+  const salvandoRef = useRef(false)
+  const chaveRef = useRef<string>(crypto.randomUUID())
+  const [lots, setLots] = useState<LotRow[]>([])
+  const [qtdTexto, setQtdTexto] = useState('')
 
   const txt    = mode === 'dark' ? '#fff' : '#0d2e1c'
   const txtSec = mode === 'dark' ? 'rgba(255,255,255,0.7)'  : 'rgba(13,46,28,0.65)'
@@ -109,7 +127,7 @@ export function Perdas() {
 
   // ----- Form state -----
   const blankForm = (): CreateMedicationLossData => ({
-    item_id: '', item_nome: '', stock_location_id: '',
+    item_id: '', item_nome: '', stock_location_id: '', expiry_tracking_id: '',
     batch_number: '', expiry_date: '', quantity: 0,
     motivo: 'Vencimento', documento: '', responsavel_nome: '',
     observacao: '', is_controlado: false,
@@ -131,22 +149,38 @@ export function Perdas() {
   }
 
   async function loadItems() {
-    const { data } = await supabase
+    const { data, error: err } = await supabase
       .from('pharmacy_items')
-      .select('id, name, medication_class')
+      .select('id, name, medication_class, controlled_subclass')
       .order('name')
-      .limit(1000)
+      .limit(2000)
+    if (err) { setError('Erro ao carregar os medicamentos: ' + getErrorMessage(err)); return }
     if (data) setItems(data as PharmacyItem[])
   }
 
+  // So estoques da farmacia (a perda baixa o saldo DO local escolhido).
   async function loadLocations() {
-    const { data } = await supabase
-      .from('stock_locations')
-      .select('id, name')
-      .order('name')
-      .limit(100)
-    if (data) setLocations(data as StockLocation[])
+    setLocations(PHARMACY_STOCKS.filter((s) => s.itemType === 'pharmacy').map((s) => ({ id: s.id, name: s.name })))
   }
+
+  // Lotes do item no local escolhido (inclui vencidos: perda por vencimento).
+  useEffect(() => {
+    if (!showModal || editingId || !form.item_id || !form.stock_location_id) { setLots([]); return }
+    let cancel = false
+    ;(async () => {
+      const { data, error: err } = await supabase
+        .from('expiry_tracking')
+        .select('id, batch_number, expiry_date, current_quantity')
+        .eq('item_id', form.item_id!)
+        .eq('location_id', form.stock_location_id!)
+        .gt('current_quantity', 0)
+        .order('expiry_date', { ascending: true, nullsFirst: false })
+      if (cancel) return
+      if (err) { setFormError('Erro ao carregar os lotes: ' + getErrorMessage(err)); return }
+      setLots((data || []) as LotRow[])
+    })()
+    return () => { cancel = true }
+  }, [showModal, editingId, form.item_id, form.stock_location_id])
 
   // ----- Filter -----
   const filtered = useMemo(() => {
@@ -166,7 +200,8 @@ export function Perdas() {
   }
 
   function openNew() {
-    setEditingId(null); setForm(blankForm()); setFormError(''); setShowModal(true)
+    setEditingId(null); setForm(blankForm()); setQtdTexto(''); setLots([]); setFormError(''); setShowModal(true)
+    chaveRef.current = crypto.randomUUID()
   }
 
   function openEdit(r: MedicationLoss) {
@@ -184,39 +219,52 @@ export function Perdas() {
       observacao: r.observacao || '',
       is_controlado: r.is_controlado ?? false,
     })
+    setQtdTexto(String(r.quantity))
     setFormError(''); setShowModal(true)
   }
 
   async function save() {
-    if (!form.item_nome.trim()) { setFormError('Item é obrigatório'); return }
-    if (!form.quantity || form.quantity <= 0) { setFormError('Quantidade deve ser maior que zero'); return }
+    if (salvandoRef.current) return
+    const q = lerQuantidade(qtdTexto)
+    if (!editingId) {
+      if (!form.item_id) { setFormError('Item é obrigatório'); return }
+      if (q === null || q <= 0) { setFormError('Quantidade deve ser um número inteiro maior que zero'); return }
+      if (!form.stock_location_id) { setFormError('Local de estoque é obrigatório'); return }
+      if (!form.expiry_tracking_id) { setFormError('Escolha o lote (rastreabilidade): a perda baixa o estoque desse lote'); return }
+      const lot = lots.find((l) => l.id === form.expiry_tracking_id)
+      if (lot && q > lot.current_quantity) { setFormError(`Quantidade maior que o saldo do lote (${lot.current_quantity})`); return }
+    }
     if (!form.motivo) { setFormError('Motivo é obrigatório'); return }
-    if (!form.stock_location_id) { setFormError('Local de estoque é obrigatório'); return }
-    if (!form.batch_number?.trim()) { setFormError('Lote é obrigatório (rastreabilidade)'); return }
-    if (!form.expiry_date) { setFormError('Validade é obrigatória'); return }
     if (!form.responsavel_nome?.trim()) { setFormError('Responsável é obrigatório'); return }
     // Portaria 344/98 art.67-68: para controlados, exige número do termo + justificativa
     if (form.is_controlado) {
       if (!form.documento?.trim()) { setFormError('Para medicamentos controlados, o número do termo/ata de inutilização é obrigatório (Portaria 344/98)'); return }
       if (!form.observacao?.trim()) { setFormError('Para medicamentos controlados, a justificativa técnica é obrigatória (Portaria 344/98)'); return }
     }
+    salvandoRef.current = true
     setSaving(true); setFormError('')
     try {
       if (editingId) {
         await medicationLossesService.update(editingId, form)
       } else {
-        await medicationLossesService.create(form)
+        await medicationLossesService.create({ ...form, quantity: q as number }, chaveRef.current)
+        chaveRef.current = crypto.randomUUID()
       }
       setShowModal(false); await load()
     } catch (e: any) { setFormError(getErrorMessage(e)) }
-    finally { setSaving(false) }
+    finally { salvandoRef.current = false; setSaving(false) }
   }
 
   async function remove(r: MedicationLoss) {
-    if (!window.confirm(`Excluir o registro de perda de "${r.item_nome}"?`)) return
+    const motivo = window.prompt(
+      `Excluir o registro de perda de "${r.item_nome}"?` +
+      (r.movement_id ? ' A quantidade volta ao estoque e ao lote.' : '') +
+      '\n\nInforme o motivo da exclusão:')
+    if (motivo === null) return
+    if (motivo.trim().length < 3) { setError('Informe o motivo da exclusão (mínimo 3 caracteres).'); return }
     setError('')
     try {
-      await medicationLossesService.remove(r.id)
+      await medicationLossesService.remove(r.id, motivo.trim())
       await load()
     } catch (e: any) { setError(getErrorMessage(e)) }
   }
@@ -343,12 +391,17 @@ export function Perdas() {
                   <td className="px-3 py-3" style={{ color: txtSec }}>{r.documento || '—'}</td>
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-1">
-                      <Button variant="outline" size="sm" onClick={() => openEdit(r)} className="h-7 px-2">
-                        <Edit2 size={13} />
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => remove(r)} className="h-7 px-2 text-red-600 hover:text-red-700">
-                        <Trash2 size={13} />
-                      </Button>
+                      {podeEditar && (
+                        <Button variant="outline" size="sm" onClick={() => openEdit(r)} className="h-7 px-2" title="Editar textos da perda">
+                          <Edit2 size={13} />
+                        </Button>
+                      )}
+                      {podeExcluir && (
+                        <Button variant="ghost" size="sm" onClick={() => remove(r)} className="h-7 px-2 text-red-600 hover:text-red-700">
+                          <Trash2 size={13} />
+                        </Button>
+                      )}
+                      {!podeEditar && !podeExcluir && <span className="text-xs text-gray-400">—</span>}
                     </div>
                   </td>
                 </tr>
@@ -383,13 +436,16 @@ export function Perdas() {
               <Field label="Item *" style={lbl}>
                 <select
                   value={form.item_id || ''}
+                  disabled={!!editingId}
                   onChange={e => {
                     const id = e.target.value
                     const item = items.find(i => i.id === id)
                     set('item_id', id)
+                    set('expiry_tracking_id', '')
                     if (item) {
                       set('item_nome', item.name)
-                      set('is_controlado', item.medication_class === 'controlados')
+                      // mesmo criterio do banco: subclasse da Portaria 344 ou classe controlados
+                      set('is_controlado', item.medication_class === 'controlados' || !!item.controlled_subclass)
                     }
                   }}
                   style={inp as any}
@@ -401,24 +457,41 @@ export function Perdas() {
               <Field label="Local de estoque" style={lbl}>
                 <select
                   value={form.stock_location_id || ''}
-                  onChange={e => set('stock_location_id', e.target.value)}
+                  disabled={!!editingId}
+                  onChange={e => { set('stock_location_id', e.target.value); set('expiry_tracking_id', '') }}
                   style={inp as any}
                 >
                   <option value="">— selecionar local —</option>
                   {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 </select>
               </Field>
-              <Field label="Lote" style={lbl}>
-                <input value={form.batch_number || ''} onChange={e => set('batch_number', e.target.value)} style={inp} />
-              </Field>
-              <Field label="Validade" style={lbl}>
-                <input type="date" value={form.expiry_date || ''} onChange={e => set('expiry_date', e.target.value)} style={inp} />
-              </Field>
+              {editingId ? (
+                <Field label="Lote / Validade" style={lbl}>
+                  <input value={`${form.batch_number || '—'} · ${fmtDate(form.expiry_date)}`} disabled style={inp} />
+                </Field>
+              ) : (
+                <Field label="Lote *" style={lbl}>
+                  <select
+                    value={form.expiry_tracking_id || ''}
+                    onChange={e => set('expiry_tracking_id', e.target.value)}
+                    style={inp as any}
+                    disabled={!form.item_id || !form.stock_location_id}
+                  >
+                    <option value="">{!form.item_id || !form.stock_location_id ? '— escolha item e local —' : lots.length === 0 ? 'Sem lote com saldo neste local' : '— selecionar lote —'}</option>
+                    {lots.map(l => (
+                      <option key={l.id} value={l.id}>
+                        {l.expiry_date && l.expiry_date < hojeLocal() ? '⚠ VENCIDO · ' : ''}Lote {l.batch_number || '(sem número)'} · Val {fmtDate(l.expiry_date)} · {l.current_quantity} un
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <Field label="Quantidade *" style={lbl}>
                 <input
-                  type="number" min="0" step="any"
-                  value={form.quantity || ''}
-                  onChange={e => set('quantity', e.target.value ? Number(e.target.value) : 0)}
+                  type="text" inputMode="numeric"
+                  value={qtdTexto}
+                  disabled={!!editingId}
+                  onChange={e => setQtdTexto(e.target.value)}
                   style={inp}
                 />
               </Field>
@@ -436,8 +509,8 @@ export function Perdas() {
             </div>
 
             <label className="flex items-center gap-2 text-sm" style={{ color: txtSec }}>
-              <input type="checkbox" checked={!!form.is_controlado} onChange={e => set('is_controlado', e.target.checked)} />
-              Medicamento controlado
+              <input type="checkbox" checked={!!form.is_controlado} disabled onChange={() => undefined} />
+              Medicamento controlado (definido pelo cadastro do item)
             </label>
 
             <Field label="Observação" style={lbl}>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Loader2, Printer, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
+import { dataBR } from '@/lib/utils/seguro'
 import { ptBR } from 'date-fns/locale'
 import { Button } from '@/components/ui/button'
 import {
@@ -29,6 +30,8 @@ const fmtBRL = (n: number | null | undefined) =>
 
 const fmtDate = (s: string | null | undefined, withTime = false) => {
   if (!s) return '—'
+  // 'YYYY-MM-DD' (form_date): sem hora, nao passar por new Date() (UTC = dia anterior)
+  if (!withTime && /^\d{4}-\d{2}-\d{2}$/.test(s)) return dataBR(s)
   try {
     return format(new Date(s), withTime ? "dd/MM/yyyy HH:mm" : 'dd/MM/yyyy', { locale: ptBR })
   } catch {

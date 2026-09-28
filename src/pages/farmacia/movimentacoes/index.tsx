@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Loader2, ArrowRightLeft, Eye, Printer, Undo2, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
@@ -21,6 +21,7 @@ import {
   type LoanScope,
 } from '@/lib/services/pharmacy-loan'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { dataBR } from '@/lib/utils/seguro'
 
 export function PharmacyLoansList({ scope }: { scope: LoanScope }) {
   const navigate = useNavigate()
@@ -31,6 +32,8 @@ export function PharmacyLoansList({ scope }: { scope: LoanScope }) {
 
   const [loans, setLoans] = useState<LoanSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const cancelandoRef = useRef(false)
 
   const [cancelTarget, setCancelTarget] = useState<LoanSummary | null>(null)
   const [cancelReason, setCancelReason] = useState('')
@@ -45,21 +48,18 @@ export function PharmacyLoansList({ scope }: { scope: LoanScope }) {
   async function load() {
     try {
       setLoading(true)
+      setLoadError(null)
       const data = await pharmacyLoanService.list(scope)
       setLoans(data)
+    } catch (e: any) {
+      setLoadError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
   }
 
-  const formatDate = (s: string | null) => {
-    if (!s) return '—'
-    try {
-      return format(new Date(s), "dd/MM/yyyy", { locale: ptBR })
-    } catch {
-      return '—'
-    }
-  }
+  // form_date e 'YYYY-MM-DD': new Date() mostrava um dia antes (UTC).
+  const formatDate = (s: string | null) => dataBR(s)
 
   const openCancel = (l: LoanSummary) => {
     setCancelTarget(l)
@@ -68,7 +68,8 @@ export function PharmacyLoansList({ scope }: { scope: LoanScope }) {
   }
 
   const confirmCancel = async () => {
-    if (!cancelTarget) return
+    if (!cancelTarget || cancelandoRef.current) return
+    cancelandoRef.current = true
     try {
       setCancelling(true)
       setCancelError(null)
@@ -78,6 +79,7 @@ export function PharmacyLoansList({ scope }: { scope: LoanScope }) {
     } catch (e: any) {
       setCancelError(getErrorMessage(e))
     } finally {
+      cancelandoRef.current = false
       setCancelling(false)
     }
   }
@@ -110,6 +112,11 @@ export function PharmacyLoansList({ scope }: { scope: LoanScope }) {
         {loading ? (
           <div className="text-center py-12 text-gray-500">
             <Loader2 className="w-6 h-6 animate-spin inline-block mr-2" /> Carregando...
+          </div>
+        ) : loadError ? (
+          <div className="text-center py-12 text-sm text-red-600">
+            {loadError}{' '}
+            <button className="underline" onClick={() => load()}>Tentar de novo</button>
           </div>
         ) : loans.length === 0 ? (
           <div className="text-center py-12">

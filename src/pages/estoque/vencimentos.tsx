@@ -4,7 +4,7 @@
 // Secao B: vencidos a baixar (view expiring_to_writeoff) com baixa em massa
 // =====================================================================
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useTheme } from '@/contexts/theme'
 import { useAuth } from '@/contexts/auth'
@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
 import { stockService } from '@/lib/services/stock'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { dataBR } from '@/lib/utils/seguro'
 import type { ExpiryColorBand, ExpiringAlertRow, ExpiringToWriteoffRow } from '@/lib/types/stock'
 
 const RESOLVE_ROLES = new Set(['pharmacist', 'gestor', 'administrador'])
@@ -62,6 +63,11 @@ export function VencimentosABaixar() {
   const [cafLocationId, setCafLocationId] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [aviso, setAviso] = useState('')
+  // Duplo clique na baixa em massa + chave da rodada (a RPC tambem ignora lote
+  // que ja foi zerado, entao repetir nao baixa duas vezes).
+  const baixandoRef = useRef(false)
+  const chaveRef = useRef<string>(crypto.randomUUID())
 
   const loadAll = async () => {
     setLoadingAlerts(true)
@@ -186,28 +192,28 @@ export function VencimentosABaixar() {
     .filter((r) => selected.has(r.expiry_tracking_id))
     .reduce((sum, r) => sum + (Number(r.estimated_loss) || 0), 0)
 
+  // Baixa numa unica transacao no banco: cada lote sai do SEU estoque
+  // (CAF/satelite) e o proprio lote zera. Antes era um laco no navegador que
+  // tirava tudo da CAF, nao abatia o lote e parava no meio em caso de erro.
   const handleWriteoff = async () => {
-    if (selected.size === 0 || !user?.id || !cafLocationId) return
+    if (selected.size === 0 || !user?.id || baixandoRef.current) return
+    baixandoRef.current = true
     setSubmitting(true)
     setError('')
+    setAviso('')
     try {
-      for (const r of visibleWriteoff.filter((row) => selected.has(row.expiry_tracking_id))) {
-        await stockService.createSaidaAvulsa({
-          item_id: r.item_id,
-          item_type: r.item_type,
-          quantity: r.current_quantity,
-          unit_cost: r.unit_cost,
-          source_location_id: cafLocationId,
-          reason: 'vencimento',
-          reason_detail: `Lote ${r.batch_number} | Venc: ${r.expiry_date}`,
-          notes: 'Baixa em massa de itens vencidos',
-        })
-      }
+      const ids = visibleWriteoff.filter((row) => selected.has(row.expiry_tracking_id)).map((r) => r.expiry_tracking_id)
+      const { data, error: e } = await supabase.rpc('baixar_vencidos', { p_lotes: ids, p_chave: chaveRef.current })
+      if (e) throw e
+      const r = data as { lotes: number; quantidade_total: number; ja_baixados: number }
+      setAviso(`Baixa registrada: ${r.lotes} lote(s), ${r.quantidade_total} unidade(s).${r.ja_baixados ? ` ${r.ja_baixados} lote(s) já estavam baixados.` : ''}`)
+      chaveRef.current = crypto.randomUUID()
       setSelected(new Set())
       await loadAll()
     } catch (e: any) {
       setError(getErrorMessage(e))
     } finally {
+      baixandoRef.current = false
       setSubmitting(false)
     }
   }
@@ -251,6 +257,9 @@ export function VencimentosABaixar() {
         </div>
       </div>
 
+      {aviso && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">{aviso}</div>
+      )}
       {error && (
         <div className="p-4 rounded-xl bg-red-100 border border-red-200 flex items-center gap-2 text-red-800 text-sm">
           <AlertCircle size={16} /> {error}
@@ -304,7 +313,7 @@ export function VencimentosABaixar() {
                       {' · '}
                       Validade:{' '}
                       <strong style={{ color: cfg.badge }}>
-                        {new Date(r.expiry_date + 'T00:00:00').toLocaleDateString('pt-BR')}
+                        {dataBR(r.expiry_date)}
                       </strong>
                       {' · '}
                       Saldo: <strong>{r.current_quantity}</strong>
@@ -425,9 +434,10 @@ export function VencimentosABaixar() {
                       <p className="text-xs mt-0.5" style={{ color: txtMut }}>
                         Lote <strong>{r.batch_number}</strong> · Venc:{' '}
                         <strong style={{ color: '#ef4444' }}>
-                          {new Date(r.expiry_date + 'T00:00:00').toLocaleDateString('pt-BR')}
+                          {dataBR(r.expiry_date)}
                         </strong>
                         {' · '}Saldo: <strong>{r.current_quantity}</strong>
+                        {' · '}Estoque: <strong>{r.location_code ?? '—'}</strong>
                       </p>
                     </div>
                     <div className="text-right">

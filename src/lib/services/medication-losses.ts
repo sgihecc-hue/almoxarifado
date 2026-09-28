@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { exigirLinhas } from '@/lib/utils/seguro'
 
 export type MotivoPerda =
   | 'Vencimento'
@@ -24,9 +25,14 @@ export interface MedicationLoss {
   responsavel_nome: string | null
   created_by: string | null
   created_at: string
+  // Saida de estoque gerada pela perda (nulo nas perdas antigas, que nao baixaram).
+  movement_id?: string | null
+  expiry_tracking_id?: string | null
 }
 
 export interface CreateMedicationLossData {
+  // Lote do estoque escolhido (obrigatorio para registrar: a perda baixa o lote)
+  expiry_tracking_id?: string | null
   item_id?: string | null
   item_nome: string
   stock_location_id?: string | null
@@ -66,75 +72,55 @@ class MedicationLossesService {
     return (data || []) as MedicationLoss[]
   }
 
-  async create(payload: CreateMedicationLossData): Promise<MedicationLoss> {
-    const { data: authData } = await supabase.auth.getUser()
-
-    const { data, error } = await supabase
-      .from('medication_losses')
-      .insert({
-        item_id: payload.item_id || null,
-        item_nome: payload.item_nome.trim(),
-        stock_location_id: payload.stock_location_id || null,
-        batch_number: payload.batch_number?.trim() || null,
-        expiry_date: payload.expiry_date || null,
-        quantity: payload.quantity,
-        motivo: payload.motivo,
-        documento: payload.documento?.trim() || null,
-        observacao: payload.observacao?.trim() || null,
-        is_controlado: payload.is_controlado ?? false,
-        responsavel_nome: payload.responsavel_nome?.trim() || null,
-        created_by: authData?.user?.id || null,
-      })
-      .select('*')
-      .single()
-
+  /**
+   * Registra a perda E baixa o estoque (saldo do local + lote) numa transacao
+   * (RPC registrar_perda). `chave` evita gravar duas vezes no duplo clique.
+   */
+  async create(payload: CreateMedicationLossData, chave?: string): Promise<{ id: string }> {
+    const { data, error } = await supabase.rpc('registrar_perda', {
+      p_item_id: payload.item_id || null,
+      p_local_id: payload.stock_location_id || null,
+      p_lote_id: payload.expiry_tracking_id || null,
+      p_quantidade: payload.quantity,
+      p_motivo: payload.motivo,
+      p_documento: payload.documento?.trim() || null,
+      p_observacao: payload.observacao?.trim() || null,
+      p_responsavel_nome: payload.responsavel_nome?.trim() || null,
+      p_chave: chave ?? null,
+    })
     if (error) {
       console.error('Error creating medication loss:', error)
-      throw new Error(error.message)
+      throw error
     }
-
-    return data as MedicationLoss
+    return { id: (data as any).id }
   }
 
-  async update(id: string, payload: UpdateMedicationLossData): Promise<MedicationLoss> {
+  /**
+   * Edicao: so campos de texto (motivo, documento, observacao, responsavel).
+   * Item/local/lote/quantidade de perda que ja baixou estoque ficam travados no
+   * banco. Sem permissao (RLS) o banco devolve 0 linhas: vira erro claro.
+   */
+  async update(id: string, payload: UpdateMedicationLossData): Promise<void> {
     const patch: Record<string, unknown> = {}
-
-    if (payload.item_id !== undefined) patch.item_id = payload.item_id || null
-    if (payload.item_nome !== undefined) patch.item_nome = payload.item_nome.trim()
-    if (payload.stock_location_id !== undefined) patch.stock_location_id = payload.stock_location_id || null
-    if (payload.batch_number !== undefined) patch.batch_number = payload.batch_number?.trim() || null
-    if (payload.expiry_date !== undefined) patch.expiry_date = payload.expiry_date || null
-    if (payload.quantity !== undefined) patch.quantity = payload.quantity
     if (payload.motivo !== undefined) patch.motivo = payload.motivo
     if (payload.documento !== undefined) patch.documento = payload.documento?.trim() || null
     if (payload.observacao !== undefined) patch.observacao = payload.observacao?.trim() || null
-    if (payload.is_controlado !== undefined) patch.is_controlado = payload.is_controlado ?? false
     if (payload.responsavel_nome !== undefined) patch.responsavel_nome = payload.responsavel_nome?.trim() || null
 
-    const { data, error } = await supabase
+    const r = await supabase
       .from('medication_losses')
       .update(patch)
       .eq('id', id)
-      .select('*')
-      .single()
-
-    if (error) {
-      console.error('Error updating medication loss:', error)
-      throw new Error(error.message)
-    }
-
-    return data as MedicationLoss
+      .select('id')
+    exigirLinhas(r, 'Não foi possível salvar: só gestor ou administrador pode editar perdas.')
   }
 
-  async remove(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('medication_losses')
-      .delete()
-      .eq('id', id)
-
+  /** Exclusao (so administrador): se a perda baixou estoque, devolve saldo e lote. */
+  async remove(id: string, motivo: string): Promise<void> {
+    const { error } = await supabase.rpc('excluir_perda', { p_id: id, p_motivo: motivo })
     if (error) {
       console.error('Error deleting medication loss:', error)
-      throw new Error(error.message)
+      throw error
     }
   }
 }

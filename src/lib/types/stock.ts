@@ -199,6 +199,9 @@ export interface ExpiringToWriteoffRow {
   item_name: string
   unit_cost: number | null
   estimated_loss: number | null
+  // Estoque onde o lote ESTA (CAF/SAT_1/SAT_2...). A baixa sai dele.
+  location_id: string | null
+  location_code: string | null
 }
 
 // ---------- Rotulos PT-BR ----------

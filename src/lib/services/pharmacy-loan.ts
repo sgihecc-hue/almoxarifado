@@ -132,7 +132,7 @@ class PharmacyLoanService {
 
     if (error) {
       console.error('Error listing loans:', error)
-      return []
+      throw new Error('Erro ao carregar as movimentações: ' + error.message)
     }
 
     return (data || []).map((row: any) => {
@@ -227,10 +227,13 @@ class PharmacyLoanService {
     }
   }
 
-  async create(data: CreateLoanData): Promise<{ id: string; form_number: number }> {
-    const { data: authData } = await supabase.auth.getUser()
-    if (!authData?.user) throw new Error('Usuário não autenticado')
-
+  /**
+   * Cria o formulario (cabecalho + itens) numa transacao no banco (RPC
+   * emprestimo_criar). `chave` identifica a rodada: repetir nao duplica.
+   * O formulario nasce PENDENTE; o estoque so mexe quando os itens forem
+   * confirmados na tela de Pendencias.
+   */
+  async create(data: CreateLoanData, chave?: string): Promise<{ id: string; form_number: number }> {
     if (!data.items || data.items.length === 0) {
       throw new Error('Adicione pelo menos um item ao formulário')
     }
@@ -240,85 +243,51 @@ class PharmacyLoanService {
     if (!data.origem?.trim() || !data.destino?.trim()) {
       throw new Error('Origem e Destino são obrigatórios')
     }
-
-    // valida: cada item respeita a direção habilitada
     for (const it of data.items) {
-      if (it.direction === 'enviando' && !data.enviando_type) {
-        throw new Error('Há itens em "Enviando" mas o tipo não foi marcado')
-      }
-      if (it.direction === 'recebendo' && !data.recebendo_type) {
-        throw new Error('Há itens em "Recebendo" mas o tipo não foi marcado')
-      }
-      if (!it.item_description?.trim()) {
-        throw new Error('Cada item precisa de uma descrição')
-      }
-      if (!it.quantity || it.quantity <= 0) {
-        throw new Error('Cada item precisa de quantidade maior que zero')
-      }
-      // valida que o vínculo bate com o escopo
-      if (data.scope === 'pharmacy' && it.warehouse_item_id) {
-        throw new Error('Formulário de Farmácia não pode ter item de Almoxarifado')
-      }
-      if (data.scope === 'warehouse' && it.pharmacy_item_id) {
-        throw new Error('Formulário de Almoxarifado não pode ter item de Farmácia')
-      }
+      if (it.direction === 'enviando' && !data.enviando_type) throw new Error('Há itens em "Enviando" mas o tipo não foi marcado')
+      if (it.direction === 'recebendo' && !data.recebendo_type) throw new Error('Há itens em "Recebendo" mas o tipo não foi marcado')
+      if (!it.item_description?.trim()) throw new Error('Cada item precisa de uma descrição')
+      if (!it.quantity || it.quantity <= 0) throw new Error('Cada item precisa de quantidade maior que zero')
+      if (data.scope === 'pharmacy' && it.warehouse_item_id) throw new Error('Formulário de Farmácia não pode ter item de Almoxarifado')
+      if (data.scope === 'warehouse' && it.pharmacy_item_id) throw new Error('Formulário de Almoxarifado não pode ter item de Farmácia')
     }
 
-    const { data: loan, error: loanError } = await supabase
-      .from('pharmacy_loans')
-      .insert({
+    const { data: result, error } = await supabase.rpc('emprestimo_criar', {
+      p_dados: {
         scope: data.scope,
         origem: data.origem.trim(),
         destino: data.destino.trim(),
         contato_origem: data.contato_origem?.trim() || null,
         contato_destino: data.contato_destino?.trim() || null,
-        form_date: data.form_date || new Date().toISOString().slice(0, 10),
+        form_date: data.form_date || null,
         enviando_type: data.enviando_type || null,
         recebendo_type: data.recebendo_type || null,
         signature_solicitante_name: data.signature_solicitante_name?.trim() || null,
         signature_cedente_name: data.signature_cedente_name?.trim() || null,
         related_loan_id: data.related_loan_id || null,
         notes: data.notes?.trim() || null,
-        // Fluxo: sai como 'pending' e vai pra tela de PENDÊNCIAS onde
-        // cada item precisa ser confirmado (ou "aprovar todos" de uma vez).
-        // Quando todos os itens confirmados → status vira 'completed'.
-        status: 'pending',
-        created_by: authData.user.id,
-      })
-      .select('id, form_number')
-      .single()
-
-    if (loanError || !loan) {
-      console.error('Error creating loan:', loanError)
-      throw new Error(loanError?.message || 'Erro ao criar formulário')
+        items: data.items.map((it) => ({
+          direction: it.direction,
+          pharmacy_item_id: it.pharmacy_item_id || null,
+          warehouse_item_id: it.warehouse_item_id || null,
+          item_description: it.item_description.trim(),
+          unit: it.unit?.trim() || null,
+          quantity: it.quantity,
+          unit_price: it.unit_price ?? null,
+          validity_date: it.validity_date || null,
+          batch_number: it.batch_number?.trim() || null,
+          codigo_simpas: it.codigo_simpas?.trim() || null,
+          observation: it.observation?.trim() || null,
+        })),
+      },
+      p_chave: chave ?? null,
+    })
+    if (error) {
+      console.error('Error creating loan:', error)
+      throw error
     }
-
-    const itemsToInsert = data.items.map((it) => ({
-      loan_id: loan.id,
-      direction: it.direction,
-      pharmacy_item_id: it.pharmacy_item_id || null,
-      warehouse_item_id: it.warehouse_item_id || null,
-      item_description: it.item_description.trim(),
-      unit: it.unit?.trim() || null,
-      quantity: it.quantity,
-      unit_price: it.unit_price ?? null,
-      validity_date: it.validity_date || null,
-      batch_number: it.batch_number?.trim() || null,
-      codigo_simpas: it.codigo_simpas?.trim() || null,
-      observation: it.observation?.trim() || null,
-    }))
-
-    const { error: itemsError } = await supabase
-      .from('pharmacy_loan_items')
-      .insert(itemsToInsert)
-
-    if (itemsError) {
-      await supabase.from('pharmacy_loans').delete().eq('id', loan.id)
-      console.error('Error inserting loan items:', itemsError)
-      throw new Error(itemsError.message)
-    }
-
-    return { id: loan.id, form_number: loan.form_number }
+    const r = result as { id: string; form_number: number }
+    return { id: r.id, form_number: r.form_number }
   }
 
   // Lista as movimentações em status='pending' — tela de PENDÊNCIAS.
@@ -333,7 +302,7 @@ class PharmacyLoanService {
       .order('created_at', { ascending: true })
     if (scope) q = q.eq('scope', scope)
     const { data, error } = await q
-    if (error) { console.error(error); return [] }
+    if (error) { console.error(error); throw new Error('Erro ao carregar as pendências: ' + error.message) }
     return (data || []).map((row: any) => ({
       id: row.id, form_number: row.form_number, scope: row.scope, origem: row.origem,
       destino: row.destino,
@@ -351,72 +320,43 @@ class PharmacyLoanService {
     }))
   }
 
-  // Confirma 1 item específico da movimentação. Se todos os itens do loan
-  // ficarem confirmed_at != null, o loan vira 'completed' automaticamente.
-  async confirmItem(loanId: string, itemId: string): Promise<void> {
-    const { data: authData } = await supabase.auth.getUser()
-    if (!authData?.user) throw new Error('Usuário não autenticado')
-
-    const { error } = await supabase
-      .from('pharmacy_loan_items')
-      .update({ confirmed_at: new Date().toISOString(), confirmed_by: authData.user.id })
-      .eq('id', itemId)
-      .eq('loan_id', loanId)
-    if (error) throw new Error(error.message)
-
-    // Se todos os itens confirmados → conclui o loan
-    const { data: pending } = await supabase
-      .from('pharmacy_loan_items')
-      .select('id')
-      .eq('loan_id', loanId)
-      .is('confirmed_at', null)
-    if ((pending || []).length === 0) {
-      await supabase.from('pharmacy_loans').update({
-        status: 'completed',
-        confirmed_at: new Date().toISOString(),
-        confirmed_by: authData.user.id,
-      }).eq('id', loanId)
-    }
+  // Confirma 1 item: a RPC MOVIMENTA o estoque desse item (farmacia: CAF com
+  // lote; almox: saldo do almoxarifado) e conclui o formulario quando nao
+  // sobra item pendente. Saldo/lote insuficiente = erro com a mensagem.
+  async confirmItem(loanId: string, itemId: string): Promise<{ concluido: boolean }> {
+    const { data, error } = await supabase.rpc('emprestimo_confirmar_itens', {
+      p_loan_id: loanId,
+      p_item_id: itemId,
+    })
+    if (error) throw error
+    return data as { concluido: boolean }
   }
 
-  // Aprova todos os itens do loan de uma vez.
-  async confirmAll(loanId: string): Promise<void> {
-    const { data: authData } = await supabase.auth.getUser()
-    if (!authData?.user) throw new Error('Usuário não autenticado')
-
-    const now = new Date().toISOString()
-    await supabase
-      .from('pharmacy_loan_items')
-      .update({ confirmed_at: now, confirmed_by: authData.user.id })
-      .eq('loan_id', loanId)
-      .is('confirmed_at', null)
-    await supabase.from('pharmacy_loans').update({
-      status: 'completed', confirmed_at: now, confirmed_by: authData.user.id,
-    }).eq('id', loanId)
+  // Confirma todos os itens pendentes (cada um movimenta o estoque) numa
+  // transacao: ou todos entram, ou nenhum.
+  async confirmAll(loanId: string): Promise<{ concluido: boolean }> {
+    const { data, error } = await supabase.rpc('emprestimo_confirmar_itens', {
+      p_loan_id: loanId,
+      p_item_id: null,
+    })
+    if (error) throw error
+    return data as { concluido: boolean }
   }
 
-  async cancel(id: string, reason: string): Promise<void> {
-    const { data: authData } = await supabase.auth.getUser()
-    if (!authData?.user) throw new Error('Usuário não autenticado')
+  // Cancelamento (gestor/admin): desfaz SO o que ja movimentou estoque.
+  async cancel(id: string, reason: string): Promise<{ itens_desfeitos: number }> {
     if (!reason || reason.trim().length < 3) {
       throw new Error('Informe um motivo (mínimo 3 caracteres) para o estorno')
     }
-
-    const { error } = await supabase
-      .from('pharmacy_loans')
-      .update({
-        status: 'cancelled',
-        cancelled_at: new Date().toISOString(),
-        cancelled_by: authData.user.id,
-        cancellation_reason: reason.trim(),
-      })
-      .eq('id', id)
-      .in('status', ['pending', 'completed']) // pode cancelar pendentes ou concluídas
-
+    const { data, error } = await supabase.rpc('emprestimo_cancelar', {
+      p_loan_id: id,
+      p_motivo: reason.trim(),
+    })
     if (error) {
       console.error('Error cancelling loan:', error)
-      throw new Error(error.message)
+      throw error
     }
+    return data as { itens_desfeitos: number }
   }
 }
 
