@@ -40,6 +40,11 @@ export const userActionToasts = {
     description: 'O usuário não poderá mais acessar o sistema',
     type: 'success'
   }),
+  reactivated: () => showToast({
+    title: 'Usuário reativado',
+    description: 'O usuário pode entrar no sistema novamente',
+    type: 'success'
+  }),
   error: (message: string) => showToast({
     title: 'Erro',
     description: message,

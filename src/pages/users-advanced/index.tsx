@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import { usersService } from '@/lib/services/users'
+import { usersService, usuarioAtivo } from '@/lib/services/users'
 import { UserRoleBadge } from '../users/components/user-role-badge'
 import { UserStatusBadge } from '../users/components/user-status-badge'
 import { NewUserDialog } from './components/new-user-dialog.tsx'
@@ -79,12 +79,12 @@ export function UsersAdvanced() {
 
   const getUserStats = () => {
     const total = users.length
-    const active = users.filter(u => !u.deleted_at).length
-    const inactive = users.filter(u => u.deleted_at).length
-    const admins = users.filter(u => u.role === 'administrador' && !u.deleted_at).length
-    const managers = users.filter(u => u.role === 'gestor' && !u.deleted_at).length
-    const atendentes = users.filter(u => u.role === 'atendente' && !u.deleted_at).length
-    const requesters = users.filter(u => u.role === 'solicitante' && !u.deleted_at).length
+    const active = users.filter(u => usuarioAtivo(u)).length
+    const inactive = users.filter(u => !usuarioAtivo(u)).length
+    const admins = users.filter(u => u.role === 'administrador' && usuarioAtivo(u)).length
+    const managers = users.filter(u => u.role === 'gestor' && usuarioAtivo(u)).length
+    const atendentes = users.filter(u => u.role === 'atendente' && usuarioAtivo(u)).length
+    const requesters = users.filter(u => u.role === 'solicitante' && usuarioAtivo(u)).length
 
     return { total, active, inactive, admins, managers, atendentes, requesters }
   }
@@ -97,12 +97,12 @@ export function UsersAdvanced() {
     const matchesRole = roleFilter === 'all' || user.role === roleFilter
     
     const matchesStatus = statusFilter === 'all' || 
-      (statusFilter === 'active' && !user.deleted_at) ||
-      (statusFilter === 'inactive' && user.deleted_at)
+      (statusFilter === 'active' && usuarioAtivo(user)) ||
+      (statusFilter === 'inactive' && !usuarioAtivo(user))
 
     const matchesTab = activeTab === 'all' || 
-      (activeTab === 'active' && !user.deleted_at) ||
-      (activeTab === 'inactive' && user.deleted_at)
+      (activeTab === 'active' && usuarioAtivo(user)) ||
+      (activeTab === 'inactive' && !usuarioAtivo(user))
 
     return matchesSearch && matchesRole && matchesStatus && matchesTab
   })
@@ -349,7 +349,7 @@ export function UsersAdvanced() {
                     {/* Role, Status and Actions */}
                     <div className="flex items-center gap-4">
                       <UserRoleBadge role={user.role} />
-                      <UserStatusBadge active={!user.deleted_at} />
+                      <UserStatusBadge active={usuarioAtivo(user)} />
                       
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Button 
@@ -375,7 +375,7 @@ export function UsersAdvanced() {
                           onClick={() => handleDeactivateUser(user)}
                         >
                           <Ban className="w-4 h-4 mr-2" />
-                          {user.deleted_at ? 'Reativar' : 'Desativar'}
+                          {usuarioAtivo(user) ? 'Desativar' : 'Reativar'}
                         </Button>
                       </div>
                     </div>
@@ -405,7 +405,7 @@ export function UsersAdvanced() {
 
           <TabsContent value="active" className="p-0">
             <div className="divide-y divide-gray-100">
-              {filteredUsers.filter(user => !user.deleted_at).map((user, index) => (
+              {filteredUsers.filter(user => usuarioAtivo(user)).map((user, index) => (
                 <div 
                   key={user.id} 
                   className={`group p-6 transition-all ${
@@ -435,7 +435,7 @@ export function UsersAdvanced() {
                     {/* Role, Status and Actions */}
                     <div className="flex items-center gap-4">
                       <UserRoleBadge role={user.role} />
-                      <UserStatusBadge active={!user.deleted_at} />
+                      <UserStatusBadge active={usuarioAtivo(user)} />
                       
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Button 
@@ -491,7 +491,7 @@ export function UsersAdvanced() {
 
           <TabsContent value="inactive" className="p-0">
             <div className="divide-y divide-gray-100">
-              {filteredUsers.filter(user => user.deleted_at).map((user, index) => (
+              {filteredUsers.filter(user => !usuarioAtivo(user)).map((user, index) => (
                 <div 
                   key={user.id} 
                   className={`group p-6 transition-all ${
@@ -521,7 +521,7 @@ export function UsersAdvanced() {
                     {/* Role, Status and Actions */}
                     <div className="flex items-center gap-4">
                       <UserRoleBadge role={user.role} />
-                      <UserStatusBadge active={!user.deleted_at} />
+                      <UserStatusBadge active={usuarioAtivo(user)} />
                       
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Button 
@@ -613,9 +613,11 @@ export function UsersAdvanced() {
             user={selectedUser}
             open={showDeactivateDialog}
             onOpenChange={setShowDeactivateDialog}
-            onSuccess={() => {
+            onSuccess={({ ativo, aviso }) => {
               loadUsers()
-              userActionToasts.deactivated()
+              if (aviso) userActionToasts.error(aviso)
+              else if (ativo) userActionToasts.reactivated()
+              else userActionToasts.deactivated()
             }}
           />
         </>

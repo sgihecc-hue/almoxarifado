@@ -14,6 +14,8 @@ import { NewDepartmentDialog } from './new-department-dialog'
 import { EditDepartmentDialog } from './edit-department-dialog'
 import { DeleteDepartmentDialog } from './delete-department-dialog'
 import type { Department } from '@/lib/types/departments'
+import { ErroCarregamento } from '@/components/ui/erro-carregamento'
+import { toast } from 'sonner'
 
 export function DepartmentsTable() {
   // Excluir setor desvincula os usuarios daquele setor e nao tem desfazer na
@@ -25,6 +27,7 @@ export function DepartmentsTable() {
 
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
+  const [erroCarga, setErroCarga] = useState<unknown>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [showNewDialog, setShowNewDialog] = useState(false)
   const [selectedDepartment, setSelectedDepartment] = useState<Department | null>(null)
@@ -38,10 +41,13 @@ export function DepartmentsTable() {
   async function loadDepartments() {
     try {
       setLoading(true)
+      setErroCarga(null)
       const data = await departmentsService.getAll()
       setDepartments(data)
     } catch (error) {
+      // Erro não vira "nenhum setor": mostra a faixa com "Tentar de novo".
       console.error('Error loading departments:', error)
+      setErroCarga(error)
     } finally {
       setLoading(false)
     }
@@ -65,6 +71,7 @@ export function DepartmentsTable() {
       document.body.removeChild(link)
     } catch (error) {
       console.error('Error exporting departments:', error)
+      toast.error('Não foi possível exportar os setores.')
     }
   }
 
@@ -131,6 +138,8 @@ export function DepartmentsTable() {
           />
         </div>
       </div>
+
+      <ErroCarregamento titulo="Não foi possível carregar os setores." erro={erroCarga} onTentar={loadDepartments} />
 
       {/* Departments List */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">

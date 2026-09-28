@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Search, Loader2, AlertCircle, CheckCircle2, Users, Pill, Building2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,6 +8,7 @@ import { usersService } from '@/lib/services/users'
 import { departmentsService } from '@/lib/services/departments'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { ErroCarregamento } from '@/components/ui/erro-carregamento'
 import { UserRoleBadge } from '../users/components/user-role-badge'
 import type { User } from '@/lib/types'
 import type { Department } from '@/lib/types/departments'
@@ -41,15 +42,20 @@ export function GestaoColaboradores() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const salvandoRef = useRef(false)
+  const [erroCarga, setErroCarga] = useState<unknown>(null)
 
   const load = async () => {
     setLoading(true)
+    setErroCarga(null)
     try {
       const [u, d] = await Promise.all([usersService.getAll(), departmentsService.getAll()])
       setUsers(u)
       setDepartments(d)
     } catch (e: any) {
-      setError(getErrorMessage(e))
+      // Antes o erro ia para a caixa do painel de edição (fechado) e a lista
+      // dizia "Nenhum colaborador encontrado".
+      setErroCarga(e)
     } finally {
       setLoading(false)
     }
@@ -94,6 +100,8 @@ export function GestaoColaboradores() {
     if (!selected) return
     setError(null)
     if (!editDept) { setError('Selecione o setor de farmácia.'); return }
+    if (salvandoRef.current) return
+    salvandoRef.current = true
     try {
       setSaving(true)
       const { data, error: rpcError } = await supabase.rpc('gestor_atualizar_colaborador', {
@@ -111,6 +119,7 @@ export function GestaoColaboradores() {
     } catch (e: any) {
       setError(getErrorMessage(e))
     } finally {
+      salvandoRef.current = false
       setSaving(false)
     }
   }
@@ -165,6 +174,8 @@ export function GestaoColaboradores() {
           <div className="text-center py-12 text-gray-500">
             <Loader2 className="w-6 h-6 animate-spin inline-block mr-2" /> Carregando...
           </div>
+        ) : erroCarga ? (
+          <div className="p-4"><ErroCarregamento titulo="Não foi possível carregar os colaboradores." erro={erroCarga} onTentar={load} /></div>
         ) : filtered.length === 0 ? (
           <p className="text-sm text-gray-500 text-center py-10">Nenhum colaborador encontrado.</p>
         ) : (

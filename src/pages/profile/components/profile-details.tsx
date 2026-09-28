@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { usersService } from '@/lib/services/users'
 import { UserRoleBadge } from '../../users/components/user-role-badge'
 import type { User } from '@/lib/types'
+import { useAuth } from '@/contexts/auth'
 
 const profileSchema = z.object({
   full_name: z
@@ -25,6 +26,9 @@ interface ProfileDetailsProps {
 export function ProfileDetails({ user }: ProfileDetailsProps) {
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+  const salvandoRef = useRef(false)
+  const { refreshUser } = useAuth()
   
   const { register, handleSubmit, formState: { errors, isDirty } } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
@@ -34,17 +38,25 @@ export function ProfileDetails({ user }: ProfileDetailsProps) {
   })
 
   const onSubmit = async (data: ProfileFormData) => {
+    if (salvandoRef.current) return
+    salvandoRef.current = true
     try {
       setLoading(true)
       setSuccess(false)
-      await usersService.update(user.id, data)
+      setErro(null)
+      // Só o nome: mandar papel/setor aqui seria recusado pelo banco.
+      await usersService.update(user.id, { full_name: data.full_name })
+      await refreshUser()
       setSuccess(true)
       
       // Hide success message after 3 seconds
       setTimeout(() => setSuccess(false), 3000)
     } catch (error) {
+      // Antes o erro era engolido e a tela ficava como se nada tivesse acontecido.
       console.error('Error updating profile:', error)
+      setErro(error instanceof Error ? error.message : 'Não foi possível salvar o seu perfil.')
     } finally {
+      salvandoRef.current = false
       setLoading(false)
     }
   }
@@ -107,6 +119,10 @@ export function ProfileDetails({ user }: ProfileDetailsProps) {
               <p className="font-medium">Perfil atualizado com sucesso!</p>
             </div>
           </div>
+        )}
+
+        {erro && (
+          <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">{erro}</div>
         )}
 
         {/* Submit Button */}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label'
 import { usersService } from '@/lib/services/users'
 import { departmentsService } from '@/lib/services/departments'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { ErroCarregamento } from '@/components/ui/erro-carregamento'
 import type { UserRole } from '@/lib/types'
 import type { Department } from '@/lib/types/departments'
 
@@ -61,6 +62,8 @@ export function NewUserDialog({ open, onOpenChange, onSuccess }: NewUserDialogPr
   const [error, setError] = useState<string | null>(null)
   const [departments, setDepartments] = useState<Department[]>([])
   const [loadingDepartments, setLoadingDepartments] = useState(false)
+  const [erroSetores, setErroSetores] = useState<unknown>(null)
+  const salvandoRef = useRef(false)
   
   const { register, handleSubmit, formState: { errors }, reset } = useForm<UserFormData>({
     resolver: zodResolver(userSchema),
@@ -78,22 +81,21 @@ export function NewUserDialog({ open, onOpenChange, onSuccess }: NewUserDialogPr
   const loadDepartments = async () => {
     try {
       setLoadingDepartments(true)
-      console.log('Loading departments from database...')
+      setErroSetores(null)
       const data = await departmentsService.getAll()
-      console.log('Departments loaded successfully:', data?.length || 0, 'departments')
       setDepartments(data)
-      if (!data || data.length === 0) {
-        console.warn('No departments found in database. Check RLS policies.')
-      }
     } catch (error) {
-      console.error('Error loading departments (check RLS policies):', error)
-      setDepartments([]) // Set empty array to prevent undefined issues
+      // Sem setores, o usuário novo nasceria SEM setor (e sem módulo).
+      console.error('Error loading departments:', error)
+      setErroSetores(error)
     } finally {
       setLoadingDepartments(false)
     }
   }
 
   const onSubmit = async (data: UserFormData) => {
+    if (salvandoRef.current) return
+    salvandoRef.current = true
     try {
       setLoading(true)
       setError(null)
@@ -112,6 +114,7 @@ export function NewUserDialog({ open, onOpenChange, onSuccess }: NewUserDialogPr
       console.error('Error creating user:', error)
       setError(getErrorMessage(error))
     } finally {
+      salvandoRef.current = false
       setLoading(false)
     }
   }
@@ -216,7 +219,8 @@ export function NewUserDialog({ open, onOpenChange, onSuccess }: NewUserDialogPr
               {errors.department_id && (
                 <p className="text-sm text-red-500 mt-1">{errors.department_id.message}</p>
               )}
-              {!loadingDepartments && departments.length === 0 && (
+              <ErroCarregamento className="mt-2" titulo="Não foi possível carregar os setores." erro={erroSetores} onTentar={loadDepartments} />
+              {!loadingDepartments && !erroSetores && departments.length === 0 && (
                 <p className="text-sm text-yellow-600 mt-1">
                   Nenhum departamento encontrado
                 </p>
@@ -279,7 +283,7 @@ export function NewUserDialog({ open, onOpenChange, onSuccess }: NewUserDialogPr
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={loading}>
+            <Button type="submit" disabled={loading || loadingDepartments || !!erroSetores}>
               {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Criar Usuário
             </Button>
