@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import { useAuth } from '@/contexts/auth'
 import { useModule } from '@/contexts/module'
@@ -23,6 +23,7 @@ import type { Request } from '@/lib/services/requests'
 import { employeesService } from '@/lib/services/employees'
 import type { Employee } from '@/lib/types/employees'
 import { supabase } from '@/lib/supabase'
+import { aguardarGravacoes } from '@/lib/utils/request-gravacoes'
 
 interface RequestActionsProps {
   request: Request
@@ -33,6 +34,11 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const { user } = useAuth()
   const { homeModule } = useModule()
   const [loading, setLoading] = useState(false)
+  // Trava de duplo clique (o estado do React nao bloqueia o 2o clique no mesmo tick).
+  const ocupadoRef = useRef(false)
+  // Erro das acoes (aprovar, processar, rejeitar, cancelar, confirmar). Antes
+  // ia para employeeError, que so aparece no formulario de entrega.
+  const [erroAcao, setErroAcao] = useState<string | null>(null)
   const [showDialog, setShowDialog] = useState(false)
   const [showApprovalToast, setShowApprovalToast] = useState(false)
   const [action, setAction] = useState<'approve' | 'reject' | 'cancel' | 'deliver' | 'confirm_receipt' | null>(null)
@@ -144,13 +150,24 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const isFromRequestingSector = !!user?.department_id &&
     !!request?.department_id &&
     user.department_id === request.department_id
+  // Mesma regra do banco (confirmar_recebimento_solicitacao): quem pediu,
+  // alguem do setor que pediu, administrador, ou a equipe da farmacia (CAF/
+  // satelite) confirmando pedido de uma satelite/CAF.
+  const deptPedido = (request?.department || '').trim()
+  const pedidoDeFarmacia = /^caf/i.test(deptPedido) || /^farm.cia\s+sat.lite/i.test(deptPedido)
+  const isEquipeFarmacia = homeModule === 'farmacia' &&
+    ['atendente', 'pharmacist', 'gestor'].includes(user?.role || '')
   const canConfirmReceipt = !!user &&
     isPharmacyRequest &&
     request?.status === 'delivered' &&
-    (isRequester || isFromRequestingSector)
+    (isRequester || isFromRequestingSector || user.role === 'administrador' ||
+      (isEquipeFarmacia && pedidoDeFarmacia))
   const canComplete = false
-  const canCancel = (user?.id === request?.requester_id || isManager) &&
-    ['pending', 'approved'].includes(request.status)
+  // Solicitante so cancela pedido PENDENTE (e o que o banco aceita); quem
+  // atende cancela pendente ou aprovado. Antes o botao aparecia para o
+  // solicitante em pedido aprovado e dava erro.
+  const statusCancelaveis: Request['status'][] = isManager ? ['pending', 'approved'] : ['pending']
+  const canCancel = (isRequester || isManager) && statusCancelaveis.includes(request.status)
 
   const searchEmployee = async () => {
     if (!searchQuery.trim()) {
@@ -194,7 +211,7 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   }
 
   const handleAction = async () => {
-    if (!action) return
+    if (!action || ocupadoRef.current) return
 
     // Validate employee for delivery
     if (action === 'deliver' && !employee) {
@@ -202,9 +219,14 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
       return
     }
 
+    ocupadoRef.current = true
+    setErroAcao(null)
     try {
       setLoading(true)
       let updatedRequest: Request
+      // Quantidade/lote digitados gravam no blur: espera terminarem (e para
+      // se alguma falhou) antes de entregar.
+      if (action === 'deliver' || action === 'approve') await aguardarGravacoes()
 
       switch (action) {
         case 'approve':
@@ -215,7 +237,7 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
           updatedRequest = await requestService.reject(request.id, reason)
           break
         case 'cancel':
-          updatedRequest = await requestService.cancel(request.id, reason)
+          updatedRequest = await requestService.cancel(request.id, reason, statusCancelaveis)
           break
         case 'deliver':
           updatedRequest = await requestService.markAsDelivered(
@@ -239,26 +261,31 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
       setSearchResults([])
       setShowResults(false)
       setEmployee(null)
+      setAction(null)
     } catch (error) {
-      setEmployeeError(getErrorMessage(error))
+      if (action === 'deliver') setEmployeeError(getErrorMessage(error))
+      else setErroAcao(getErrorMessage(error))
     } finally {
       setLoading(false)
-      if (action !== 'deliver') setAction(null)
+      ocupadoRef.current = false
     }
   }
 
   // Move a solicitação de almox pra "Em Processamento" (separação/em rota).
   // Ação direta, sem diálogo. Só almox (o botão só aparece quando canProcess).
   const handleStartProcessing = async () => {
+    if (ocupadoRef.current) return
+    ocupadoRef.current = true
+    setErroAcao(null)
     try {
       setLoading(true)
       const updated = await requestService.startProcessing(request.id)
-      requestService.clearCache()
       onUpdate(updated)
     } catch (error) {
-      setEmployeeError(getErrorMessage(error))
+      setErroAcao(getErrorMessage(error))
     } finally {
       setLoading(false)
+      ocupadoRef.current = false
     }
   }
 
@@ -270,10 +297,11 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   const lerFornecidos = async (): Promise<Record<string, number>> => {
     const ids = (request.request_items || []).map((it) => it.id)
     if (ids.length === 0) return {}
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('request_items')
       .select('id, supplied_quantity')
       .in('id', ids)
+    if (error) throw new Error('Não foi possível ler as quantidades fornecidas: ' + error.message)
     const mapa: Record<string, number> = {}
     ;(data || []).forEach((r: any) => { mapa[r.id] = Number(r.supplied_quantity) || 0 })
     return mapa
@@ -345,38 +373,29 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
 
   // Executa a aprovação de fato (chamado direto ou após confirmar o negativo).
   const executarAprovacao = async () => {
+    if (ocupadoRef.current) return
+    ocupadoRef.current = true
+    setErroAcao(null)
     try {
       setLoading(true)
-      const fornecidos = await lerFornecidos()
-      // FA2: item sem quantidade fornecida NAO barra a solicitacao — ele fica
-      // como NAO ATENDIDO e os demais seguem. O estoque abate o que de fato
-      // saiu (supplied_quantity), nao o solicitado.
-      if (isPharmacyRequest) {
-        const naoAtendidos = (request.request_items || [])
-          .filter((it) => !(fornecidos[it.id] > 0)).map((it) => it.id)
-        if (naoAtendidos.length > 0) {
-          await supabase.from('request_items').update({ status: 'nao_atendido' }).in('id', naoAtendidos)
-        }
-        const atendidos = (request.request_items || [])
-          .filter((it) => fornecidos[it.id] > 0).map((it) => it.id)
-        if (atendidos.length > 0) {
-          await supabase.from('request_items').update({ status: 'atendido' }).in('id', atendidos)
-        }
-      }
-      // approve() grava approved_quantity: usa o fornecido pra os dois campos
-      // ficarem coerentes (aprovado = o que realmente vai sair).
-      const quantidades = isPharmacyRequest ? fornecidos : itemQuantities
+      await aguardarGravacoes()
+      // FA2: item sem quantidade fornecida NAO barra a solicitacao — fica com
+      // fornecido 0 (nao atendido) e os demais seguem. Na farmacia tudo vai
+      // numa transacao so (RPC atender_solicitacao_farmacia): quantidades,
+      // conferencia lotes x fornecido e status. Fornecido total 0 = o banco
+      // orienta a Rejeitar.
+      const quantidades = isPharmacyRequest ? await lerFornecidos() : itemQuantities
       const updatedRequest = await requestService.approve(request.id, quantidades, '')
       if (isPharmacyRequest) setShowApprovalToast(true)
-      requestService.clearCache()
       onUpdate(updatedRequest)
     } catch (error) {
       console.error('Error approving:', error)
-      setEmployeeError(getErrorMessage(error))
+      setErroAcao(getErrorMessage(error))
     } finally {
       setLoading(false)
       setShowNegativoDialog(false)
       setNegativoCiente(false)
+      ocupadoRef.current = false
     }
   }
 
@@ -384,12 +403,27 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   // quantidade FORNECIDA (nao a solicitada).
   const handleAprovarClick = async () => {
     if (!isPharmacyRequest) { executarAprovacao(); return }
+    if (ocupadoRef.current) return
+    setErroAcao(null)
     setLoading(true)
-    const fornecidos = await lerFornecidos()
-    // Lote/validade de medicamento vem ANTES do aviso de saldo negativo: é
-    // bloqueio, não alerta — não existe "estou ciente" que o dispense.
-    const semLote = await validarLoteMedicamentos(fornecidos)
+    let fornecidos: Record<string, number>
+    let semLote: Array<{ nome: string; falta: string }>
+    try {
+      await aguardarGravacoes()
+      fornecidos = await lerFornecidos()
+      // Lote/validade de medicamento vem ANTES do aviso de saldo negativo: é
+      // bloqueio, não alerta — não existe "estou ciente" que o dispense.
+      semLote = await validarLoteMedicamentos(fornecidos)
+    } catch (error) {
+      setErroAcao(getErrorMessage(error))
+      setLoading(false)
+      return
+    }
     setLoading(false)
+    if (Object.values(fornecidos).every((q) => !(q > 0))) {
+      setErroAcao('Nenhum item com quantidade fornecida. Informe a Qtd Fornec. dos itens ou, se não há como atender, use Rejeitar.')
+      return
+    }
     if (semLote.length > 0) {
       setItensSemLote(semLote)
       setShowLoteDialog(true)
@@ -548,6 +582,13 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
           <Loader2 className="w-5 h-5 text-primary-500 animate-spin" />
         )}
       </div>
+
+      {erroAcao && !showDialog && (
+        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start justify-between gap-3" role="alert">
+          <p className="text-sm text-red-700">{erroAcao}</p>
+          <button className="text-xs text-red-600 underline flex-shrink-0" onClick={() => setErroAcao(null)}>Fechar</button>
+        </div>
+      )}
 
       {/* Inline Delivery Form (no dialog - works on mobile) */}
       {action === 'deliver' && !showDialog && (
@@ -770,10 +811,15 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
             </div>
           </div>
 
+          {erroAcao && (
+            <p className="text-sm text-red-600" role="alert">{erroAcao}</p>
+          )}
+
           <DialogFooter className="border-t pt-4">
             <Button
               variant="outline"
               onClick={() => {
+                setErroAcao(null)
                 setShowDialog(false)
                 setReason('')
                 setAction(null)

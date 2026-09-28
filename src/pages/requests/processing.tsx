@@ -14,6 +14,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { requestService } from '@/lib/services/requests'
+import { useListaSolicitacoes, periodoParaFiltro } from '@/lib/utils/request-lista'
+import { podeAtenderSolicitacao } from '@/lib/utils/request-scope'
+import { getErrorMessage } from '@/lib/utils/error-messages'
+import { useAuth } from '@/contexts/auth'
 import { RequestStatusBadge } from '@/components/request-status-badge'
 import { getDepartmentName } from '@/lib/constants/departments'
 import { useModule } from '@/contexts/module'
@@ -26,9 +30,8 @@ import { formatRequestNumber } from '@/lib/utils/request'
 export function RequestProcessing() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { activeModule, activeStock } = useModule()
-  const [requests, setRequests] = useState<Request[]>([])
-  const [loading, setLoading] = useState(true)
+  const { activeModule, activeStock, homeModule } = useModule()
+  const { user } = useAuth()
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'pharmacy' | 'warehouse'>('all')
 
@@ -51,9 +54,13 @@ export function RequestProcessing() {
   // Ref para filteredRequests (evita closure stale no handleScan)
   const filteredRequestsRef = useRef<Request[]>([])
 
-  useEffect(() => {
-    loadRequests()
-  }, [])
+  // Aprovadas (prontas pra entrega) + em processamento, filtradas no banco e
+  // atualizadas a cada 60s.
+  const { requests, loading, erro: erroLista, recarregar } = useListaSolicitacoes({
+    type: moduleRequestType,
+    statuses: ['approved', 'processing'],
+    ...periodoParaFiltro(dateRange),
+  }, { atualizarCadaMs: 60000 })
 
   // Foca input de scan quando ativa o modo
   useEffect(() => {
@@ -116,19 +123,6 @@ export function RequestProcessing() {
 
   useBarcodeScanner({ onScan: handleScan, enabled: scannerMode })
 
-  async function loadRequests() {
-    try {
-      setLoading(true)
-      const data = await requestService.getAll()
-      // Fluxo simplificado: mostra as aprovadas (prontas pra entrega) + as
-      // antigas ainda em 'processing' que precisam ser finalizadas.
-      setRequests(data.filter(r => r.status === 'processing' || r.status === 'approved'))
-    } catch (error) {
-      console.error('Error loading requests:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const getRequestStats = () => {
     const moduleFiltered = requests.filter(r => r.type === moduleRequestType)
@@ -149,12 +143,33 @@ export function RequestProcessing() {
     setDateRange({ startDate, endDate })
   }
 
-  const handleComplete = async (requestId: string) => {
+  // "Concluir" = entregar pelo almoxarifado (baixa no estoque pela quantidade
+  // FORNECIDA). So quem atende almox, com confirmacao e trava de duplo clique;
+  // o banco ainda confere status, fornecido e saldo.
+  const concluindoRef = useRef(false)
+  const [concluindo, setConcluindo] = useState<string | null>(null)
+  const [aviso, setAviso] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null)
+  const podeConcluir = (request: Request) =>
+    request.type === 'warehouse' && podeAtenderSolicitacao(homeModule, request.type) &&
+    (user?.role === 'gestor' || user?.role === 'administrador' || user?.role === 'atendente')
+
+  const handleComplete = async (request: Request) => {
+    if (concluindoRef.current) return
+    const numero = request.request_number || formatRequestNumber(request.id)
+    if (!window.confirm(`Concluir a solicitação nº ${numero}?
+
+A baixa no estoque do almoxarifado será feita agora, pela quantidade FORNECIDA de cada item. Item sem quantidade fornecida impede a conclusão (digite 0 se não foi fornecido).`)) return
+    concluindoRef.current = true
+    setConcluindo(request.id)
     try {
-      await requestService.complete(requestId)
-      loadRequests()
+      await requestService.complete(request.id)
+      setAviso({ tipo: 'ok', texto: `Solicitação nº ${numero} concluída.` })
     } catch (error) {
-      console.error('Error completing request:', error)
+      setAviso({ tipo: 'erro', texto: getErrorMessage(error) })
+    } finally {
+      concluindoRef.current = false
+      setConcluindo(null)
+      await recarregar(true)
     }
   }
 
@@ -260,14 +275,19 @@ export function RequestProcessing() {
           >
             Ver detalhes
           </Button>
-          <Button
-            size="sm"
-            className="bg-green-500 hover:bg-green-600 text-white"
-            onClick={() => handleComplete(request.id)}
-          >
-            <CheckCircle2 className="w-4 h-4 mr-2" />
-            Concluir
-          </Button>
+          {podeConcluir(request) && (
+            <Button
+              size="sm"
+              className="bg-green-500 hover:bg-green-600 text-white"
+              disabled={concluindo !== null}
+              onClick={() => handleComplete(request)}
+            >
+              {concluindo === request.id
+                ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                : <CheckCircle2 className="w-4 h-4 mr-2" />}
+              Concluir
+            </Button>
+          )}
         </div>
       </div>
 
@@ -500,6 +520,20 @@ export function RequestProcessing() {
         </div>
       )}
 
+      {aviso && (
+        <div className={`rounded-xl p-4 flex items-center justify-between gap-4 border ${aviso.tipo === 'erro' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>
+          <p className="text-sm">{aviso.texto}</p>
+          <button className="text-xs underline" onClick={() => setAviso(null)}>Fechar</button>
+        </div>
+      )}
+
+      {erroLista && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
+          <p className="text-sm text-red-700">{erroLista}</p>
+          <Button variant="outline" size="sm" onClick={() => recarregar()}>Tentar de novo</Button>
+        </div>
+      )}
+
       {/* Requests List */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
@@ -564,7 +598,7 @@ export function RequestProcessing() {
         onOpenChange={setShowPeriodDialog}
         onFilter={handlePeriodFilter}
         defaultStartDate={dateRange.startDate}
-        defaultEndDate={dateRange.endDate}
+        defaultEndDate={dateRange.endDate ?? new Date()}
       />
 
       <ExportDialog

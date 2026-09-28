@@ -12,12 +12,10 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import { requestService } from '@/lib/services/requests'
+import { useListaSolicitacoes, periodoParaFiltro } from '@/lib/utils/request-lista'
 import { RequestStatusBadge } from '@/components/request-status-badge'
 import { getDepartmentName } from '@/lib/constants/departments'
 import { useAuth } from '@/contexts/auth'
-import { useModule } from '@/contexts/module'
-import { departmentBelongsToStock } from '@/lib/constants/stock-locations'
 import { PeriodFilterDialog } from '@/components/period-filter-dialog'
 import { isWithinPeriod, getDefaultDateRange } from '@/lib/utils/date'
 import type { Request } from '@/lib/services/requests'
@@ -27,19 +25,26 @@ export function MyRequests() {
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useAuth()
-  const { activeStock } = useModule()
-  const [requests, setRequests] = useState<Request[]>([])
-  const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'delivered' | 'cancelled'>('pending')
   const [showPeriodDialog, setShowPeriodDialog] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultDateRange())
 
-  useEffect(() => {
-    if (user) {
-      loadRequests()
-    }
-  }, [user])
+  // Isolamento de módulo: aberta por /almox/* mostra SÓ 'warehouse'.
+  const isWarehouse = location.pathname.startsWith('/almox')
+
+  // "Minhas" = pedidos feitos PELO USUÁRIO, filtrados no banco. Antes vinham
+  // os 100 pedidos mais recentes de todo o hospital e, para gestor/atendente/
+  // farmacêutico, a lista mostrava pedidos de outras pessoas. Quem atende
+  // usa a Caixa de Entrada/Pendências.
+  const { requests, loading, erro: erroLista, recarregar } = useListaSolicitacoes(
+    user ? {
+      requesterId: user.id,
+      type: isWarehouse ? 'warehouse' : undefined,
+      ...periodoParaFiltro(dateRange),
+    } : null,
+    { atualizarCadaMs: 60000 },
+  )
 
   useEffect(() => {
     // Check for success message from location state (after creating a new request)
@@ -51,44 +56,7 @@ export function MyRequests() {
     }
   }, [location, navigate])
 
-  async function loadRequests() {
-    try {
-      setLoading(true)
-      const allRequests = await requestService.getAll()
-      
-      setRequests(allRequests)
-    } catch (error) {
-      console.error('Error loading requests:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Isolamento de módulo: quando a tela é aberta por /almox/* (Minhas
-  // Solicitações do almoxarifado), mostra SÓ solicitações do tipo 'warehouse'.
-  // Impede que pedidos de farmácia apareçam no almox. Fora do /almox
-  // (farmácia e /requests genérico), nada muda — farmácia intacta.
-  const isWarehouse = location.pathname.startsWith('/almox')
-  const typeScopedRequests = isWarehouse
-    ? requests.filter(r => r.type === 'warehouse')
-    : requests
-
-  // Se ha estoque ativo, mostra solicitacoes onde ele participa como
-  // SOLICITANTE (fez o pedido) OU DESTINO (vai atender o pedido). Ex: Sat 1
-  // pede pro CAF -> aparece tanto na "Minhas Solicitacoes" da Sat 1 quanto na
-  // do CAF. O filtro anterior era so por solicitante e escondia da farmacia
-  // que precisava atender.
-  // Tambem entra o pedido ROTEADO pra este estoque (source_location_id), que e
-  // como os Postos chegam na Satelite Terreo: o setor se chama "Posto Terreo",
-  // nao "Farmacia Satelite Terreo", entao a comparacao por nome nao pega. Sem
-  // isto o pedido de kit da enfermagem nao apareceria pra quem vai atender.
-  const scopedRequests = activeStock
-    ? typeScopedRequests.filter(r =>
-        departmentBelongsToStock(r.department, activeStock) ||
-        departmentBelongsToStock(r.destination_department, activeStock) ||
-        r.source_location_id === activeStock.id
-      )
-    : typeScopedRequests
+  const scopedRequests = requests
 
   const getRequestStats = () => {
     const total = scopedRequests.length
@@ -344,6 +312,13 @@ export function MyRequests() {
         </div>
       </div>
 
+      {erroLista && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
+          <p className="text-sm text-red-700">{erroLista}</p>
+          <Button variant="outline" size="sm" onClick={() => recarregar()}>Tentar de novo</Button>
+        </div>
+      )}
+
       {/* Requests List */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
@@ -469,7 +444,7 @@ export function MyRequests() {
         onOpenChange={setShowPeriodDialog}
         onFilter={handlePeriodFilter}
         defaultStartDate={dateRange.startDate}
-        defaultEndDate={dateRange.endDate}
+        defaultEndDate={dateRange.endDate ?? new Date()}
       />
     </div>
   )

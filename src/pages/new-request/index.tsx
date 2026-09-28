@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { getErrorMessage } from '@/lib/utils/error-messages'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { ArrowLeft, ArrowRight, AlertCircle, AlertTriangle, ChevronDown, Clock, Cloud, CloudOff } from 'lucide-react'
@@ -61,6 +62,10 @@ export function NewRequest() {
   const [hasDraft, setHasDraft] = useState(false)
   const [cloudSync, setCloudSync] = useState<'idle' | 'saving' | 'saved' | 'offline'>('idle')
   const saveTimerRef = useRef<number | null>(null)
+  // Envio: trava de duplo clique + chave unica do formulario (o banco nao cria
+  // dois pedidos com a mesma chave).
+  const enviandoRef = useRef(false)
+  const chaveEnvioRef = useRef<string>(crypto.randomUUID())
   // Pending draft (carregado da nuvem mas aguardando o usuario clicar em "Continuar editando")
   const [pendingDraft, setPendingDraft] = useState<any | null>(null)
   const [draftDismissed, setDraftDismissed] = useState(false)
@@ -262,6 +267,9 @@ export function NewRequest() {
       return
     }
 
+    if (enviandoRef.current) return
+    enviandoRef.current = true
+    let enviado = false
     try {
       setLoading(true)
       setError(null)
@@ -283,6 +291,7 @@ export function NewRequest() {
         justification: details.justification_option,
         notes: notes || undefined,
         created_by: user.id,
+        chave: chaveEnvioRef.current,
         items: items.map(item => ({
           item_id: item.id,
           quantity: item.quantity
@@ -290,6 +299,7 @@ export function NewRequest() {
       })
 
       if (request) {
+        enviado = true
         _setCreatedRequest(request)
 
         // Clear draft after successful submission (cloud + local)
@@ -305,9 +315,13 @@ export function NewRequest() {
       }
     } catch (error) {
       console.error('Error submitting request:', error)
-      setError('Erro ao criar solicitação. Por favor, tente novamente.')
+      setError(`Erro ao criar solicitação: ${getErrorMessage(error)}`)
     } finally {
-      setLoading(false)
+      // Depois de enviar com sucesso o botao fica travado ate sair da tela.
+      if (!enviado) {
+        setLoading(false)
+        enviandoRef.current = false
+      }
     }
   }
 
