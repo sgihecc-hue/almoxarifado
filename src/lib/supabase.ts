@@ -15,43 +15,88 @@ if (!SUPABASE_ANON_KEY) {
 
 let supabaseInstance: ReturnType<typeof createClient<Database>> | null = null
 
-// Evita múltiplos redirects em uma rajada de requisições simultâneas após expiração.
-let sessionExpiredHandled = false
+// =============================================================================
+// Token vencido (401 do PostgREST/Edge Functions) — auditoria 28/09/2026, X-03
+//
+// Antes: qualquer 401 de JWT fazia signOut + window.location.href='/login' e o
+// que a pessoa estava digitando se perdia; depois do login ela caía em '/'.
+// Agora: tenta renovar o token UMA vez e repete a MESMA requisição. Se não der
+// (refresh token vencido/revogado), avisa o AuthProvider, que abre um modal de
+// login POR CIMA da tela (a página e o formulário continuam montados).
+// Chamadas do próprio login (/auth/v1/) nunca passam por aqui.
+// =============================================================================
 
-// Detecta JWT expirado em QUALQUER resposta do PostgREST/Auth e força logout + redirect.
-// Sem isso, o usuário ficava com modais mostrando "Erro de autenticação" sem entender o que fazer.
-async function handleExpiredSession() {
-  if (sessionExpiredHandled) return
-  sessionExpiredHandled = true
-  try {
-    if (supabaseInstance) {
-      await supabaseInstance.auth.signOut().catch(() => {})
-    }
-  } finally {
-    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-      window.location.href = '/login?session_expired=1'
-    }
+let aoPerderSessao: (() => void) | null = null
+
+/** O AuthProvider registra aqui o que fazer quando a sessão não puder ser renovada. */
+export function definirAoPerderSessao(fn: (() => void) | null) {
+  aoPerderSessao = fn
+}
+
+// Várias requisições podem receber 401 ao mesmo tempo: renova uma vez só.
+// token: novo token (ou null); perdida: a sessão acabou mesmo (não foi só a rede).
+type Renovacao = { token: string | null; perdida: boolean }
+let renovacaoEmAndamento: Promise<Renovacao> | null = null
+
+function renovarToken(): Promise<Renovacao> {
+  if (!renovacaoEmAndamento) {
+    renovacaoEmAndamento = (async (): Promise<Renovacao> => {
+      try {
+        if (!supabaseInstance) return { token: null, perdida: false }
+        const { data, error } = await supabaseInstance.auth.refreshSession()
+        if (error) return { token: null, perdida: error.name !== 'AuthRetryableFetchError' }
+        if (!data.session) return { token: null, perdida: true }
+        return { token: data.session.access_token, perdida: false }
+      } catch {
+        return { token: null, perdida: false }
+      }
+    })()
+    renovacaoEmAndamento.finally(() => {
+      // Solta depois que todos os que esperavam já pegaram o resultado.
+      setTimeout(() => { renovacaoEmAndamento = null }, 0)
+    })
   }
+  return renovacaoEmAndamento
+}
+
+function urlDe(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input
+  if (input instanceof URL) return input.href
+  return input.url
 }
 
 const interceptedFetch: typeof fetch = async (input, init) => {
   const response = await fetch(input, init)
   // Só nos importa 401. Outros erros (4xx/5xx) são tratados pelo chamador.
-  if (response.status === 401) {
-    try {
-      // Clona pra não consumir o body original
-      const cloned = response.clone()
-      const body = await cloned.text()
-      const lower = body.toLowerCase()
-      // PostgREST devolve { message, code: 'PGRST301' } ou JWT errors com 'jwt'/'expired'/'invalid token'
-      if (lower.includes('jwt') || lower.includes('expired') || lower.includes('invalid token') || lower.includes('pgrst301')) {
-        handleExpiredSession()
-      }
-    } catch {
-      // Se não conseguir ler o body, ignora — não força logout em qualquer 401
-    }
+  if (response.status !== 401) return response
+  if (urlDe(input).includes('/auth/v1/')) return response
+
+  let ehJwt = false
+  try {
+    // Clona pra não consumir o body original
+    const lower = (await response.clone().text()).toLowerCase()
+    // PostgREST devolve { code: 'PGRST301' } / mensagens com 'jwt'/'expired'/'invalid token'
+    ehJwt = lower.includes('jwt') || lower.includes('expired') || lower.includes('invalid token') ||
+      lower.includes('pgrst301') || lower.includes('pgrst303')
+  } catch {
+    // Se não conseguir ler o body, não mexe
   }
-  return response
+  if (!ehJwt) return response
+
+  const { token: novoToken, perdida } = await renovarToken()
+  if (!novoToken) {
+    // Falha de rede na renovação não é sessão perdida: devolve o erro e o
+    // auth-js tenta renovar de novo sozinho.
+    if (perdida) aoPerderSessao?.()
+    return response
+  }
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+  headers.set('Authorization', `Bearer ${novoToken}`)
+  try {
+    return await fetch(input, { ...init, headers })
+  } catch {
+    return response
+  }
 }
 
 export const supabase = (() => {

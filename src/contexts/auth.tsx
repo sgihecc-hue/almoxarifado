@@ -1,23 +1,48 @@
-import { createContext, useContext, useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
-import { sanitizeEmailForAuth, sanitizeForDisplay, validateEmail } from '@/lib/utils/sanitize'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { supabase, definirAoPerderSessao } from '@/lib/supabase'
+import { sanitizeEmailForAuth, validateEmail } from '@/lib/utils/sanitize'
 import type { User } from '@/lib/types'
-import type { Session } from '@supabase/supabase-js'
-import { ErrorBoundary } from '@/components/ui/error-boundary'
+import type { AuthError, Session } from '@supabase/supabase-js'
+import { SessaoExpiradaModal } from '@/components/sessao-expirada-modal'
+
+// =============================================================================
+// Sessão do usuário (auditoria 28/09/2026 — X-02, X-03, X-09, X-18, X-20)
+//
+// - O ouvinte onAuthStateChange é inscrito UMA vez (efeito com []). Antes o
+//   efeito dependia de isInitialized e a limpeza cancelava o ouvinte sem
+//   recriar: quando a sessão caía o app continuava "logado", consultando como
+//   anônimo (listas vazias, "sem permissão" ao salvar).
+// - Sessão perdida com alguém logado NÃO derruba a página: abre um modal de
+//   login por cima (SessaoExpiradaModal) e o formulário continua lá.
+// - Perfil desativado (is_active=false ou deleted_at) é recusado no login e
+//   na abertura do app.
+// - Banco lento: tenta de novo sozinho (com mensagem) antes de declarar erro.
+// =============================================================================
 
 interface AuthState {
   user: User | null
   loading: boolean
+  /** Mensagem para a tela de login (desativado, sessão expirada...) ou de erro. */
   error: string | null
   connectionError: boolean
+  /** Texto mostrado enquanto carrega ("Tentando de novo (2 de 5)..."). */
+  statusMsg: string | null
 }
 
 interface AuthContextType extends AuthState {
-  signIn: (email: string, password: string) => Promise<void>
+  /** Entra e devolve o perfil carregado. Lança Error com mensagem pronta para a tela. */
+  signIn: (email: string, password: string) => Promise<User>
   signUp: (email: string, password: string, fullName: string, role: string, departmentId?: string) => Promise<void>
   signOut: () => Promise<void>
   clearError: () => void
+  /** Tenta de novo carregar sessão e perfil (botão "Tentar de novo"). */
   checkConnection: () => Promise<boolean>
+  /** Relê o perfil do banco (ex.: depois de trocar a senha). */
+  refreshUser: () => Promise<void>
+  /** true quando a sessão caiu com alguém logado (modal de login aberto). */
+  sessaoPerdida: boolean
+  /** Login pelo modal de sessão expirada (mesmo usuário continua na página). */
+  reentrar: (login: string, password: string) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -30,369 +55,362 @@ export function useAuth() {
   return context
 }
 
+// ---------------------------------------------------------------------------
+// Mensagens
+// ---------------------------------------------------------------------------
+
+const MSG_DESATIVADO = 'Seu usuário está desativado. Procure o administrador do sistema.'
+const MSG_SEM_PERFIL = 'Sua senha foi aceita, mas seu cadastro no sistema não foi encontrado. Procure o administrador do sistema.'
+const MSG_REDE = 'Não foi possível conectar ao servidor. Verifique sua internet e tente de novo.'
+
+/** CPF (com ou sem pontuação) ou e-mail -> e-mail de login. */
+export function loginParaEmail(login: string): string {
+  const l = login.trim()
+  if (l.includes('@')) return l.toLowerCase()
+  return `${l.replace(/[.\-\s]/g, '')}@hecc.local`
+}
+
+function traduzirErroLogin(error: AuthError | Error): string {
+  const e = error as AuthError & { code?: string }
+  const msg = (e.message || '').toLowerCase()
+  const code = (e.code || '').toLowerCase()
+  const status = typeof e.status === 'number' ? e.status : undefined
+  if (code === 'invalid_credentials' || msg.includes('invalid login credentials')) {
+    return 'CPF/e-mail ou senha incorretos.'
+  }
+  if (code === 'user_banned' || msg.includes('banned')) return MSG_DESATIVADO
+  if (code === 'email_not_confirmed' || msg.includes('email not confirmed')) {
+    return 'Seu e-mail ainda não foi confirmado. Procure o administrador do sistema.'
+  }
+  if (status === 429 || code.includes('rate_limit') || msg.includes('too many') || msg.includes('rate limit')) {
+    return 'Muitas tentativas seguidas. Aguarde alguns minutos e tente de novo.'
+  }
+  if (code === 'email_provider_disabled' || msg.includes('provider is disabled')) {
+    return 'O login está temporariamente indisponível no servidor. Avise o administrador do sistema.'
+  }
+  if (e.name === 'AuthRetryableFetchError' || msg.includes('failed to fetch') || msg.includes('network') || status === 0) {
+    return MSG_REDE
+  }
+  if (status !== undefined && status >= 500) {
+    return 'O servidor de login está com problema no momento. Tente de novo em instantes.'
+  }
+  return `Não foi possível entrar: ${e.message || 'erro desconhecido'}`
+}
+
+// ---------------------------------------------------------------------------
+// Perfil (public.users) com novas tentativas para falha de rede/banco lento
+// ---------------------------------------------------------------------------
+
+type ResultadoPerfil =
+  | { ok: true; user: User }
+  | { ok: false; tipo: 'rede' | 'sem-perfil' | 'inativo' | 'jwt' | 'outro'; mensagem: string }
+
+interface ErroPg { message?: string; code?: string }
+
+function ehErroTransitorio(err: ErroPg): boolean {
+  const code = err.code ?? ''
+  const msg = (err.message ?? '').toLowerCase()
+  if (!code) return true // falha de fetch, timeout, 502/503/504 do proxy
+  if (/^PGRST00[0-3]$/.test(code)) return true // PostgREST sem conexão com o banco
+  if (code === '57014' || code === '53300') return true // statement timeout / muitas conexões
+  return msg.includes('fetch') || msg.includes('network') || msg.includes('timeout') || msg.includes('abort')
+}
+
+function ehErroJwt(err: ErroPg): boolean {
+  const msg = (err.message ?? '').toLowerCase()
+  return err.code === 'PGRST301' || err.code === 'PGRST303' || msg.includes('jwt')
+}
+
+async function buscarPerfilUmaVez(userId: string): Promise<ResultadoPerfil> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 10000)
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .abortSignal(ctrl.signal)
+      .maybeSingle()
+    if (error) {
+      if (ehErroJwt(error)) return { ok: false, tipo: 'jwt', mensagem: 'Sua sessão expirou. Entre novamente.' }
+      if (ehErroTransitorio(error)) return { ok: false, tipo: 'rede', mensagem: MSG_REDE }
+      return { ok: false, tipo: 'outro', mensagem: `Erro ao carregar seu perfil: ${error.message}` }
+    }
+    if (!data) return { ok: false, tipo: 'sem-perfil', mensagem: MSG_SEM_PERFIL }
+    const perfil = data as User
+    if (perfil.deleted_at || perfil.is_active === false) {
+      return { ok: false, tipo: 'inativo', mensagem: MSG_DESATIVADO }
+    }
+    return { ok: true, user: perfil }
+  } catch {
+    return { ok: false, tipo: 'rede', mensagem: MSG_REDE }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const ESPERAS_MS = [1000, 2000, 4000, 8000] // 5 tentativas no total (~15 s + tempo das consultas)
+
+async function buscarPerfil(userId: string, aoRepetir?: (tentativa: number, total: number) => void): Promise<ResultadoPerfil> {
+  const total = ESPERAS_MS.length + 1
+  let res = await buscarPerfilUmaVez(userId)
+  for (let i = 0; i < ESPERAS_MS.length && !res.ok && res.tipo === 'rede'; i++) {
+    aoRepetir?.(i + 2, total)
+    await new Promise((r) => setTimeout(r, ESPERAS_MS[i]))
+    res = await buscarPerfilUmaVez(userId)
+  }
+  return res
+}
+
+// ---------------------------------------------------------------------------
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({
     user: null,
     loading: true,
     error: null,
     connectionError: false,
+    statusMsg: null,
   })
-  const [initializationAttempts, setInitializationAttempts] = useState(0)
-  const [isInitialized, setIsInitialized] = useState(false)
+  const [sessaoPerdida, setSessaoPerdida] = useState(false)
 
-  const clearError = () => {
-    setState(prev => ({ ...prev, error: null, connectionError: false }))
+  // Refs para o ouvinte (inscrito uma vez) enxergar o valor ATUAL.
+  const userRef = useRef<User | null>(null)
+  const iniciadoRef = useRef(false)
+  const entrandoRef = useRef(false)
+  const execucaoRef = useRef(0)
+
+  function definirUsuario(user: User | null, extra: Partial<AuthState> = {}) {
+    userRef.current = user
+    setState({ user, loading: false, error: null, connectionError: false, statusMsg: null, ...extra })
   }
 
-  const checkConnection = async (): Promise<boolean> => {
-    try {
-      const { error } = await supabase.from('users').select('id').limit(1)
-      const isConnected = !error
-      setState(prev => ({ ...prev, connectionError: !isConnected }))
-      return isConnected
-    } catch (error) {
-      console.error('Connection check failed:', error)
-      setState(prev => ({ ...prev, connectionError: true }))
-      return false
+  /** Sai sem passar pelo modal de sessão perdida (userRef zerado antes). */
+  async function sairSilencioso() {
+    userRef.current = null
+    try { await supabase.auth.signOut() } catch { /* sessão local some de qualquer jeito */ }
+  }
+
+  async function iniciar() {
+    const execucao = ++execucaoRef.current
+    setState((prev) => ({ ...prev, loading: true, connectionError: false, statusMsg: 'Verificando sua sessão...' }))
+
+    // getSession pode precisar renovar o token (rede). Falha de rede aqui não
+    // pode mandar para o login quem tem sessão válida: tenta de novo.
+    let session: Session | null = null
+    for (let i = 0; ; i++) {
+      const { data, error } = await supabase.auth.getSession()
+      if (execucao !== execucaoRef.current) return
+      const transitorio = error?.name === 'AuthRetryableFetchError'
+      if (!transitorio) {
+        session = data.session
+        break
+      }
+      if (i >= ESPERAS_MS.length) {
+        iniciadoRef.current = true
+        userRef.current = null
+        setState({ user: null, loading: false, error: MSG_REDE, connectionError: true, statusMsg: null })
+        return
+      }
+      setState((prev) => ({ ...prev, statusMsg: `O servidor está demorando para responder. Tentando de novo (${i + 2} de ${ESPERAS_MS.length + 1})...` }))
+      await new Promise((r) => setTimeout(r, ESPERAS_MS[i]))
+    }
+
+    if (!session?.user?.id) {
+      iniciadoRef.current = true
+      definirUsuario(null)
+      return
+    }
+
+    const res = await buscarPerfil(session.user.id, (t, total) => {
+      if (execucao === execucaoRef.current) {
+        setState((prev) => ({ ...prev, statusMsg: `O servidor está demorando para responder. Tentando de novo (${t} de ${total})...` }))
+      }
+    })
+    if (execucao !== execucaoRef.current) return
+    iniciadoRef.current = true
+
+    if (res.ok) {
+      definirUsuario(res.user)
+      return
+    }
+    if (res.tipo === 'rede' || res.tipo === 'outro') {
+      userRef.current = null
+      setState({ user: null, loading: false, error: res.mensagem, connectionError: true, statusMsg: null })
+      return
+    }
+    // inativo, sem perfil ou token inválido: encerra a sessão e explica no login
+    await sairSilencioso()
+    definirUsuario(null, { error: res.mensagem })
+  }
+
+  async function tratarEvento(event: string, session: Session | null) {
+    if (!iniciadoRef.current) return // a inicialização cuida do estado inicial
+    switch (event) {
+      case 'TOKEN_REFRESHED':
+        setSessaoPerdida(false)
+        return
+      case 'SIGNED_IN': {
+        if (!session?.user) return
+        if (userRef.current && session.user.id === userRef.current.id) {
+          setSessaoPerdida(false)
+          return
+        }
+        if (entrandoRef.current) return // signIn/reentrar cuidam disso
+        // Outro login feito em outra aba: carrega o perfil do novo usuário.
+        const res = await buscarPerfil(session.user.id)
+        if (res.ok) {
+          setSessaoPerdida(false)
+          definirUsuario(res.user)
+        } else if (res.tipo === 'inativo' || res.tipo === 'sem-perfil') {
+          await sairSilencioso()
+          definirUsuario(null, { error: res.mensagem })
+        }
+        return
+      }
+      case 'USER_UPDATED': {
+        if (!session?.user || !userRef.current) return
+        const res = await buscarPerfilUmaVez(session.user.id)
+        if (res.ok) definirUsuario(res.user)
+        return
+      }
+      case 'SIGNED_OUT':
+        // Saída pelo botão "Sair" zera userRef antes; se ainda há usuário aqui,
+        // a sessão CAIU (token vencido, saída em outra aba...). Não derruba a
+        // tela: abre o modal para entrar de novo sem perder o que foi digitado.
+        if (userRef.current) setSessaoPerdida(true)
+        return
+      default:
+        return
     }
   }
 
   useEffect(() => {
-    if (isInitialized) return
-    
-    let timeoutId: NodeJS.Timeout
-    
-    // Check current session
-    async function initializeAuth() {
-      // Prevent infinite loops
-      if (initializationAttempts >= 3) {
-        console.error('Too many initialization attempts, stopping')
-        setState({ user: null, loading: false, error: 'Erro de inicialização', connectionError: true })
-        return
-      }
-      
-      try {
-        setInitializationAttempts(prev => prev + 1)
-        setState(prev => ({ ...prev, loading: true }))
-        
-        // Check connection first
-        const isConnected = await checkConnection()
-        if (!isConnected) {
-          setState({ user: null, loading: false, error: 'Erro de conexão com o servidor', connectionError: true })
-          return
-        }
-        
-        const { data: { session } } = await supabase.auth.getSession()
-        if (session) {
-          await loadUser(session)
-        } else {
-          setState({ user: null, loading: false, error: null, connectionError: false })
-        }
-        
-        setIsInitialized(true)
-      } catch (error) {
-        console.error('Error getting session:', error)
-        setState({ user: null, loading: false, error: 'Erro de conexão com o servidor', connectionError: true })
-      }
-    }
-    
-    // Add timeout to prevent hanging
-    timeoutId = setTimeout(() => {
-      console.warn('Auth initialization timeout')
-      setState({ user: null, loading: false, error: 'Timeout na inicialização', connectionError: true })
-    }, 10000) // 10 seconds timeout
-    
-    initializeAuth().finally(() => {
-      clearTimeout(timeoutId)
-      setState(prev => ({ ...prev, loading: false }))
+    // O ouvinte é inscrito UMA vez e vive enquanto o app estiver aberto.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // Não chamar o supabase direto aqui dentro: o auth-js segura uma trava
+      // durante o aviso e uma consulta com await pode travar. Adia um tique.
+      setTimeout(() => { void tratarEvento(event, session) }, 0)
     })
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // Token refresh: nao recarrega o perfil (usuario ja esta logado, evita tela de erro)
-      if (event === 'TOKEN_REFRESHED') {
-        return
-      }
-      if (session) {
-        await loadUser(session)
-      } else {
-        setState({ user: null, loading: false, error: null, connectionError: false })
-      }
-    })
-
+    // Resposta 401 de token vencido que não deu para renovar (lib/supabase.ts).
+    definirAoPerderSessao(() => { if (userRef.current) setSessaoPerdida(true) })
+    void iniciar()
     return () => {
+      subscription.unsubscribe()
+      definirAoPerderSessao(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const clearError = () => {
+    setState((prev) => ({ ...prev, error: null, connectionError: false }))
+  }
+
+  const checkConnection = async (): Promise<boolean> => {
+    await iniciar()
+    return !!userRef.current
+  }
+
+  async function refreshUser() {
+    if (!userRef.current) return
+    const res = await buscarPerfil(userRef.current.id)
+    if (res.ok) definirUsuario(res.user)
+  }
+
+  async function handleSignIn(email: string, password: string): Promise<User> {
+    setState((prev) => ({ ...prev, error: null, connectionError: false }))
+    if (!email || !password) throw new Error('Preencha o CPF/e-mail e a senha.')
+    const sanitizedEmail = sanitizeEmailForAuth(email.trim().toLowerCase())
+    if (!validateEmail(sanitizedEmail)) throw new Error('CPF ou e-mail em formato inválido.')
+    if (password.length > 128) throw new Error('Senha muito longa.')
+
+    entrandoRef.current = true
+    try {
+      let data: { session: Session | null; user: { id: string } | null }
       try {
-        subscription.unsubscribe()
-      } catch (error) {
-        console.error('Error unsubscribing from auth state changes:', error)
+        const r = await supabase.auth.signInWithPassword({ email: sanitizedEmail, password })
+        if (r.error) throw r.error
+        data = r.data
+      } catch (e) {
+        throw new Error(traduzirErroLogin(e as AuthError))
       }
-      if (timeoutId) {
-        clearTimeout(timeoutId)
+      if (!data.user) throw new Error('Não foi possível entrar: resposta vazia do servidor.')
+
+      const res = await buscarPerfil(data.user.id)
+      if (!res.ok) {
+        // Sem perfil válido não fica sessão aberta pela metade.
+        await sairSilencioso()
+        definirUsuario(null)
+        throw new Error(res.tipo === 'rede'
+          ? 'Sua senha foi aceita, mas não foi possível carregar seu perfil (falha de conexão). Tente de novo.'
+          : res.mensagem)
       }
-    }
-  }, [isInitialized])
-
-  async function loadUser(session: Session) {
-    if (!session?.user?.id) {
-      setState({ user: null, loading: false, error: 'Sessão inválida', connectionError: false })
-      return
-    }
-    
-    try {
-      // Check if user profile exists with retry logic
-      let retries = 3
-      while (retries > 0) {
-        try {
-          const { data: existingProfile, error: checkError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', session.user.id)
-            .maybeSingle()
-
-          if (checkError) {
-            if (checkError.code === 'PGRST301' && retries > 1) {
-              // RLS policy issue, retry
-              retries--
-              await new Promise(resolve => setTimeout(resolve, 1000))
-              continue
-            }
-            // Detect expired JWT and auto-logout (somente se nao houver usuario logado)
-            const errMsg = checkError.message || ''
-            const isJwtError = errMsg.toLowerCase().includes('jwt') || errMsg.toLowerCase().includes('expir')
-
-            // Se ja temos usuario logado, ignora erros transitorios e mantem a sessao
-            // (evita logout falso por problema de rede, RLS temporario, etc)
-            if (state.user && !isJwtError) {
-              console.warn('Profile check error during active session, keeping user logged in:', errMsg)
-              return
-            }
-
-            if (isJwtError) {
-              console.warn('JWT expired, signing out')
-              await supabase.auth.signOut()
-              setState({ user: null, loading: false, error: null, connectionError: false })
-              if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-                window.location.href = '/login'
-              }
-              return
-            }
-            console.error('Error checking user profile:', checkError)
-            setState({ user: null, loading: false, error: `Erro ao verificar perfil: ${checkError.message}`, connectionError: false })
-            return
-          }
-
-          if (existingProfile) {
-            setState({
-              user: existingProfile,
-              loading: false,
-              error: null,
-              connectionError: false,
-            })
-            return
-          }
-
-          // Profile not found
-          console.warn('User profile not found')
-          setState({ user: null, loading: false, error: 'Perfil de usuário não encontrado', connectionError: false })
-          return
-        } catch (fetchError) {
-          if (retries === 1) {
-            console.error('Network error in loadUser:', fetchError)
-            if (fetchError instanceof TypeError && fetchError.message === 'Failed to fetch') {
-              setState({ user: null, loading: false, error: 'Erro de rede: Não foi possível conectar ao servidor. Verifique sua conexão com a internet.', connectionError: true })
-            } else {
-              setState({ user: null, loading: false, error: 'Erro ao carregar usuário', connectionError: true })
-            }
-            return
-          }
-          retries--
-          await new Promise(resolve => setTimeout(resolve, 1000))
-        }
-      }
-    } catch (error) {
-      console.error('Error in loadUser:', error)
-      setState({ user: null, loading: false, error: 'Erro inesperado ao carregar usuário.', connectionError: true })
+      setSessaoPerdida(false)
+      definirUsuario(res.user)
+      return res.user
+    } finally {
+      entrandoRef.current = false
     }
   }
 
-  async function handleSignIn(email: string, password: string) {
+  async function reentrar(login: string, password: string) {
+    const email = sanitizeEmailForAuth(loginParaEmail(login))
+    if (!login.trim() || !password) throw new Error('Preencha o CPF/e-mail e a senha.')
+    const anterior = userRef.current
+    entrandoRef.current = true
     try {
-      setState(prev => ({ ...prev, error: null }))
-
-      if (!email || !password) {
-        throw new Error('Email e senha são obrigatórios')
+      const r = await supabase.auth.signInWithPassword({ email, password })
+      if (r.error) throw new Error(traduzirErroLogin(r.error))
+      if (!r.data.user) throw new Error('Não foi possível entrar: resposta vazia do servidor.')
+      if (!anterior || r.data.user.id !== anterior.id) {
+        // Entrou OUTRA pessoa: a tela aberta era de outro usuário; recomeça do início.
+        window.location.assign('/')
+        return
       }
-
-      const sanitizedEmail = sanitizeEmailForAuth(email.trim().toLowerCase())
-      if (!validateEmail(sanitizedEmail)) {
-        throw new Error('Formato de email inválido')
+      const res = await buscarPerfil(r.data.user.id)
+      if (!res.ok && (res.tipo === 'inativo' || res.tipo === 'sem-perfil')) {
+        await sairSilencioso()
+        setSessaoPerdida(false)
+        definirUsuario(null, { error: res.mensagem })
+        return
       }
-
-      if (password.length > 128) {
-        throw new Error('Senha muito longa')
-      }
-
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: sanitizedEmail,
-        password: password,
-      })
-
-      if (error) {
-        console.error('Sign in error:', error)
-        if (error.message?.includes('Invalid login credentials')) {
-          throw new Error('Email ou senha inválidos')
-        } else if (error.message?.includes('Email not confirmed')) {
-          throw new Error('Email não confirmado')
-        } else if (error.message?.includes('Too many requests')) {
-          throw new Error('Muitas tentativas. Tente novamente em alguns minutos')
-        }
-        throw error
-      }
-
-      // Wait for user profile to be loaded after successful auth
-      if (data.session) {
-        await loadUser(data.session)
-      }
-
-    } catch (error) {
-      console.error('Sign in error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Erro ao fazer login'
-      setState(prev => ({ ...prev, error: errorMessage }))
-      throw error instanceof Error ? error : new Error('Erro ao fazer login')
+      if (res.ok) definirUsuario(res.user)
+      setSessaoPerdida(false)
+    } finally {
+      entrandoRef.current = false
     }
   }
 
-  async function handleSignUp(email: string, password: string, fullName: string, role: string, departmentId?: string) {
-    try {
-      setState(prev => ({ ...prev, error: null }))
-      
-      // Validate inputs first
-      if (!email || !password || !fullName || !role) {
-        throw new Error('Todos os campos são obrigatórios')
-      }
-      
-      if (password.length < 8) {
-        throw new Error('A senha deve ter no mínimo 8 caracteres')
-      }
-      
-      if (password.length > 128) {
-        throw new Error('Senha muito longa')
-      }
-      
-      // Validação básica de senha - removendo validações muito restritivas
-      const hasUpperCase = /[A-Z]/.test(password)
-      const hasLowerCase = /[a-z]/.test(password)
-      const hasNumbers = /\d/.test(password)
-      
-      if (!hasUpperCase || !hasLowerCase || !hasNumbers) {
-        throw new Error('A senha deve conter pelo menos uma letra maiúscula, uma minúscula e um número')
-      }
-
-      const sanitizedEmail = sanitizeEmailForAuth(email)
-      const sanitizedFullName = sanitizeForDisplay(fullName.trim())
-
-      // Create the user in auth
-      const { data, error } = await supabase.auth.signUp({
-        email: sanitizedEmail,
-        password: password, // Don't trim passwords
-        options: {
-          data: {
-            full_name: sanitizedFullName,
-            role: role,
-          },
-          emailRedirectTo: `${window.location.origin}/login`
-        },
-      })
-
-      if (error) {
-        console.error('Sign up error:', error)
-        if (error.message.includes('User already registered')) {
-          throw new Error('Este e-mail já está cadastrado')
-        } else if (error.message.includes('Password should be at least')) {
-          throw new Error('Senha deve ter pelo menos 6 caracteres')
-        } else if (error.message.includes('Signup is disabled')) {
-          throw new Error('Cadastro está desabilitado')
-        }
-        throw error
-      }
-
-      if (!data.user) {
-        throw new Error('No user returned from sign up')
-      }
-
-      // Check if profile already exists
-      const { data: existingProfile } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', data.user.id)
-        .maybeSingle()
-
-      if (!existingProfile) {
-        // Create profile only if it doesn't exist
-        const { error: profileError } = await supabase
-          .from('users')
-          .insert({
-            id: data.user.id,
-            email: sanitizedEmail,
-            full_name: sanitizedFullName,
-            role: role,
-            ...(departmentId ? { department_id: departmentId } : {})
-          })
-
-        if (profileError) {
-          console.error('Error creating user profile:', profileError)
-          throw new Error('Erro ao criar perfil de usuário')
-        }
-      }
-
-      // Don't sign in automatically - redirect to login page
-      return
-    } catch (error) {
-      console.error('Sign up error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Erro ao criar conta'
-      setState(prev => ({ ...prev, error: errorMessage }))
-      if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        throw new Error('Erro de conexão ao criar usuário. Por favor, tente novamente.')
-      }
-      if (error instanceof Error) {
-        throw error
-      }
-      throw new Error('Erro ao criar conta')
-    }
+  // Autocadastro desligado em 16/09/2026 (DISABLE_SIGNUP no servidor): conta
+  // nova só pelo administrador (Edge Function admin-create-user).
+  async function handleSignUp(): Promise<void> {
+    throw new Error('O autocadastro está desativado. Procure o administrador do sistema.')
   }
 
   async function handleSignOut() {
-    try {
-      setState(prev => ({ ...prev, error: null }))
-      // Limpa o módulo ativo para que o próximo login force escolha explícita
-      localStorage.removeItem('sgi-active-module')
-      await supabase.auth.signOut()
-    } catch (error) {
-      console.error('Sign out error:', error)
-    } finally {
-      // Always clear state and force redirect
-      setState({ user: null, loading: false, error: null, connectionError: false })
-      setIsInitialized(false)
-      setInitializationAttempts(0)
-    }
+    // Limpa o módulo ativo para que o próximo login force escolha explícita
+    try { localStorage.removeItem('sgi-active-module') } catch { /* navegador sem storage */ }
+    setSessaoPerdida(false)
+    definirUsuario(null)
+    await sairSilencioso()
   }
 
-  const value = {
+  const value: AuthContextType = {
     ...state,
     checkConnection,
+    refreshUser,
     signIn: handleSignIn,
     signUp: handleSignUp,
     signOut: handleSignOut,
     clearError,
+    sessaoPerdida,
+    reentrar,
   }
 
   return (
-    <ErrorBoundary>
-      <AuthContext.Provider value={value}>
-        {children}
-      </AuthContext.Provider>
-    </ErrorBoundary>
+    <AuthContext.Provider value={value}>
+      {children}
+      {sessaoPerdida && state.user && <SessaoExpiradaModal />}
+    </AuthContext.Provider>
   )
 }

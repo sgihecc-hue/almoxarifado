@@ -1,7 +1,8 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { supabase } from '@/lib/supabase'
+import { exigirLinhas } from '@/lib/utils/seguro'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -9,8 +10,17 @@ import { Lock, ShieldCheck } from 'lucide-react'
 
 export function ChangePassword() {
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const location = useLocation()
+  const { user, refreshUser, signOut } = useAuth()
   const [loading, setLoading] = useState(false)
+  const salvandoRef = useRef(false)
+  // A senha já foi trocada no login, só faltou desligar a flag no cadastro:
+  // no "salvar de novo" não troca a senha outra vez (daria "senha igual").
+  const senhaJaTrocadaRef = useRef(false)
+  const destino = (() => {
+    const from = (location.state as { from?: unknown } | null)?.from
+    return typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') && from !== '/change-password' ? from : '/'
+  })()
   const [error, setError] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -29,28 +39,48 @@ export function ChangePassword() {
       return
     }
 
+    if (salvandoRef.current || !user?.id) return
+    salvandoRef.current = true
     setLoading(true)
+    let senhaTrocada = senhaJaTrocadaRef.current
     try {
-      // Update password in Supabase Auth
-      const { error: authError } = await supabase.auth.updateUser({
-        password: newPassword,
-      })
+      if (!senhaJaTrocadaRef.current) {
+        // Update password in Supabase Auth
+        const { error: authError } = await supabase.auth.updateUser({
+          password: newPassword,
+        })
 
-      if (authError) throw authError
-
-      // Clear the must_change_password flag
-      if (user?.id) {
-        await supabase
-          .from('users')
-          .update({ must_change_password: false })
-          .eq('id', user.id)
+        if (authError) throw authError
+        senhaTrocada = true
+        senhaJaTrocadaRef.current = true
       }
 
-      navigate('/')
+      // Desliga a exigência. Antes o resultado era ignorado: se falhasse, a
+      // pessoa seguia e caía de novo na troca no próximo login.
+      exigirLinhas(await supabase
+        .from('users')
+        .update({ must_change_password: false })
+        .eq('id', user.id)
+        .select('id'))
+
+      await refreshUser()
+      navigate(destino, { replace: true })
     } catch (err) {
       console.error('Error changing password:', err)
-      setError('Erro ao alterar senha. Tente novamente.')
+      const msg = err instanceof Error ? err.message : ''
+      if (senhaTrocada) {
+        setError('A nova senha foi salva, mas não foi possível registrar a troca no seu cadastro. Clique em salvar de novo.')
+      } else if (/same|different from the old/i.test(msg)) {
+        setError('A nova senha precisa ser diferente da senha atual.')
+      } else if (/weak|at least/i.test(msg)) {
+        setError('Senha fraca: use pelo menos 8 caracteres.')
+      } else if (/fetch|network/i.test(msg)) {
+        setError('Sem conexão com o servidor. Tente de novo.')
+      } else {
+        setError(`Erro ao alterar senha: ${msg || 'tente novamente.'}`)
+      }
     } finally {
+      salvandoRef.current = false
       setLoading(false)
     }
   }
@@ -116,6 +146,13 @@ export function ChangePassword() {
           >
             {loading ? 'Salvando...' : 'Salvar Nova Senha'}
           </Button>
+          <button
+            type="button"
+            onClick={async () => { await signOut(); navigate('/login', { replace: true }) }}
+            className="w-full text-sm text-gray-500 hover:text-gray-700"
+          >
+            Sair
+          </button>
         </form>
       </div>
     </div>

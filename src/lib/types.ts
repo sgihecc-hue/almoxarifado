@@ -14,6 +14,10 @@ export interface User {
   created_at: string
   updated_at?: string
   deleted_at?: string | null
+  is_active?: boolean | null
+  must_change_password?: boolean | null
+  cpf?: string | null
+  matricula?: string | null
 }
 
 export interface Item {
