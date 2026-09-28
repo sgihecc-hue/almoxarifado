@@ -1,3 +1,4 @@
+import { termoIlike } from '@/lib/utils/seguro'
 import { supabase } from '../supabase'
 
 // Carros de emergência (A, B, C, D). O carro NÃO é um stock_location: ele
@@ -212,7 +213,8 @@ class EmergencyCartsService {
   async searchCatalog(term: string, limit = 20): Promise<CatalogOption[]> {
     const q = term.trim()
     if (q.length < 2) return []
-    const like = `%${q}%`
+    // termoIlike: virgula/parenteses no termo quebravam o .or() (400)
+    const like = termoIlike(q)
 
     const [pharm, ware] = await Promise.all([
       supabase.from('pharmacy_items')

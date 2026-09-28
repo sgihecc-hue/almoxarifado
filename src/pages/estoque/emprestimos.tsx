@@ -5,7 +5,8 @@
 // Categorias: emprestimo | doacao | permuta | troca_validade
 // =====================================================================
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { dataBR, lerQuantidade } from '@/lib/utils/seguro'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -69,7 +70,8 @@ interface PharmacyItemRow {
 
 // ---------- Helpers ----------
 
-const fmtDate = (iso: string) =>
+// 'YYYY-MM-DD' (validade) sem passar por new Date(): em UTC-3 mostrava o dia anterior.
+const fmtDate = (iso: string) => /^\d{4}-\d{2}-\d{2}$/.test(iso) ? dataBR(iso) :
   new Date(iso).toLocaleDateString('pt-BR', {
     day: '2-digit',
     month: '2-digit',
@@ -131,6 +133,7 @@ export function EmprestimosAbertos() {
   // ---------- Modal ----------
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
+  const salvandoRef = useRef(false)
   const [formError, setFormError] = useState('')
 
   const [destino, setDestino] = useState('')
@@ -246,6 +249,7 @@ export function EmprestimosAbertos() {
   // ---------- Salvar ----------
 
   const handleSave = async () => {
+    if (salvandoRef.current) return
     setFormError('')
     if (!destino.trim()) {
       setFormError('Destino obrigatorio.')
@@ -266,6 +270,7 @@ export function EmprestimosAbertos() {
       }
     }
 
+    salvandoRef.current = true
     setSaving(true)
     try {
       const { data: loanData, error: loanErr } = await supabase
@@ -303,6 +308,7 @@ export function EmprestimosAbertos() {
     } catch (e: any) {
       setFormError(getErrorMessage(e))
     } finally {
+      salvandoRef.current = false
       setSaving(false)
     }
   }
@@ -959,14 +965,14 @@ function FormItemRow({
         <div>
           <label style={labelStyle}>Quantidade *</label>
           <input
-            type="number"
-            min={1}
+            type="text"
+            inputMode="numeric"
             style={inputStyle}
-            value={item.quantity}
+            value={item.quantity || ''}
             onChange={(e) =>
-              onUpdate({ quantity: parseInt(e.target.value) || 1 })
+              // vazio fica vazio (antes parseInt(v)||1 fazia "5" virar "15")
+              onUpdate({ quantity: lerQuantidade(e.target.value) ?? 0 })
             }
-            onWheel={(e) => e.currentTarget.blur()}
           />
         </div>
 

@@ -3,7 +3,7 @@
 // Tipico: Satelite 1 <-> Satelite 2 (mas tambem CAF -> Satelite manualmente, etc).
 // =====================================================================
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, AlertCircle, Search, Loader2, ArrowRightLeft, Plus, Trash2 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth'
@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
 import { stockService } from '@/lib/services/stock'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { lerQuantidade } from '@/lib/utils/seguro'
 import type { StockLocation, ItemStock } from '@/lib/types/stock'
 
 interface ItemRow {
@@ -25,7 +26,7 @@ interface TransferLine {
   item_id: string
   item_name: string
   unit: string
-  quantity: number
+  quantity: string // texto digitado (lerQuantidade ao validar)
   unit_cost: number | null
   available_at_source: number | null
 }
@@ -65,6 +66,8 @@ export function Transferencia() {
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const enviandoRef = useRef(false)
+  const chaveRef = useRef<string>(crypto.randomUUID())
 
   useEffect(() => {
     ;(async () => {
@@ -81,12 +84,13 @@ export function Transferencia() {
       } catch (e: any) {
         setError(getErrorMessage(e))
       }
-      const { data } = await supabase
+      const { data, error: err } = await supabase
         .from('pharmacy_items')
         .select('id, code, name, unit, price')
         .eq('is_active', true)
         .order('name')
         .limit(2000)
+      if (err) setError('Erro ao carregar os medicamentos: ' + getErrorMessage(err))
       setItems((data || []) as ItemRow[])
     })()
   }, [])
@@ -108,13 +112,14 @@ export function Transferencia() {
       available = row?.quantity ?? 0
     } catch { /* ignora */ }
     setLines((prev) => [...prev, {
-      item_id: i.id, item_name: i.name, unit: i.unit, quantity: 1,
+      item_id: i.id, item_name: i.name, unit: i.unit, quantity: '1',
       unit_cost: i.price ?? null, available_at_source: available,
     }])
     setSearch('')
   }
-  const updateQty = (id: string, q: number) =>
-    setLines((prev) => prev.map((l) => (l.item_id === id ? { ...l, quantity: Math.max(1, q) } : l)))
+  const updateQty = (id: string, q: string) =>
+    setLines((prev) => prev.map((l) => (l.item_id === id ? { ...l, quantity: q } : l)))
+  const qtd = (l: TransferLine) => lerQuantidade(l.quantity)
   const removeLine = (id: string) => setLines((prev) => prev.filter((l) => l.item_id !== id))
 
   // Recarrega disponibilidade ao trocar de origem
@@ -137,27 +142,35 @@ export function Transferencia() {
   }, [sourceId])
 
   const canSubmit = !!sourceId && !!targetId && sourceId !== targetId && !!user?.id && lines.length > 0 &&
-    lines.every((l) => l.quantity > 0 && (l.available_at_source === null || l.quantity <= l.available_at_source))
+    lines.every((l) => { const q = qtd(l); return q !== null && q > 0 && (l.available_at_source === null || q <= l.available_at_source) })
 
   const handleSubmit = async () => {
-    if (!canSubmit || !user?.id) return
+    if (!canSubmit || !user?.id || enviandoRef.current) return
+    const source = locations.find((l) => l.id === sourceId)
+    if (!source) return
+    enviandoRef.current = true
     setSubmitting(true)
     setError('')
     try {
-      await stockService.createTransfer({
-        source_location_id: sourceId,
-        target_location_id: targetId,
-        performed_by: user.id,
-        notes: notes.trim() || null,
-        items: lines.map((l) => ({
-          item_id: l.item_id, item_type: 'pharmacy',
-          quantity: l.quantity, unit_cost: l.unit_cost,
-        })),
+      // Uma transacao no banco (antes eram 2+2N chamadas do navegador, sem
+      // lote): sai da satelite pelos lotes (FEFO, sem vencidos) e entra na CAF
+      // no mesmo lote, ligada a saida — a reversao desfaz os dois lados.
+      const { error: rpcErr } = await supabase.rpc('registrar_saida_lote', {
+        p_item_type: 'pharmacy',
+        p_reason: 'transferencia',
+        p_items: lines.map((l) => ({ item_id: l.item_id, quantity: qtd(l) })),
+        p_reason_detail: null,
+        p_notes: notes.trim() || null,
+        p_location_code: source.code,
+        p_destino_tipo: 'estoque_interno',
+        p_destino_nome: 'CAF',
+        p_chave: chaveRef.current,
       })
+      if (rpcErr) throw rpcErr
       navigate('/inventory/pharmacy')
     } catch (e: any) {
       setError(getErrorMessage(e))
-    } finally {
+      enviandoRef.current = false
       setSubmitting(false)
     }
   }
@@ -261,7 +274,8 @@ export function Transferencia() {
               </thead>
               <tbody>
                 {lines.map((l) => {
-                  const overflow = l.available_at_source !== null && l.quantity > l.available_at_source
+                  const q = qtd(l)
+                  const overflow = q === null || q <= 0 || (l.available_at_source !== null && q > l.available_at_source)
                   return (
                     <tr key={l.item_id}>
                       <td className="p-2 text-sm" style={{ color: txt }}>
@@ -272,9 +286,8 @@ export function Transferencia() {
                       </td>
                       <td className="p-2">
                         <input
-                          type="number" min={1} value={l.quantity}
-                          onChange={(e) => updateQty(l.item_id, parseInt(e.target.value) || 1)}
-                          onWheel={(e) => e.currentTarget.blur()}
+                          type="text" inputMode="numeric" value={l.quantity}
+                          onChange={(e) => updateQty(l.item_id, e.target.value)}
                           style={{ ...inputStyle, padding: '4px 8px', textAlign: 'right',
                             borderColor: overflow ? '#ef4444' : undefined }}
                         />

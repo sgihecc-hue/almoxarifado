@@ -9,7 +9,7 @@
 // lote, saldo, movimento e status numa transação só.
 // =====================================================================
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '@/contexts/theme'
 import { useAuth } from '@/contexts/auth'
@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
 import { stockService } from '@/lib/services/stock'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { hojeLocal, lerQuantidade } from '@/lib/utils/seguro'
 import type { StockLocation } from '@/lib/types/stock'
 
 export const MOTIVO_OPTIONS = [
@@ -50,6 +51,8 @@ interface ReturnLine {
   item_name: string
   unit: string
   quantity: number
+  // texto digitado; quantity = lerQuantidade(texto) (parseInt||1 fazia 5 virar 15)
+  quantidade_texto: string
   batch_number: string
   expiry_date: string
 }
@@ -140,7 +143,10 @@ export function DevolucaoInterna() {
   const [prontuario, setProntuario] = useState('')
   const [motivo, setMotivo] = useState<MotivoValue>('')
   const [observacao, setObservacao] = useState('')
-  const [returnDate, setReturnDate] = useState(new Date().toISOString().slice(0, 10))
+  // Data local: toISOString() vira "amanha" depois das 21h e o banco recusava
+  // "data futura" no plantao noturno.
+  const enviandoRef = useRef(false)
+  const [returnDate, setReturnDate] = useState(hojeLocal())
   const [lines, setLines] = useState<ReturnLine[]>([])
   const [search, setSearch] = useState('')
   const [items, setItems] = useState<ItemRow[]>([])
@@ -269,12 +275,12 @@ export function DevolucaoInterna() {
   const addItem = (i: ItemRow) => {
     setLines((prev) => [
       ...prev,
-      { uid: crypto.randomUUID(), item_id: i.id, item_name: i.name, unit: i.unit, quantity: 1, batch_number: '', expiry_date: '' },
+      { uid: crypto.randomUUID(), item_id: i.id, item_name: i.name, unit: i.unit, quantity: 1, quantidade_texto: '1', batch_number: '', expiry_date: '' },
     ])
     setSearch('')
   }
-  const updateQty = (uid: string, q: number) =>
-    setLines((prev) => prev.map((l) => (l.uid === uid ? { ...l, quantity: Math.max(1, q) } : l)))
+  const updateQty = (uid: string, texto: string) =>
+    setLines((prev) => prev.map((l) => (l.uid === uid ? { ...l, quantidade_texto: texto, quantity: lerQuantidade(texto) ?? 0 } : l)))
   const setBatch = (uid: string, v: string) =>
     setLines((prev) => prev.map((l) => (l.uid === uid ? { ...l, batch_number: v } : l)))
   const setValidade = (uid: string, v: string) =>
@@ -290,7 +296,8 @@ export function DevolucaoInterna() {
     motivo !== ''
 
   const handleSubmit = async () => {
-    if (!canSubmit) return
+    if (!canSubmit || enviandoRef.current) return
+    enviandoRef.current = true
     setSubmitting(true)
     setError('')
     setSuccess('')
@@ -324,6 +331,7 @@ export function DevolucaoInterna() {
     } catch (e: any) {
       setError(getErrorMessage(e))
     } finally {
+      enviandoRef.current = false
       setSubmitting(false)
     }
   }
@@ -515,7 +523,7 @@ export function DevolucaoInterna() {
                   </div>
                   <div>
                     <label style={labelStyle}>Data da Devolução <span style={{ color: '#ef4444' }}>*</span></label>
-                    <input type="date" value={returnDate} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setReturnDate(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }} />
+                    <input type="date" value={returnDate} max={hojeLocal()} onChange={(e) => setReturnDate(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }} />
                   </div>
                 </div>
 
@@ -588,10 +596,9 @@ export function DevolucaoInterna() {
                             </td>
                             <td className="p-2">
                               <input
-                                type="number" min={1} value={l.quantity}
-                                onChange={(e) => updateQty(l.uid, parseInt(e.target.value) || 1)}
-                                onWheel={(e) => e.currentTarget.blur()}
-                                style={{ ...inputStyle, padding: '4px 8px', textAlign: 'right' }}
+                                type="text" inputMode="numeric" value={l.quantidade_texto}
+                                onChange={(e) => updateQty(l.uid, e.target.value)}
+                                style={{ ...inputStyle, padding: '4px 8px', textAlign: 'right', borderColor: l.quantity > 0 ? undefined : '#ef4444' }}
                               />
                             </td>
                             <td className="p-2">
