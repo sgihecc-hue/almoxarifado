@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
-import { buscarTodas, fimDiaISO, hojeLocal, inicioDiaISO, normalizarBusca } from '@/lib/utils/seguro'
+import { buscarTodas, dataBR, fimDiaISO, hojeLocal, inicioDiaISO, normalizarBusca } from '@/lib/utils/seguro'
 import { format, subDays } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 
@@ -267,13 +267,13 @@ export function MovementsReport() {
           (r.item_name || '').replace(/;/g, ','),
           r.unit || '',
           fmtNum(r.quantity),
-          r.unit_price != null ? r.unit_price.toFixed(2).replace('.', ',') : '',
-          r.total_value != null ? r.total_value.toFixed(2).replace('.', ',') : '',
+          r.unit_price != null ? Number(r.unit_price).toFixed(2).replace('.', ',') : '',
+          r.total_value != null ? Number(r.total_value).toFixed(2).replace('.', ',') : '',
           (r.origin_or_destination || '').replace(/;/g, ','),
           r.invoice_number || '',
           r.afm_number || '',
           r.batch_number || '',
-          r.expiry_date || '',
+          r.expiry_date ? dataBR(r.expiry_date) : '',
           (r.notes || '').replace(/;/g, ',').replace(/\n/g, ' '),
         ].join(';')
       )

@@ -38,16 +38,6 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
   const { activeModule: ctxModule, activeStock } = useModule()
   const activeModule = moduleProp ?? ctxModule ?? undefined
 
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <p className="text-gray-500">Carregando...</p>
-        </div>
-      </div>
-    )
-  }
-
   const isAdmin = user?.role === 'administrador'
   const isManager = user?.role === 'gestor'
   const isAtendente = user?.role === 'atendente'
@@ -57,6 +47,7 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
   const [expiringItems, setExpiringItems] = useState<any[]>([])
   const [loadingExpiry, setLoadingExpiry] = useState(false)
   const [resolvingIds, setResolvingIds] = useState<Set<string>>(new Set())
+  const [erroVencimentos, setErroVencimentos] = useState<string | null>(null)
 
   const canResolveExpiry = String(user?.role) === 'pharmacist' || isAdmin || isManager
   // O card de validades mostra os itens DO MÓDULO atual: no almoxarifado os
@@ -68,6 +59,7 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
 
   async function loadExpiring() {
     setLoadingExpiry(true)
+    setErroVencimentos(null)
     try {
       // Isolamento por estoque: se há um estoque ativo (CAF/satélite), mostra
       // só os vencimentos DELE. Sem estoque ativo (admin na visão geral do
@@ -84,10 +76,20 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
         // da farmácia. Na farmácia (ou default) => 'pharmacy'; no almox =>
         // 'warehouse'. Para a farmácia o efeito é o mesmo da produção.
         expiryQuery,
-        supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
+        // Mesma tabela de resolucao que a tela de Vencimentos do modulo usa:
+        // o almox resolve em warehouse_expiry_resolutions (a view empresta o
+        // warehouse_items.id como expiry_tracking_id). Antes o dashboard lia e
+        // gravava expiry_alert_resolutions tambem no almox: alerta resolvido
+        // numa tela voltava na outra.
+        expiryItemType === 'warehouse'
+          ? supabase.from('warehouse_expiry_resolutions').select('warehouse_item_id, color_band')
+          : supabase.from('expiry_alert_resolutions').select('expiry_tracking_id, color_band'),
       ])
+      if (alertRes.error) throw alertRes.error
+      if (resolutionsRes.error) throw resolutionsRes.error
       const resolved = new Set<string>(
-        (resolutionsRes.data || []).map((r: any) => `${r.expiry_tracking_id}__${r.color_band}`)
+        (resolutionsRes.data || []).map((r: any) =>
+          `${expiryItemType === 'warehouse' ? r.warehouse_item_id : r.expiry_tracking_id}__${r.color_band}`)
       )
       const unresolved = (alertRes.data || []).filter(
         (r: any) => !resolved.has(`${r.expiry_tracking_id}__${r.color_band}`)
@@ -95,6 +97,8 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
       setExpiringItems(unresolved)
     } catch (e) {
       console.error('Error loading expiring items:', e)
+      setExpiringItems([])
+      setErroVencimentos('Não foi possível carregar os vencimentos.')
     } finally {
       setLoadingExpiry(false)
     }
@@ -115,15 +119,24 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
     const key = `${trackingId}__${colorBand}`
     setResolvingIds(prev => new Set(prev).add(key))
     try {
-      await supabase.from('expiry_alert_resolutions').insert({
-        expiry_tracking_id: trackingId,
-        color_band: colorBand,
-        resolved_by: user.id,
-      })
+      const { error: eRes } = expiryItemType === 'warehouse'
+        ? await supabase.from('warehouse_expiry_resolutions').insert({
+            warehouse_item_id: trackingId,
+            color_band: colorBand,
+            resolved_by: user.id,
+          })
+        : await supabase.from('expiry_alert_resolutions').insert({
+            expiry_tracking_id: trackingId,
+            color_band: colorBand,
+            resolved_by: user.id,
+          })
+      // Erro nao pode sumir o alerta da tela como se tivesse resolvido.
+      if (eRes) throw eRes
       // Remove imediatamente da lista
       setExpiringItems(prev => prev.filter(i => `${i.expiry_tracking_id}__${i.color_band}` !== key))
     } catch (e) {
       console.error('Error resolving expiry alert:', e)
+      setErroVencimentos('Não foi possível marcar o alerta como resolvido. Tente de novo.')
     } finally {
       setResolvingIds(prev => { const n = new Set(prev); n.delete(key); return n })
     }
@@ -162,6 +175,18 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
     transition: 'all 0.2s',
   }
 
+  // Retorno condicional so DEPOIS de todos os hooks (antes ficava no topo e
+  // mudava a ordem dos hooks entre renderizacoes -> erro do React).
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <p className="text-gray-500">Carregando...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <ErrorBoundary>
     <div className="space-y-8">
@@ -185,6 +210,12 @@ export function Dashboard({ module: moduleProp }: DashboardProps) {
       </div>
 
       {/* Alerta de Validade — itens do módulo atual (farmácia ou almoxarifado) */}
+      {canManageRequests && erroVencimentos && (
+        <div className="p-3 rounded-xl text-sm flex items-center justify-between gap-3" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}>
+          <span>{erroVencimentos}</span>
+          <Button variant="outline" size="sm" onClick={loadExpiring}>Tentar de novo</Button>
+        </div>
+      )}
       {canManageRequests && !loadingExpiry && expiringItems.length > 0 && (() => {
         const bandLabel: Record<string, string> = { '1m': 'Vence em até 1 mês', '3m': 'Vence em até 3 meses', '6m': 'Vence em até 6 meses' }
         const bandColor: Record<string, { fg: string; bg: string; border: string }> = {

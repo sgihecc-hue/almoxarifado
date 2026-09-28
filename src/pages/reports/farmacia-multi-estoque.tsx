@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
 import { stockService } from '@/lib/services/stock'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { buscarTodas, hojeLocal } from '@/lib/utils/seguro'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 
@@ -58,6 +59,11 @@ export function FarmaciaMultiEstoqueReport() {
   }
 
   const [tab, setTab] = useState<Tab>('prontuario')
+  // Periodo por mes (as views sao mensais). Antes: .limit(500) sem ordem e
+  // sem periodo — o total somava meses e modulos misturados, e cortava.
+  const mesAtual = hojeLocal().slice(0, 7)
+  const [mesDe, setMesDe] = useState(mesAtual)
+  const [mesAte, setMesAte] = useState(mesAtual)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [rows, setRows] = useState<any[]>([])
@@ -83,9 +89,24 @@ export function FarmaciaMultiEstoqueReport() {
         parado: 'v_valor_parado',
         perdas: 'v_perdas',
       }[which]
-      const { data, error } = await supabase.from(view).select('*').limit(500)
-      if (error) throw error
-      const rowsList = data || []
+      // Ordem completa pela chave de agrupamento de cada view: a paginacao
+      // precisa de ordem estavel para nao pular/repetir linha.
+      const ordem: Record<Tab, string[]> = {
+        prontuario: ['mes', 'medical_record_number', 'item_id'],
+        local: ['mes', 'source_location_id', 'movement_type'],
+        usuario: ['mes', 'user_id', 'movement_type'],
+        global: ['mes', 'item_id'],
+        parado: ['location_id'],
+        perdas: ['mes', 'source_location_id', 'reason'],
+      }
+      if (mesDe > mesAte) throw new Error('O mês inicial deve ser anterior ou igual ao mês final.')
+      const rowsList = await buscarTodas<any>((de, ate) => {
+        // So farmacia (as views tambem trazem movimentos do almoxarifado)
+        let q = supabase.from(view).select('*').eq('item_type', 'pharmacy')
+        if (which !== 'parado') q = q.gte('mes', `${mesDe}-01`).lte('mes', `${mesAte}-01`)
+        for (const c of ordem[which]) q = q.order(c, { ascending: c !== 'mes', nullsFirst: false })
+        return q.range(de, ate)
+      })
       setRows(rowsList)
 
       // Buscar nomes de itens (para views que usam item_id)
@@ -94,14 +115,16 @@ export function FarmaciaMultiEstoqueReport() {
         const map = new Map<string, string>()
         const pharm = rowsList.filter((r: any) => r.item_type === 'pharmacy').map((r: any) => r.item_id)
         const ware = rowsList.filter((r: any) => r.item_type === 'warehouse').map((r: any) => r.item_id)
-        if (pharm.length > 0) {
-          const { data: pdata } = await supabase.from('pharmacy_items').select('id, name').in('id', pharm)
-          ;(pdata || []).forEach((p: any) => map.set(p.id, p.name))
+        const nomes = async (tabela: string, lista: string[]) => {
+          const unicos = [...new Set(lista)]
+          for (let i = 0; i < unicos.length; i += 300) {
+            const { data: d, error: e } = await supabase.from(tabela).select('id, name').in('id', unicos.slice(i, i + 300))
+            if (e) throw e
+            ;(d || []).forEach((p: any) => map.set(p.id, p.name))
+          }
         }
-        if (ware.length > 0) {
-          const { data: wdata } = await supabase.from('warehouse_items').select('id, name').in('id', ware)
-          ;(wdata || []).forEach((w: any) => map.set(w.id, w.name))
-        }
+        await nomes('pharmacy_items', pharm)
+        await nomes('warehouse_items', ware)
         setItemNames(map)
       } else {
         setItemNames(new Map())
@@ -114,7 +137,7 @@ export function FarmaciaMultiEstoqueReport() {
     }
   }
 
-  useEffect(() => { load(tab) }, [tab])
+  useEffect(() => { load(tab) }, [tab, mesDe, mesAte])
 
   const handleExport = () => {
     if (rows.length === 0) return
@@ -128,7 +151,7 @@ export function FarmaciaMultiEstoqueReport() {
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, TAB_LABELS[tab])
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-    saveAs(new Blob([buf]), `relatorio_${tab}_${new Date().toISOString().slice(0,10)}.xlsx`)
+    saveAs(new Blob([buf]), `relatorio_${tab}_${tab === 'parado' ? hojeLocal() : `${mesDe}_a_${mesAte}`}.xlsx`)
   }
 
   // Totais (consumo, custo, perda)
@@ -179,6 +202,23 @@ export function FarmaciaMultiEstoqueReport() {
           ))}
         </div>
 
+        {/* Periodo */}
+        {tab !== 'parado' && (
+          <div className="flex flex-wrap items-end gap-3 mt-4 text-sm" style={{ color: txtSec }}>
+            <label className="flex flex-col gap-1">
+              Mês inicial
+              <input type="month" value={mesDe} onChange={(e) => e.target.value && setMesDe(e.target.value)}
+                className="rounded-md border px-2 py-1" style={{ color: txt, background: 'transparent' }} />
+            </label>
+            <label className="flex flex-col gap-1">
+              Mês final
+              <input type="month" value={mesAte} onChange={(e) => e.target.value && setMesAte(e.target.value)}
+                className="rounded-md border px-2 py-1" style={{ color: txt, background: 'transparent' }} />
+            </label>
+            <span className="text-xs" style={{ color: txtMut }}>Somente itens da farmácia.</span>
+          </div>
+        )}
+
         {/* Resumo */}
         {!loading && rows.length > 0 && (
           <div className="grid grid-cols-3 gap-4 mt-4">
@@ -209,7 +249,8 @@ export function FarmaciaMultiEstoqueReport() {
       {/* Erro */}
       {error && (
         <div className="p-4 rounded-xl bg-red-100 border border-red-200 flex items-center gap-2 text-red-800 text-sm">
-          <AlertCircle size={16} /> {error}
+          <AlertCircle size={16} /> <span className="flex-1">{error}</span>
+          <Button variant="outline" size="sm" onClick={() => load(tab)}>Tentar de novo</Button>
         </div>
       )}
 
@@ -219,6 +260,8 @@ export function FarmaciaMultiEstoqueReport() {
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin" style={{ color: txtMut }} />
           </div>
+        ) : error ? (
+          <div className="text-center py-12 text-sm" style={{ color: '#ef4444' }}>Dados não carregados.</div>
         ) : rows.length === 0 ? (
           <div className="text-center py-12">
             <FileText className="w-10 h-10 mx-auto mb-3" style={{ color: txtMut }} />

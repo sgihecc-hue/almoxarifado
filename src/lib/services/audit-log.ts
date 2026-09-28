@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { fimDiaISO, inicioDiaISO } from '../utils/seguro'
 
 export type AuditOrigem = 'audit' | 'stock'
 
@@ -22,40 +23,36 @@ export interface AuditLogFilters {
   action?: string
   search?: string
   limit?: number
+  offset?: number
 }
 
 class AuditLogService {
   async list(filters: AuditLogFilters = {}): Promise<AuditLogEntry[]> {
+    // Busca e filtros NO SERVIDOR (antes: 500 linhas mais recentes e busca no
+    // navegador — ~17h de cobertura; evento mais antigo "nao existia").
+    // Datas com fuso -03:00. Paginado por offset/limit ("Carregar mais").
+    const limite = filters.limit ?? 500
+    const de = filters.offset ?? 0
     let q = supabase
       .from('v_global_audit_log')
-      .select('*')
+      .select('ts, actor_id, actor_name, origem, action, entity, entity_id, details')
       .order('ts', { ascending: false })
+      .order('entity_id', { ascending: true })
 
-    if (filters.dateFrom) q = q.gte('ts', `${filters.dateFrom}T00:00:00`)
-    if (filters.dateTo) q = q.lte('ts', `${filters.dateTo}T23:59:59`)
+    if (filters.dateFrom) q = q.gte('ts', inicioDiaISO(filters.dateFrom))
+    if (filters.dateTo) q = q.lte('ts', fimDiaISO(filters.dateTo))
     if (filters.actorId) q = q.eq('actor_id', filters.actorId)
     if (filters.origem) q = q.eq('origem', filters.origem)
     if (filters.entity) q = q.eq('entity', filters.entity)
     if (filters.action) q = q.eq('action', filters.action)
-    q = q.limit(filters.limit ?? 500)
-
-    const { data, error } = await q
-    if (error) throw error
-
-    let rows = (data || []) as AuditLogEntry[]
-
     if (filters.search?.trim()) {
-      const needle = filters.search.toLowerCase()
-      rows = rows.filter(
-        (r) =>
-          r.entity_id?.toLowerCase().includes(needle) ||
-          r.entity?.toLowerCase().includes(needle) ||
-          r.actor_name?.toLowerCase().includes(needle) ||
-          JSON.stringify(r.details || {}).toLowerCase().includes(needle)
-      )
+      const termo = filters.search.trim().replace(/[%_*\\]/g, ' ')
+      q = q.ilike('busca_texto', `%${termo}%`)
     }
 
-    return rows
+    const { data, error } = await q.range(de, de + limite - 1)
+    if (error) throw error
+    return (data || []) as AuditLogEntry[]
   }
 
   async listActors(): Promise<Array<{ id: string; full_name: string }>> {

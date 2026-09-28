@@ -11,6 +11,7 @@
 // =====================================================================
 
 import { supabase } from '@/lib/supabase'
+import { buscarTodas, fimDiaISO, inicioDiaISO } from '@/lib/utils/seguro'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,8 +87,11 @@ class BmpoService {
    * @param dataFim     data final inclusiva (YYYY-MM-DD)
    */
   async computeBalanco(dataInicio: string, dataFim: string): Promise<BalancoRow[]> {
-    const inicioTs = `${dataInicio}T00:00:00`
-    const fimTs = `${dataFim}T23:59:59`
+    // Fuso -03:00: sem fuso o banco entende UTC e o corte do dia andava 3h
+    // (saida das 21h-23h59 do ultimo dia ficava de fora; a do dia anterior entrava).
+    const inicioTs = inicioDiaISO(dataInicio)
+    const fimTs = fimDiaISO(dataFim)
+    const inicioMs = new Date(inicioTs).getTime()
 
     // 1) Itens controlados da farmácia (medication_class === 'controlados')
     const { data: itemsData, error: itemsErr } = await supabase
@@ -111,19 +115,31 @@ class BmpoService {
 
     // 2) Movimentações até o FIM do período (uma só leitura),
     //    separando as anteriores ao início (estoque anterior) das do período.
-    const { data: movData, error: movErr } = await supabase
-      .from('stock_movements')
-      .select('item_id, direction, quantity, performed_at')
-      .in('item_id', itemIds)
-      .lte('performed_at', fimTs)
-      .limit(100000)
-    if (movErr) throw movErr
+    //    Paginado (o .limit(100000) antigo parava em 1000, sem ordem).
+    //    Movimentos INTERNOS da farmacia ficam de fora: a reposicao CAF ->
+    //    satelite (SOLICITACAO) e a transferencia entre estoques internos
+    //    geram um par saida+entrada do mesmo produto dentro do hospital; o
+    //    BMPO e o balanco do estabelecimento, e o par inflava entradas e
+    //    saidas (saldo igual, colunas erradas).
+    const movData = await buscarTodas<MovementRow & { id: string }>((de, ate) =>
+      supabase
+        .from('stock_movements')
+        .select('id, item_id, direction, quantity, performed_at, movement_type, destino_tipo')
+        .in('item_id', itemIds)
+        .eq('item_type', 'pharmacy')
+        .lte('performed_at', fimTs)
+        .neq('movement_type', 'SOLICITACAO')
+        .or('movement_type.neq.TRANSFERENCIA,destino_tipo.is.null,destino_tipo.neq.estoque_interno')
+        .order('performed_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(de, ate) as unknown as PromiseLike<{ data: (MovementRow & { id: string })[] | null; error: unknown }>
+    )
 
-    for (const m of (movData || []) as MovementRow[]) {
+    for (const m of movData) {
       if (!m.item_id) continue
       const qty = Number(m.quantity ?? 0)
       if (!qty) continue
-      const isAntes = m.performed_at != null && m.performed_at < inicioTs
+      const isAntes = m.performed_at != null && new Date(m.performed_at).getTime() < inicioMs
 
       if (isAntes) {
         // estoque anterior = entradas - saídas antes do período
@@ -140,16 +156,18 @@ class BmpoService {
     }
 
     // 3) Perdas controladas no período (medication_losses)
-    const { data: lossData, error: lossErr } = await supabase
-      .from('medication_losses')
-      .select('item_id, quantity, created_at')
-      .eq('is_controlado', true)
-      .gte('created_at', inicioTs)
-      .lte('created_at', fimTs)
-      .limit(100000)
-    if (lossErr) throw lossErr
+    const lossData = await buscarTodas<LossRow & { id: string }>((de, ate) =>
+      supabase
+        .from('medication_losses')
+        .select('id, item_id, quantity, created_at')
+        .eq('is_controlado', true)
+        .gte('created_at', inicioTs)
+        .lte('created_at', fimTs)
+        .order('id')
+        .range(de, ate) as unknown as PromiseLike<{ data: (LossRow & { id: string })[] | null; error: unknown }>
+    )
 
-    for (const l of (lossData || []) as LossRow[]) {
+    for (const l of lossData) {
       if (!l.item_id) continue
       const qty = Number(l.quantity ?? 0)
       if (!qty) continue

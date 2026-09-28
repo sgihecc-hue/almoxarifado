@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
+import { dataBR, hojeLocal, normalizarBusca } from '@/lib/utils/seguro'
 
 // Teto de linhas por carga. A view tem ~5,6 mil linhas hoje; o teto existe para
 // a tela não travar se alguém pedir um período muito largo.
@@ -51,7 +52,10 @@ const TIPOS = [
   // Dispensação por requisição (pedido do setor). O estoque grava igual à
   // prescrição; a view separa pelo tipo da dispensação (16/09/2026).
   { valor: 'REQUISICAO', rotulo: 'Requisição', consumo: true },
-  { valor: 'SOLICITACAO', rotulo: 'Solicitação', consumo: true },
+  // Solicitacao = reposicao CAF -> satelite: o item so muda de estoque dentro
+  // da farmacia (a satelite depois dispensa). Contar como consumo somava a
+  // mesma unidade duas vezes (~70% a mais). Continua disponivel no filtro.
+  { valor: 'SOLICITACAO', rotulo: 'Solicitação (reposição interna)', consumo: false },
   { valor: 'SAIDA_AVULSA', rotulo: 'Saída avulsa', consumo: true },
   { valor: 'TRANSFERENCIA', rotulo: 'Transferência', consumo: false },
   { valor: 'DEVOLUCAO_INT', rotulo: 'Devolução interna', consumo: false },
@@ -72,9 +76,10 @@ function fmtData(d: string | null | undefined) {
   return new Date(d).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 }
 
+// 'YYYY-MM-DD' (validade) sem voltar um dia: new Date('YYYY-MM-DD') e
+// meia-noite UTC = dia anterior em UTC-3.
 function fmtDia(d: string | null | undefined) {
-  if (!d) return '—'
-  return new Date(d).toLocaleDateString('pt-BR')
+  return dataBR(d)
 }
 
 function fmtQtd(v: number | null | undefined) {
@@ -87,8 +92,9 @@ function fmtMoeda(v: number | null | undefined) {
   return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
+// Data local 'YYYY-MM-DD' (toISOString vira o dia seguinte depois das 21h)
 function iso(d: Date) {
-  return d.toISOString().slice(0, 10)
+  return hojeLocal(d)
 }
 
 function rotuloTipo(t: string | null) {
@@ -113,7 +119,9 @@ function dataValida(d: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) && Number(d.slice(0, 4)) >= 2020
 }
 
-const CHAVE_FILTROS = 'relatorio-consumo-farmacia:filtros'
+// v2 (28/09/2026): o periodo deixou de ser salvo (abria com um periodo velho
+// sem o usuario perceber) e a reposicao interna saiu do padrao de consumo.
+const CHAVE_FILTROS = 'relatorio-consumo-farmacia:filtros:v2'
 
 export function PharmacyConsumptionReport() {
   const { mode } = useTheme()
@@ -153,8 +161,9 @@ export function PharmacyConsumptionReport() {
 
   // ---- Filtros ----
   const hoje = new Date()
-  const [dataDe, setDataDe] = useState<string>(salvo.dataDe ?? iso(new Date(hoje.getTime() - 29 * 86400000)))
-  const [dataAte, setDataAte] = useState<string>(salvo.dataAte ?? iso(hoje))
+  // Periodo NAO e restaurado do navegador: sempre abre nos ultimos 30 dias.
+  const [dataDe, setDataDe] = useState<string>(iso(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - 29)))
+  const [dataAte, setDataAte] = useState<string>(iso(hoje))
   const [estoquesSel, setEstoquesSel] = useState<string[]>(Array.isArray(salvo.estoquesSel) ? salvo.estoquesSel : [])
   const [tiposSel, setTiposSel] = useState<string[]>(Array.isArray(salvo.tiposSel) ? salvo.tiposSel : TIPOS_PADRAO)
   const [busca, setBusca] = useState<string>(salvo.busca ?? '')
@@ -173,9 +182,9 @@ export function PharmacyConsumptionReport() {
   const [usuario, setUsuario] = useState<string>(salvo.usuario ?? '')
 
   useEffect(() => {
-    gravarFiltros(CHAVE_FILTROS, { dataDe, dataAte, estoquesSel, tiposSel, busca, classe, soControlados,
+    gravarFiltros(CHAVE_FILTROS, { estoquesSel, tiposSel, busca, classe, soControlados,
       soAltaVig, soTalidomida, soPadronizados, destinosSel, prontuario, usuario, modo })
-  }, [dataDe, dataAte, estoquesSel, tiposSel, busca, classe, soControlados, soAltaVig,
+  }, [estoquesSel, tiposSel, busca, classe, soControlados, soAltaVig,
       soTalidomida, soPadronizados, destinosSel, prontuario, usuario, modo])
 
   // Listas de opções (classe/destino/usuário) saem dos próprios dados carregados.
@@ -265,7 +274,7 @@ export function PharmacyConsumptionReport() {
   ])
 
   const filtradas = useMemo(() => {
-    const termo = busca.trim().toLowerCase()
+    const termo = normalizarBusca(busca)
     return rows.filter((r) => {
       if (tiposSel.length > 0 && !tiposSel.includes(r.tipo)) return false
       if (estoquesSel.length > 0 && !estoquesSel.includes(r.estoque_codigo ?? '')) return false
@@ -276,9 +285,9 @@ export function PharmacyConsumptionReport() {
       if (soAltaVig && !r.alta_vigilancia) return false
       if (soTalidomida && !r.talidomida) return false
       if (soPadronizados && !r.padronizado) return false
-      if (prontuario.trim() && !(r.prontuario ?? '').toLowerCase().includes(prontuario.trim().toLowerCase())) return false
+      if (prontuario.trim() && !normalizarBusca(r.prontuario).includes(normalizarBusca(prontuario))) return false
       if (termo) {
-        const alvo = `${r.item ?? ''} ${r.codigo ?? ''}`.toLowerCase()
+        const alvo = normalizarBusca(`${r.item ?? ''} ${r.codigo ?? ''}`)
         if (!alvo.includes(termo)) return false
       }
       return true
@@ -317,7 +326,7 @@ export function PharmacyConsumptionReport() {
       atual.saidas += 1
       mapa.set(chave, atual)
     }
-    return Array.from(mapa.values()).sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { sensitivity: 'base' }))
+    return Array.from(mapa.values()).sort((a, b) => (a.item ?? '').localeCompare(b.item ?? '', 'pt-BR', { sensitivity: 'base' }))
   }, [filtradas])
 
   const listaAtual: unknown[] = modo === 'resumo' ? resumo : filtradas
@@ -359,7 +368,7 @@ export function PharmacyConsumptionReport() {
       setDataDe(iso(new Date(agora.getFullYear(), agora.getMonth(), 1)))
       setDataAte(iso(agora)); return
     }
-    setDataDe(iso(new Date(agora.getTime() - (dias - 1) * 86400000)))
+    setDataDe(iso(new Date(agora.getFullYear(), agora.getMonth(), agora.getDate() - (dias - 1))))
     setDataAte(iso(agora))
   }
 

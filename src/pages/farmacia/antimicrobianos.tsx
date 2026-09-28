@@ -20,6 +20,7 @@ import {
   type Via,
 } from '@/lib/services/antimicrobial-controls'
 import { supabase } from '@/lib/supabase'
+import { hojeLocal, normalizarBusca } from '@/lib/utils/seguro'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 
 // ---------------------------------------------------------------------------
@@ -134,7 +135,7 @@ export function Antimicrobianos() {
     data_alta_obito: '', pharmacy_item_id: '', atb_nome: '',
     via: undefined, indicacao: '', justificativa: '', origem_infeccao: '',
     dose: '', posologia: '', tempo_previsto_dias: undefined,
-    data_inicio: new Date().toISOString().slice(0, 10),
+    data_inicio: hojeLocal(), // data local (toISOString vira amanha depois das 21h)
     data_final_prevista: '', data_final: '', dias_em_uso: undefined,
     status_antimicrobiano: 'em_uso', ccih_data_avaliacao: '',
     ccih_parecer: 'Aguardando', ccih_observacao: '', observacoes: '',
@@ -168,11 +169,12 @@ export function Antimicrobianos() {
   const filtered = useMemo(() => {
     let list = rows
     if (filterStatus) list = list.filter(r => r.status_antimicrobiano === filterStatus)
-    const q = search.trim().toLowerCase()
+    const q = normalizarBusca(search)
     if (q) list = list.filter(r =>
-      r.paciente_nome.toLowerCase().includes(q) ||
-      r.prontuario.toLowerCase().includes(q) ||
-      (r.atb_nome || '').toLowerCase().includes(q)
+      // prontuario/nome podem ser nulos: .toLowerCase() direto derrubava a tela
+      normalizarBusca(r.paciente_nome).includes(q) ||
+      normalizarBusca(r.prontuario).includes(q) ||
+      normalizarBusca(r.atb_nome).includes(q)
     )
     return list
   }, [rows, search, filterStatus])

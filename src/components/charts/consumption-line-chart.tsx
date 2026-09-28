@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { parseDataLocal } from '@/lib/utils/seguro'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -62,7 +63,8 @@ export function ConsumptionLineChart({
 
   // Format dates for display
   const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr)
+    // 'YYYY-MM-DD' sem voltar um dia (new Date('YYYY-MM-DD') = meia-noite UTC)
+    const date = parseDataLocal(dateStr) ?? new Date(dateStr)
     
     switch (period) {
       case 'daily':
