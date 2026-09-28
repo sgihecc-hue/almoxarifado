@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
-import { useAuth } from '@/contexts/auth'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate, useLocation, Navigate } from 'react-router-dom'
+import { useAuth, loginParaEmail } from '@/contexts/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -10,11 +10,18 @@ import hospitalImg from '@/assets/hospital-hecc.jpg.jpeg'
 export function Login() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { signIn, connectionError, checkConnection } = useAuth()
+  const { signIn, user, loading: authLoading, error: authError, clearError } = useAuth()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
-  const [isCheckingConnection, setIsCheckingConnection] = useState(false)
+  const enviandoRef = useRef(false)
+
+  // Para onde voltar depois do login (a ProtectedRoute guarda a tela pedida).
+  const destino = (() => {
+    const from = (location.state as { from?: unknown } | null)?.from
+    if (typeof from === 'string' && from.startsWith('/') && !from.startsWith('/login') && !from.startsWith('//')) return from
+    return '/'
+  })()
 
   useEffect(() => {
     // Check for success message from registration
@@ -37,81 +44,55 @@ export function Login() {
   useEffect(() => {
     const params = new URLSearchParams(location.search)
     if (params.get('session_expired') === '1') {
-      setError('Sua sessão expirou por inatividade. Faça login novamente para continuar.')
-      navigate(location.pathname, { replace: true })
+      setError('Sua sessão expirou. Faça login novamente para continuar.')
+      navigate(location.pathname, { replace: true, state: location.state })
     }
-  }, [location.search, location.pathname, navigate])
+  }, [location.search, location.pathname, location.state, navigate])
 
-  const handleConnectionCheck = async () => {
-    setIsCheckingConnection(true)
-    try {
-      await checkConnection()
-    } finally {
-      setIsCheckingConnection(false)
-    }
-  }
+  // Aviso vindo da abertura do app (usuário desativado, perfil não encontrado...)
+  useEffect(() => {
+    if (authError && !user) setError(authError)
+  }, [authError, user])
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (enviandoRef.current) return
+    enviandoRef.current = true
     setError('')
+    clearError()
     setLoading(true)
 
     try {
       const formData = new FormData(e.currentTarget)
-      const login = (formData.get('login') as string).trim()
-      const password = formData.get('password') as string
+      const login = ((formData.get('login') as string) || '').trim()
+      const password = (formData.get('password') as string) || ''
 
-      // Basic validation
       if (!login || !password) {
         setError('Por favor, preencha todos os campos')
-        setLoading(false)
         return
       }
 
-      // Determine if input is email or CPF
-      let email = login
-      if (!login.includes('@')) {
-        // CPF - remove dots and dashes, convert to email format
-        const cpfClean = login.replace(/[.\-\s]/g, '')
-        email = `${cpfClean}@hecc.local`
-      }
+      // CPF (com ou sem pontuação) vira CPF@hecc.local; e-mail vai como está
+      const perfil = await signIn(loginParaEmail(login), password)
 
-      await signIn(email, password)
-
-      // Check if user must change password
-      const { supabase } = await import('@/lib/supabase')
-      const { data: profile } = await supabase
-        .from('users')
-        .select('must_change_password')
-        .eq('email', email)
-        .maybeSingle()
-
-      if (profile?.must_change_password) {
-        navigate('/change-password')
+      if (perfil.must_change_password) {
+        navigate('/change-password', { replace: true, state: { from: destino } })
       } else {
-        navigate('/')
+        navigate(destino, { replace: true })
       }
     } catch (error) {
-      console.error('Login error:', error)
-      setError('CPF/Email ou senha invalidos')
+      // signIn já devolve a mensagem certa: senha errada, usuário desativado,
+      // sem conexão, muitas tentativas, perfil não encontrado...
+      setError(error instanceof Error ? error.message : 'Não foi possível entrar.')
     } finally {
+      enviandoRef.current = false
       setLoading(false)
     }
   }
 
-  // Show connection error if present
-  if (connectionError) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-6 text-center">
-          <h1 className="text-xl font-bold text-gray-900 mb-4">Erro de Conexão</h1>
-          <p className="text-gray-600 mb-6">Não foi possível conectar com o servidor</p>
-          <Button onClick={handleConnectionCheck} disabled={isCheckingConnection}>
-            {isCheckingConnection ? 'Verificando...' : 'Tentar Novamente'}
-          </Button>
-        </div>
-      </div>
-    )
+  // Já logado (ex.: voltou para /login pelo histórico): segue para o destino.
+  if (!authLoading && user && !loading) {
+    return <Navigate to={user.must_change_password ? '/change-password' : destino} replace />
   }
 
   return (

@@ -1,7 +1,32 @@
 import { supabase } from '../supabase';
 import type { Department } from '../types/departments';
+import { dataBR } from '../utils/seguro';
+
+/** Nome para comparar: sem acento, minúsculo, espaços simples. */
+function chaveNome(nome: string): string {
+  return nome.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+}
 
 class DepartmentsService {
+  /**
+   * Recusa nome de setor repetido (ignorando maiúsculas, acentos e espaços).
+   * Antes dava para criar "Almoxarifado" duas vezes — e o módulo do usuário
+   * é decidido pelo NOME do setor.
+   */
+  private async garantirNomeLivre(nome: string, ignorarId?: string): Promise<void> {
+    const chave = chaveNome(nome)
+    if (!chave) throw new Error('Informe o nome do setor.')
+    const { data, error } = await supabase.from('departments').select('id, name, is_active')
+    if (error) throw new Error('Não foi possível conferir se o nome já existe: ' + error.message)
+    const igual = (data || []).find((d: { id: string; name: string | null }) => d.id !== ignorarId && chaveNome(d.name ?? '') === chave) as
+      { id: string; name: string; is_active?: boolean | null } | undefined
+    if (igual) {
+      throw new Error(igual.is_active === false
+        ? `Já existe um setor desativado com este nome ("${igual.name}"). Reative-o em vez de criar outro.`
+        : `Já existe um setor com este nome ("${igual.name}").`)
+    }
+  }
+
   async getAll(): Promise<Department[]> {
     try {
       const { data, error } = await supabase
@@ -24,6 +49,7 @@ class DepartmentsService {
 
   async create(department: Omit<Department, 'id' | 'created_at'>): Promise<Department> {
     try {
+      await this.garantirNomeLivre(department.name ?? '')
       const { data, error } = await supabase
         .from('departments')
         .insert(department)
@@ -48,6 +74,7 @@ class DepartmentsService {
 
   async update(id: string, updates: Partial<Department>): Promise<Department> {
     try {
+      if (typeof updates.name === 'string') await this.garantirNomeLivre(updates.name, id)
       const { data, error } = await supabase
         .from('departments')
         .update(updates)
@@ -85,14 +112,19 @@ class DepartmentsService {
 
       // 2. Soft delete: marca setor como inativo
       // Mantem o registro para que solicitacoes antigas continuem com referencia
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('departments')
         .update({ is_active: false })
-        .eq('id', id);
+        .eq('id', id)
+        .select('id');
 
       if (error) {
         console.error('Erro ao excluir setor:', error);
         throw new Error('Erro ao excluir setor: ' + error.message);
+      }
+      // RLS que recusa devolve 0 linhas sem erro: não é "excluído".
+      if (!data || data.length === 0) {
+        throw new Error('Setor não foi excluído: sem permissão ou setor não encontrado.');
       }
     } catch (error) {
       console.error('DepartmentsService: Database error deleting department:', error);
@@ -106,7 +138,7 @@ class DepartmentsService {
       const rows = departments.map(dept => [
         dept.name,
         dept.description || 'Sem descrição',
-        new Date(dept.created_at).toLocaleDateString('pt-BR')
+        dataBR(dept.created_at)
       ])
 
       const csvContent = [

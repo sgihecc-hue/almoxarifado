@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { usersService } from '@/lib/services/users'
 import { departmentsService } from '@/lib/services/departments'
+import { ErroCarregamento } from '@/components/ui/erro-carregamento'
 import type { User, UserRole } from '@/lib/types'
 import type { Department } from '@/lib/types/departments'
 
@@ -39,6 +40,9 @@ export function EditUserDialog({ user, open, onOpenChange, onSuccess }: EditUser
   const [loading, setLoading] = useState(false)
   const [departments, setDepartments] = useState<Department[]>([])
   const [loadingDepartments, setLoadingDepartments] = useState(false)
+  const [erroSetores, setErroSetores] = useState<unknown>(null)
+  const [erroSalvar, setErroSalvar] = useState<string | null>(null)
+  const salvandoRef = useRef(false)
   
   const { register, handleSubmit, formState: { errors } } = useForm<UserFormData>({
     resolver: zodResolver(userSchema),
@@ -58,24 +62,25 @@ export function EditUserDialog({ user, open, onOpenChange, onSuccess }: EditUser
   const loadDepartments = async () => {
     try {
       setLoadingDepartments(true)
-      console.log('Loading departments for user edit from database...')
+      setErroSetores(null)
       const data = await departmentsService.getAll()
-      console.log('Available departments for edit:', data?.length || 0, 'departments')
       setDepartments(data)
-      if (!data || data.length === 0) {
-        console.warn('No departments available for selection. Check RLS policies.')
-      }
     } catch (error) {
-      console.error('Error loading departments for edit (check RLS policies):', error)
-      setDepartments([]) // Set empty array to prevent undefined issues
+      // Sem a lista, o campo Setor ficaria vazio e SALVAR tiraria o setor do
+      // usuário: mostra o erro e bloqueia o salvar até carregar.
+      console.error('Error loading departments for edit:', error)
+      setErroSetores(error)
     } finally {
       setLoadingDepartments(false)
     }
   }
 
   const onSubmit = async (data: UserFormData) => {
+    if (salvandoRef.current || erroSetores) return
+    salvandoRef.current = true
     try {
       setLoading(true)
+      setErroSalvar(null)
       await usersService.update(user.id, {
         full_name: data.full_name,
         role: data.role as UserRole,
@@ -85,7 +90,9 @@ export function EditUserDialog({ user, open, onOpenChange, onSuccess }: EditUser
       onOpenChange(false)
     } catch (error) {
       console.error('Error updating user:', error)
+      setErroSalvar(error instanceof Error ? error.message : 'Não foi possível salvar as alterações.')
     } finally {
+      salvandoRef.current = false
       setLoading(false)
     }
   }
@@ -169,7 +176,8 @@ export function EditUserDialog({ user, open, onOpenChange, onSuccess }: EditUser
               {errors.department_id && (
                 <p className="text-sm text-red-500 mt-1">{errors.department_id.message}</p>
               )}
-              {!loadingDepartments && departments.length === 0 && (
+              <ErroCarregamento className="mt-2" titulo="Não foi possível carregar os setores." erro={erroSetores} onTentar={loadDepartments} />
+              {!loadingDepartments && !erroSetores && departments.length === 0 && (
                 <p className="text-sm text-yellow-600 mt-1">
                   Nenhum departamento encontrado
                 </p>
@@ -177,11 +185,15 @@ export function EditUserDialog({ user, open, onOpenChange, onSuccess }: EditUser
             </div>
           </div>
 
+          {erroSalvar && (
+            <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">{erroSalvar}</div>
+          )}
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={loading}>
+            <Button type="submit" disabled={loading || loadingDepartments || !!erroSetores}>
               {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Salvar Alterações
             </Button>

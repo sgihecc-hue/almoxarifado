@@ -5,6 +5,7 @@ import { useTheme } from '@/contexts/theme'
 import { useModule } from '@/contexts/module'
 import { supabase } from '@/lib/supabase'
 import { buildSidebarSections, type VisibilityFlags, type SidebarSection } from '@/lib/constants/sidebar-menu'
+import { podeAcessar } from '@/lib/permissoes'
 import { LogOut, X, Pill, Package2, ArrowLeftRight } from 'lucide-react'
 
 interface SidebarProps {
@@ -15,7 +16,7 @@ interface SidebarProps {
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const { user, signOut } = useAuth()
   const { colors } = useTheme()
-  const { activeModule, setActiveModule, isModuleUser, activeStock } = useModule()
+  const { activeModule, setActiveModule, isModuleUser, activeStock, perfil, setorPronto } = useModule()
   const navigate = useNavigate()
 
   const isAdmin = user?.role === 'administrador'
@@ -315,7 +316,11 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
       {/* Navigation */}
       <nav className="flex-1 space-y-5 overflow-y-auto" style={{ marginRight: -8, paddingRight: 8 }}>
         {filteredSections.map((section) => {
-          const visibleItems = section.items.filter(item => item.show(flags))
+          // Além da regra do próprio item, o menu obedece o MESMO mapa de
+          // permissões da guarda de rotas (lib/permissoes.ts): não mostra
+          // link para tela que a guarda (ou o banco) vai recusar.
+          const visibleItems = section.items.filter(item =>
+            item.show(flags) && (!setorPronto || podeAcessar(perfil, prefixHref(item.href)).ok))
           if (visibleItems.length === 0) return null
 
           return (

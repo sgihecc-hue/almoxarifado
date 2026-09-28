@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import type { User } from '@/lib/types'
 import { sanitizeInput } from '@/lib/utils/sanitize'
+import { dataBR, exigirLinhas } from '@/lib/utils/seguro'
 
 interface CreateUserData extends Partial<User> {
   password?: string
@@ -8,6 +9,14 @@ interface CreateUserData extends Partial<User> {
 
 interface UserWithStatus extends User {
   status?: 'active' | 'inactive'
+}
+
+/**
+ * Usuário ativo = sem deleted_at E is_active diferente de false. Antes a tela
+ * olhava só deleted_at e mostrava como "Ativo" quem tinha is_active=false.
+ */
+export function usuarioAtivo(u: Pick<User, 'deleted_at' | 'is_active'>): boolean {
+  return !u.deleted_at && u.is_active !== false
 }
 
 class UsersService {
@@ -126,42 +135,79 @@ class UsersService {
         })
         .eq('id', id)
         .select()
-        .single()
 
       if (error) throw error
-      return data
+      // RLS/gatilho que recusa em silêncio devolve 0 linhas: não é "sucesso".
+      if (!data || data.length === 0) {
+        throw new Error('Não foi possível salvar: sem permissão ou usuário não encontrado.')
+      }
+      return data[0] as User
     } catch (error) {
       console.error('Error updating user:', error)
       throw error
     }
   }
 
-  async deactivate(id: string): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('users')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('id', id)
+  /**
+   * Desativa (active=false) ou reativa (active=true) um usuário.
+   *
+   * Vai pela Edge Function admin-set-user-active, que bane/desbane a conta no
+   * servidor de login E marca is_active/deleted_at. Antes só gravava deleted_at:
+   * o usuário "desativado" continuava entrando.
+   *
+   * Se a função ainda não estiver instalada no servidor, grava só o cadastro
+   * (o app já recusa perfil inativo ao entrar) e devolve um AVISO para a tela
+   * dizer que o bloqueio no servidor de login ficou pendente.
+   */
+  async setActive(id: string, active: boolean): Promise<{ aviso?: string }> {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.access_token) throw new Error('Sessão expirada. Entre novamente.')
 
-      if (error) throw error
-    } catch (error) {
-      console.error('Error deactivating user:', error)
-      throw error
+    let response: Response
+    try {
+      response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-set-user-active`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId: id, active }),
+      })
+    } catch {
+      throw new Error('Sem conexão com o servidor. Nada foi alterado; tente de novo.')
+    }
+
+    const body = await response.json().catch(() => ({})) as { error?: string; msg?: string }
+    if (response.ok) return {}
+
+    // A função responde sempre { error }. { msg } (ou 404) vem do roteador de
+    // funções quando a pasta admin-set-user-active não existe no servidor.
+    const funcaoAusente = response.status === 404 || (!body.error && typeof body.msg === 'string' &&
+      /boot|not found|no such file|could not find|failed to/i.test(body.msg))
+    if (!funcaoAusente) {
+      throw new Error(body.error || body.msg || `Erro ${response.status} ao ${active ? 'reativar' : 'desativar'} o usuário.`)
+    }
+
+    const r = await supabase
+      .from('users')
+      .update({ is_active: active, deleted_at: active ? null : new Date().toISOString() })
+      .eq('id', id)
+      .select('id')
+    exigirLinhas(r, 'Não foi possível alterar o usuário: sem permissão ou usuário não encontrado.')
+    return {
+      aviso: active
+        ? 'Usuário reativado no cadastro, mas o desbloqueio no servidor de login está pendente (função admin-set-user-active não instalada). Se ele não conseguir entrar, avise o suporte.'
+        : 'Usuário desativado no cadastro (o sistema já recusa a entrada dele), mas o bloqueio no servidor de login está pendente (função admin-set-user-active não instalada). Avise o suporte.',
     }
   }
 
-  async activate(id: string): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('users')
-        .update({ deleted_at: null })
-        .eq('id', id)
+  async deactivate(id: string): Promise<{ aviso?: string }> {
+    return this.setActive(id, false)
+  }
 
-      if (error) throw error
-    } catch (error) {
-      console.error('Error activating user:', error)
-      throw error
-    }
+  async activate(id: string): Promise<{ aviso?: string }> {
+    return this.setActive(id, true)
   }
 
   async adminChangePassword(userId: string, newPassword: string): Promise<void> {
@@ -213,8 +259,8 @@ class UsersService {
         user.full_name,
         user.email,
         user.role,
-        user.status === 'active' ? 'Ativo' : 'Inativo',
-        new Date(user.created_at).toLocaleDateString('pt-BR')
+        (user.status ? user.status === 'active' : usuarioAtivo(user)) ? 'Ativo' : 'Inativo',
+        dataBR(user.created_at)
       ])
 
       const csvContent = [

@@ -6,6 +6,9 @@ import { useTheme } from '@/contexts/theme'
 import { useModule } from '@/contexts/module'
 import { ExpiryAlertPopup } from '@/components/expiry-alert-popup'
 import { ActiveStockBanner } from '@/components/active-stock-banner'
+import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { GuardaAcesso } from '@/components/guarda-acesso'
+import { ErroDeTela, MSG_SEM_SETOR } from '@/components/telas-de-aviso'
 
 interface MainLayoutProps {
   children: React.ReactNode
@@ -14,8 +17,17 @@ interface MainLayoutProps {
 export function MainLayout({ children }: MainLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { mode, colors } = useTheme()
-  const { activeModule, isModuleUser } = useModule()
+  const { activeModule, isModuleUser, perfil, setorPronto } = useModule()
   const location = useLocation()
+
+  // Cada tela tem seu próprio ErrorBoundary DENTRO do layout: um erro de
+  // render não derruba o menu, e trocar de tela (pathname) limpa o erro.
+  // A guarda confere papel + módulo pelo mapa de lib/permissoes.ts.
+  const conteudo = (
+    <ErrorBoundary key={location.pathname} fallback={ErroDeTela}>
+      <GuardaAcesso>{children}</GuardaAcesso>
+    </ErrorBoundary>
+  )
 
   const toggleSidebar = () => {
     setSidebarOpen(!sidebarOpen)
@@ -27,7 +39,7 @@ export function MainLayout({ children }: MainLayoutProps) {
   if (isModuleSelection) {
     return (
       <div className="h-screen overflow-y-auto" style={{ background: colors.gradient, transition: 'background 0.6s ease' }}>
-        {children}
+        {conteudo}
       </div>
     )
   }
@@ -39,13 +51,18 @@ export function MainLayout({ children }: MainLayoutProps) {
       <div className="flex flex-col flex-1 overflow-hidden">
         <Header toggleSidebar={toggleSidebar} isSidebarOpen={sidebarOpen} />
         <ActiveStockBanner />
+        {setorPronto && perfil.semSetor && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-800 text-sm px-4 py-2">
+            {MSG_SEM_SETOR}
+          </div>
+        )}
 
         {/* overflow-y-auto (nao overflow-auto): overflow horizontal do
             conteudo e clipado aqui, forcando o scroll a acontecer dentro
             da tabela (via overflow-x-auto da propria tabela). Antes, a tela
             inteira scrollava lateralmente e a tabela nao mostrava barra. */}
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8 min-w-0">
-          {children}
+          {conteudo}
         </main>
       </div>
 

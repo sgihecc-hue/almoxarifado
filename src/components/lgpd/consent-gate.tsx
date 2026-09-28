@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { Shield, FileText, Lock, UserCheck, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
@@ -11,10 +11,13 @@ interface ConsentGateProps {
 }
 
 export function ConsentGate({ children }: ConsentGateProps) {
-  const { user, loading: authLoading } = useAuth()
-  const [status, setStatus] = useState<'loading' | 'accepted' | 'pending'>('loading')
+  const { user, loading: authLoading, signOut } = useAuth()
+  const [status, setStatus] = useState<'loading' | 'accepted' | 'pending' | 'erro'>('loading')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Para qual usuário o status acima vale (evita mostrar o app por um instante
+  // antes de conferir o aceite de quem acabou de entrar).
+  const [verificadoPara, setVerificadoPara] = useState<string | null>(null)
 
   useEffect(() => {
     // Auth still initializing — wait
@@ -27,16 +30,25 @@ export function ConsentGate({ children }: ConsentGateProps) {
   }, [user?.id, authLoading])
 
   async function checkConsent() {
-    const { data } = await supabase
+    setStatus('loading')
+    const { data, error: err } = await supabase
       .from('lgpd_consents')
       .select('id')
       .eq('user_id', user!.id)
       .eq('version', CONSENT_VERSION)
-      .maybeSingle()
-    setStatus(data ? 'accepted' : 'pending')
+      .limit(1)
+    // Erro de consulta NÃO é "não aceitou": antes pedia o aceite de novo a
+    // cada falha de rede (e gravava consentimento repetido).
+    setVerificadoPara(user!.id)
+    if (err) { setError(err.message); setStatus('erro'); return }
+    setError(null)
+    setStatus(data && data.length > 0 ? 'accepted' : 'pending')
   }
 
+  const aceitandoRef = useRef(false)
   async function handleAccept() {
+    if (aceitandoRef.current) return
+    aceitandoRef.current = true
     setSubmitting(true)
     setError(null)
     try {
@@ -48,12 +60,44 @@ export function ConsentGate({ children }: ConsentGateProps) {
     } catch {
       setError('Não foi possível registrar o consentimento. Tente novamente.')
     } finally {
+      aceitandoRef.current = false
       setSubmitting(false)
     }
   }
 
   async function handleReject() {
-    await supabase.auth.signOut()
+    await signOut()
+  }
+
+  // Enquanto o login carrega, ou sem usuário (login, painéis de TV), deixa as
+  // rotas cuidarem da tela (a ProtectedRoute mostra o progresso).
+  if (authLoading || !user) return <>{children}</>
+
+  if (verificadoPara !== user.id && status !== 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="flex items-center gap-3 text-gray-500">
+          <Shield className="w-6 h-6 animate-pulse" />
+          <span>Verificando conformidade LGPD...</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (status === 'erro') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-6 text-center space-y-4">
+          <AlertCircle className="w-12 h-12 text-red-500 mx-auto" />
+          <h1 className="text-lg font-bold text-gray-900">Não foi possível verificar o termo LGPD</h1>
+          <p className="text-sm text-gray-600">O servidor não respondeu. {error}</p>
+          <div className="flex flex-col gap-2">
+            <Button onClick={() => checkConsent()}>Tentar de novo</Button>
+            <Button variant="outline" onClick={handleReject}>Sair</Button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (status === 'loading') {

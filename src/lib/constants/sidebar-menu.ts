@@ -268,7 +268,10 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Medicamentos', icon: Pill, href: '/farmacia/catalogo', show: (f) => isCaf && f.canManageRequests },
         { name: 'Fornecedores', icon: Building2, href: '/farmacia/fornecedores', show: (f) => isCaf && f.canManageRequests },
         { name: 'Unidades Externas', icon: Building2, href: '/farmacia/unidades-externas', show: (f) => isCaf && f.canManageRequests },
-        { name: 'Unidades Internas', icon: Building2, href: '/farmacia/unidades-internas', show: (f) => isCaf && f.canManageRequests },
+        // Unidades Internas grava em departments: no banco só administrador e
+        // gestor podem (antes aparecia para atendente/farmacêutico, que levavam
+        // "sem permissão" ao salvar). Regra também em lib/permissoes.ts.
+        { name: 'Unidades Internas', icon: Building2, href: '/farmacia/unidades-internas', show: (f) => isCaf && (f.isManager || f.isAdmin) },
         { name: 'Prescritores', icon: Stethoscope, href: '/farmacia/prescritores', show: (f) => isCaf && f.canManageRequests },
         { name: 'Pacientes', icon: UsersRound, href: '/farmacia/pacientes', show: (f) => isCaf && f.canManageRequests },
         // Kits da enfermagem (conjuntos de material atendidos pela Satelite
