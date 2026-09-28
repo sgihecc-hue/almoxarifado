@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label'
 import { itemsService } from '@/lib/services/items'
 import type { ItemCategory, UnitType } from '@/lib/services/items'
 import { departmentsService } from '@/lib/services/departments'
+import { useTravaEnvio } from '@/lib/utils/entradas'
 import type { Department } from '@/lib/types/departments'
 import type { MedicationClass, Presentation } from '@/lib/types/farmacia'
 import {
@@ -102,6 +103,10 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
   // Classificação múltipla — checkboxes. Default vazio (mas se vazio na hora
   // de submeter, assumimos 'uso_geral' pra não quebrar a validação da RPC).
   const [selectedClasses, setSelectedClasses] = useState<MedicationClass[]>([])
+  const trava = useTravaEnvio()
+  // Itens ativos com nome parecido (aviso uma vez por nome digitado).
+  const [parecidos, setParecidos] = useState<Array<{ id: string; code: string | null; name: string; unit: string }>>([])
+  const [parecidosDoNome, setParecidosDoNome] = useState<string | null>(null)
 
   const { register, handleSubmit, formState: { errors }, reset, watch, setValue } = useForm<ItemFormData>({
     resolver: zodResolver(itemSchema),
@@ -130,9 +135,20 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
   }
 
   const onSubmit = async (data: ItemFormData) => {
+    // Duplo clique cadastrava o item duas vezes (o disabled so vale no redesenho).
+    if (!trava.tentar()) return
     try {
       setLoading(true)
       setError(null)
+
+      // Nome parecido com item ja cadastrado: avisa uma vez; o 2o clique cadastra.
+      const nome = data.name.trim()
+      if (parecidosDoNome !== nome) {
+        const achados = await itemsService.nomesParecidos(nome, type)
+        setParecidosDoNome(nome)
+        setParecidos(achados)
+        if (achados.length > 0) return
+      }
 
       // Cadastro puro do item — SEM estoque. A entrada de estoque é uma ação
       // separada (botão "Entrada por NF" na tela do estoque).
@@ -176,18 +192,21 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
       reset()
       setAllowedDepts([])
       setSelectedClasses([])
+      setParecidos([])
+      setParecidosDoNome(null)
       onSuccess()
       onOpenChange(false)
     } catch (error: any) {
       console.error('Error creating item:', error)
       const raw = (error?.message || '').toString()
       if (raw.includes('duplicate key') || raw.includes('unique constraint') || raw.includes('code_unique')) {
-        setError('Já existe um item ativo com esse código. Verifique a lista de itens ou use um código diferente.')
+        setError('Já existe um item com esse código. Verifique a lista de itens ou use um código diferente.')
       } else {
         setError(getErrorMessage(error))
       }
     } finally {
       setLoading(false)
+      trava.liberar()
     }
   }
 
@@ -557,6 +576,18 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
           {error && (
             <div className="p-3 text-sm text-red-500 bg-red-50 rounded-md border border-red-200">
               {error}
+            </div>
+          )}
+
+          {parecidos.length > 0 && parecidosDoNome === (watch('name') ?? '').trim() && (
+            <div className="p-3 text-sm text-amber-900 bg-amber-50 rounded-md border border-amber-300 space-y-1">
+              <p><strong>Já existe item com nome parecido.</strong> Confira se não é o mesmo antes de cadastrar outro:</p>
+              <ul className="list-disc pl-5">
+                {parecidos.map((p) => (
+                  <li key={p.id}>{p.name} <span className="text-xs text-amber-700">({p.code || 'sem código'} · {p.unit})</span></li>
+                ))}
+              </ul>
+              <p className="text-xs">Se é outro item mesmo, clique em <strong>Criar Item</strong> de novo.</p>
             </div>
           )}
 

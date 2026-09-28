@@ -13,23 +13,57 @@ interface CurrencyInputProps {
 }
 
 function formatBRL(n: number): string {
-  return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  // Ate 4 casas: preco unitario de material as vezes tem centavo fracionado
+  // (0,0345). Sempre pelo menos 2.
+  return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+}
+
+/**
+ * Le um valor em reais digitado do jeito normal: "0,9", "1.234,56", "1,5",
+ * "12". Vazio ou invalido -> undefined.
+ *
+ * Antes o campo lia so os digitos como centavos: "0,9" virava 0,09 e "1,5"
+ * virava 0,15 — preco gravado 10x menor sem ninguem perceber.
+ */
+export function lerValorMonetario(texto: string | number | null | undefined): number | undefined {
+  if (texto === null || texto === undefined) return undefined
+  if (typeof texto === 'number') return Number.isFinite(texto) ? texto : undefined
+  let t = texto.trim().replace(/\s/g, '').replace(/^R\$/i, '')
+  if (t === '') return undefined
+  if (t.includes(',')) {
+    // Formato brasileiro: ponto e milhar, virgula e decimal.
+    t = t.replace(/\./g, '').replace(',', '.')
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(t)) {
+    // "1.234" ou "1.234.567": milhar sem decimais.
+    t = t.replace(/\./g, '')
+  }
+  // Sobra "1.5" (ponto decimal) ou so digitos.
+  if (!/^\d*\.?\d*$/.test(t) || t === '.') return undefined
+  const n = Number(t)
+  return Number.isFinite(n) ? n : undefined
 }
 
 export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputProps>(
   ({ value, onChange, placeholder = '0,00', className, id, disabled, autoFocus, showPrefix = true }, ref) => {
-    const display =
-      value === undefined || value === null || isNaN(value as number)
-        ? ''
-        : formatBRL(value as number)
+    const valido = value !== undefined && value !== null && !isNaN(value as number)
+    const [texto, setTexto] = React.useState<string>(valido ? formatBRL(value as number) : '')
+    const focado = React.useRef(false)
+
+    // Valor mudou por fora (reset do formulario, outro item): mostra o novo.
+    // Enquanto a pessoa digita, so troca o texto se ele nao representar mais
+    // o valor (senao "0," viraria "0,00" no meio da digitacao).
+    React.useEffect(() => {
+      const atual = lerValorMonetario(texto)
+      const novo = valido ? (value as number) : undefined
+      if (focado.current && atual === novo) return
+      setTexto(novo === undefined ? '' : formatBRL(novo))
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value])
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const digits = e.target.value.replace(/\D/g, '')
-      if (digits === '') {
-        onChange(undefined)
-        return
-      }
-      onChange(parseInt(digits, 10) / 100)
+      const bruto = e.target.value.replace(/[^\d.,]/g, '')
+      setTexto(bruto)
+      onChange(lerValorMonetario(bruto))
     }
 
     const input = (
@@ -41,8 +75,14 @@ export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputPro
         autoComplete="off"
         disabled={disabled}
         autoFocus={autoFocus}
-        value={display}
+        value={texto}
         onChange={handleChange}
+        onFocus={() => { focado.current = true }}
+        onBlur={() => {
+          focado.current = false
+          const n = lerValorMonetario(texto)
+          setTexto(n === undefined ? '' : formatBRL(n))
+        }}
         placeholder={placeholder}
         className={cn(
           'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',

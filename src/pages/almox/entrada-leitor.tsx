@@ -30,8 +30,9 @@ import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { itemsService } from '@/lib/services/items'
 import { getErrorMessage } from '@/lib/utils/error-messages'
-import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, type EntradaParecida } from '@/lib/utils/entradas'
-import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
+import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, avisoValidade, type EntradaParecida } from '@/lib/utils/entradas'
+import { useBarcodeScanner, type LeituraInfo } from '@/hooks/use-barcode-scanner'
+import { hojeLocal, lerQuantidade, erroQuantidade } from '@/lib/utils/seguro'
 import type { Item } from '@/lib/services/items'
 
 interface LineItem {
@@ -42,7 +43,8 @@ interface LineItem {
   name: string
   code: string
   unit: string
-  quantity: number
+  // Texto do campo (vazio fica vazio); converte so ao validar/enviar.
+  quantity: string
   batch_number: string
   expiry_date: string
 }
@@ -55,6 +57,16 @@ type EntryType = typeof ENTRY_TYPES[number]
 // Esta tela e do almoxarifado central. Nunca chumbar id de estoque: a RPC
 // resolve o local pelo codigo.
 const LOCATION_CODE = 'ALMOX'
+// Teto por linha (o banco recusa acima disso): codigo de barras lido dentro
+// do campo de quantidade virava 12 milhoes de unidades.
+const QTD_MAXIMA = 100000
+
+function erroLinha(q: string): string | null {
+  const e = erroQuantidade(q)
+  if (e) return e
+  if ((lerQuantidade(q) ?? 0) > QTD_MAXIMA) return `Quantidade acima de ${QTD_MAXIMA.toLocaleString('pt-BR')}: confira (foi o leitor?).`
+  return null
+}
 
 function formatCNPJ(value: string) {
   const n = value.replace(/\D/g, '').slice(0, 14)
@@ -68,7 +80,7 @@ function formatCNPJ(value: string) {
 export function EntradaLeitor() {
   const navigate = useNavigate()
   const backTo = '/inventory/warehouse'
-  const today = new Date().toISOString().slice(0, 10)
+  const today = hojeLocal()
 
   // Cabeçalho recolhido — opcional, so o tipo de entrada fica sempre visivel
   const [showHeader, setShowHeader] = useState(false)
@@ -111,7 +123,7 @@ export function EntradaLeitor() {
       name: item.name,
       code: item.code || '',
       unit: item.unit || 'UN',
-      quantity: 1,
+      quantity: '1',
       batch_number: '',
       expiry_date: '',
     }])
@@ -126,11 +138,24 @@ export function EntradaLeitor() {
   }, [focusScan])
 
   // Leitura do scanner: acha o item e joga na lista
-  const handleScan = useCallback(async (barcode: string) => {
+  const handleScan = useCallback(async (barcode: string, info?: LeituraInfo) => {
     const code = barcode.trim()
     if (!code) return
+    // Leitura feita com o foco num campo da linha (lote, validade, quantidade):
+    // o leitor ja "digitou" o codigo la dentro. Desfaz, voltando o valor de antes.
+    const alvo = info?.alvo
+    const uidAlvo = alvo?.getAttribute('data-leitor-uid')
+    const campoAlvo = alvo?.getAttribute('data-leitor-campo') as keyof LineItem | null
+    // Rajada num campo do cabecalho (NF, AFM...): e o proprio campo recebendo
+    // o texto (ex.: leitor na chave da nota). Nao vira linha.
+    if (alvo && !campoAlvo) return
+    if (uidAlvo && campoAlvo && info?.valorAntes != null) {
+      const antes = info.valorAntes
+      setLines((prev) => prev.map((l) => (l._uid === uidAlvo ? { ...l, [campoAlvo]: antes } : l)))
+    }
     setLookingUp(true)
     setNotFound(null)
+    setError(null)
     try {
       // 1. Busca pelo campo barcode do catalogo do almoxarifado
       const found = await itemsService.findByBarcode(code, 'warehouse')
@@ -148,7 +173,7 @@ export function EntradaLeitor() {
         .eq('is_active', true)
         .ilike('code', code)
         .limit(1)
-      if (err) console.error('Busca por código:', err)
+      if (err) throw err
       const byCode = (data || [])[0] as Item | undefined
       if (byCode) {
         addLine(byCode)
@@ -159,15 +184,19 @@ export function EntradaLeitor() {
       // proxima leitura — a tela nao trava.
       setNotFound(code)
       focusScan()
+    } catch (e) {
+      // Erro de rede/banco nao pode sumir: a leitura se perderia calada.
+      console.error('Leitura:', e)
+      setError(`Não foi possível buscar o código ${code}: ${getErrorMessage(e)}. Leia de novo.`)
+      focusScan()
     } finally {
       setLookingUp(false)
     }
   }, [addLine, focusScan])
 
-  // O hook so intercepta quando o foco esta fora de input comum ou dentro
-  // do input marcado com data-barcode-input — por isso digitar lote e
-  // validade nao dispara leitura.
-  useBarcodeScanner({ onScan: handleScan, enabled: true })
+  // Reconhece a leitura tambem com o foco nos campos da linha (rajada rapida
+  // + Enter). Digitacao normal de lote/validade/quantidade nao dispara.
+  useBarcodeScanner({ onScan: handleScan, enabled: true, capturarNosCampos: true })
 
   function updateLine(uid: string, patch: Partial<LineItem>) {
     setLines((prev) => prev.map((l) => (l._uid === uid ? { ...l, ...patch } : l)))
@@ -178,13 +207,14 @@ export function EntradaLeitor() {
     focusScan()
   }
 
-  const totalQty = lines.reduce((s, l) => s + (l.quantity || 0), 0)
-  const canSubmit = lines.length > 0 && lines.every((l) => l.quantity > 0)
+  const totalQty = lines.reduce((s, l) => s + (lerQuantidade(l.quantity) ?? 0), 0)
+  const canSubmit = lines.length > 0 && lines.every((l) => !erroLinha(l.quantity))
 
   async function handleSubmit(confirmarParecida = false) {
     setError(null)
     if (!canSubmit) {
-      setError('Leia ao menos um item e informe uma quantidade válida.')
+      const ruim = lines.find((l) => erroLinha(l.quantity))
+      setError(ruim ? `${ruim.name}: ${erroLinha(ruim.quantity)}` : 'Leia ao menos um item e informe uma quantidade válida.')
       return
     }
     if (!trava.tentar()) return
@@ -207,7 +237,7 @@ export function EntradaLeitor() {
         p_confirmar_parecida: confirmarParecida,
         p_items: lines.map((l) => ({
           item_id: l.item_id,
-          quantity: l.quantity,
+          quantity: lerQuantidade(l.quantity),
           unit_price: 0,
           batch_number: l.batch_number.trim() || null,
           expiry_date: l.expiry_date || null,
@@ -380,6 +410,8 @@ export function EntradaLeitor() {
                     <td className="py-2 px-2" data-entrada-leitor-campo="true">
                       <Input
                         ref={(el) => { batchRefs.current[l._uid] = el }}
+                        data-leitor-uid={l._uid}
+                        data-leitor-campo="batch_number"
                         value={l.batch_number}
                         onChange={(e) => updateLine(l._uid, { batch_number: e.target.value })}
                         placeholder="Lote"
@@ -389,19 +421,26 @@ export function EntradaLeitor() {
                     <td className="py-2 px-2" data-entrada-leitor-campo="true">
                       <Input
                         type="date"
+                        data-leitor-uid={l._uid}
+                        data-leitor-campo="expiry_date"
                         value={l.expiry_date}
                         onChange={(e) => updateLine(l._uid, { expiry_date: e.target.value })}
                         className="w-36"
                       />
+                      {avisoValidade(l.expiry_date, invoiceDate || today) && (
+                        <p className="text-xs text-amber-700 mt-1 max-w-[9rem]">{avisoValidade(l.expiry_date, invoiceDate || today)}</p>
+                      )}
                     </td>
                     <td className="py-2 px-2" data-entrada-leitor-campo="true">
                       <Input
-                        type="number"
-                        min={1}
-                        value={l.quantity === 0 ? '' : l.quantity}
+                        type="text"
+                        inputMode="numeric"
+                        data-leitor-uid={l._uid}
+                        data-leitor-campo="quantity"
+                        value={l.quantity}
                         placeholder="0"
                         onFocus={(e) => e.target.select()}
-                        onChange={(e) => updateLine(l._uid, { quantity: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+                        onChange={(e) => updateLine(l._uid, { quantity: e.target.value })}
                         onWheel={(e) => e.currentTarget.blur()}
                         onKeyDown={(e) => {
                           // Enter na quantidade = linha terminada: devolve o
@@ -411,8 +450,11 @@ export function EntradaLeitor() {
                             focusScan()
                           }
                         }}
-                        className="w-20 text-right"
+                        className={`w-20 text-right ${erroLinha(l.quantity) ? 'border-red-400' : ''}`}
                       />
+                      {erroLinha(l.quantity) && (
+                        <p className="text-xs text-red-600 mt-1 max-w-[8rem]">{erroLinha(l.quantity)}</p>
+                      )}
                     </td>
                     <td className="py-2 text-right">
                       <button onClick={() => removeLine(l._uid)} className="text-red-500 hover:text-red-600 p-1" title="Remover linha">

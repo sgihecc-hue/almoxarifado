@@ -28,7 +28,8 @@ import { supabase } from '@/lib/supabase'
 import { itemsService } from '@/lib/services/items'
 import type { ItemCategory, UnitType } from '@/lib/services/items'
 import { getErrorMessage } from '@/lib/utils/error-messages'
-import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, type EntradaParecida } from '@/lib/utils/entradas'
+import { novaRodadaId, useTravaEnvio, lerAvisoEntrada, descreverParecida, avisoValidade, type EntradaParecida } from '@/lib/utils/entradas'
+import { hojeLocal, termoIlike, lerQuantidade, erroQuantidade } from '@/lib/utils/seguro'
 
 interface ItemRow {
   id: string
@@ -45,10 +46,20 @@ interface LineItem {
   name: string
   code: string
   unit: string
-  quantity: number
+  // Texto do campo; convertido so ao validar/enviar (vazio fica vazio).
+  quantity: string
   batch_number: string
   expiry_date: string
   unit_price: number
+}
+
+// Teto por linha (o banco tambem recusa acima disso).
+const QTD_MAXIMA = 100000
+function erroLinha(q: string): string | null {
+  const e = erroQuantidade(q)
+  if (e) return e
+  if ((lerQuantidade(q) ?? 0) > QTD_MAXIMA) return `Quantidade acima de ${QTD_MAXIMA.toLocaleString('pt-BR')}: confira.`
+  return null
 }
 
 const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Consignado', 'Troca de validade'] as const
@@ -103,7 +114,7 @@ export function NfEntryWarehouse() {
     ? [...ENTRY_TYPES, 'Inventário']
     : ENTRY_TYPES
   const backTo = '/inventory/warehouse'
-  const today = new Date().toISOString().slice(0, 10)
+  const today = hojeLocal()
 
   // Cabeçalho
   const [entryType, setEntryType] = useState<EntryType>('Compra')
@@ -127,6 +138,7 @@ export function NfEntryWarehouse() {
   const [search, setSearch] = useState('')
   const [results, setResults] = useState<ItemRow[]>([])
   const [searching, setSearching] = useState(false)
+  const [erroBusca, setErroBusca] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -135,49 +147,76 @@ export function NfEntryWarehouse() {
   const [showNewItem, setShowNewItem] = useState(false)
   const [newItem, setNewItem] = useState({ ...EMPTY_NEW_ITEM })
   const [creatingItem, setCreatingItem] = useState(false)
+  const travaItem = useTravaEnvio()
   const [newItemError, setNewItemError] = useState<string | null>(null)
+  // Aviso de nome parecido com item ja cadastrado (mostra uma vez por nome).
+  const [parecidos, setParecidos] = useState<ItemRow[]>([])
+  const [parecidosDoNome, setParecidosDoNome] = useState<string | null>(null)
 
   useEffect(() => {
     const t = setTimeout(async () => {
       const q = search.trim()
-      if (!q) { setResults([]); return }
+      if (!q) { setResults([]); setErroBusca(null); return }
       setSearching(true)
+      setErroBusca(null)
+      // termoIlike: virgula/parenteses no nome ("LUVA (M), NITRILICA") quebravam
+      // a busca (400) e a tela sugeria cadastrar item novo.
       const { data, error: err } = await supabase
         .from('warehouse_items')
         .select('id, code, name, unit')
         .eq('is_active', true)
-        .or(`name.ilike.%${q}%,code.ilike.%${q}%`)
+        .or(`name.ilike.${termoIlike(q)},code.ilike.${termoIlike(q)}`)
         .order('name')
         .limit(20)
-      if (err) console.error(err)
-      setResults((data || []) as ItemRow[])
+      if (err) {
+        console.error(err)
+        setErroBusca(getErrorMessage(err))
+        setResults([])
+      } else {
+        setResults((data || []) as ItemRow[])
+      }
       setSearching(false)
     }, 200)
     return () => clearTimeout(t)
   }, [search])
 
-  function addLine(item: ItemRow) {
-    // Satelite Terreo: o MESMO item pode entrar em varias linhas — uma por
-    // LOTE. Uma entrada costuma trazer o mesmo material com lotes e validades
-    // diferentes, e a RPC trata cada linha de forma independente, criando o
-    // lote por (item, lote, local). No Almoxarifado o comportamento continua
-    // o de sempre: um item so pode entrar uma vez.
-    if (!isFarmacia && lines.some((l) => l.item_id === item.id)) {
-      setSearch(''); setResults([]); return
-    }
-    setLines((prev) => [...prev, {
-      _uid: `${item.id}-${Date.now()}-${prev.length}`,
+  function novaLinha(item: ItemRow): LineItem {
+    return {
+      _uid: `${item.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
-      quantity: 1, batch_number: '', expiry_date: '', unit_price: 0,
-    }])
+      quantity: '1', batch_number: '', expiry_date: '', unit_price: 0,
+    }
+  }
+  function addLine(item: ItemRow) {
+    // O MESMO item pode entrar em varias linhas — uma por LOTE (NF com o
+    // mesmo material em 2 lotes), no Almoxarifado e na Satelite Terreo. A RPC
+    // trata cada linha de forma independente, criando/somando o lote por
+    // (item, lote, local). Cada linha tem _uid proprio.
+    setLines((prev) => [...prev, novaLinha(item)])
     setSearch(''); setResults([])
   }
-  function updateLine(idx: number, patch: Partial<LineItem>) {
-    setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)))
+  function updateLine(uid: string, patch: Partial<LineItem>) {
+    setLines((prev) => prev.map((l) => (l._uid === uid ? { ...l, ...patch } : l)))
   }
-  function removeLine(idx: number) {
-    setLines((prev) => prev.filter((_, i) => i !== idx))
+  function removeLine(uid: string) {
+    setLines((prev) => prev.filter((l) => l._uid !== uid))
   }
+
+  // Veio do Editar Item ("Registrar entrada de NF"): ?item=<id> ja entra na lista.
+  const itemInicial = searchParams.get('item')
+  useEffect(() => {
+    if (!itemInicial) return
+    let vivo = true
+    supabase.from('warehouse_items').select('id, code, name, unit').eq('id', itemInicial).eq('is_active', true).maybeSingle()
+      .then(({ data, error: err }) => {
+        if (!vivo) return
+        if (err) { setError(`Não foi possível carregar o item: ${getErrorMessage(err)}`); return }
+        const it = data as ItemRow | null
+        if (it) setLines((prev) => (prev.some((l) => l.item_id === it.id) ? prev : [...prev, novaLinha(it)]))
+      })
+    return () => { vivo = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemInicial])
 
   // ---- Item inedito -------------------------------------------------
   // O almoxarife recebe material que nunca esteve no catalogo e precisa
@@ -198,6 +237,8 @@ export function NfEntryWarehouse() {
   function closeNewItem() {
     setShowNewItem(false)
     setNewItemError(null)
+    setParecidos([])
+    setParecidosDoNome(null)
     setNewItem({ ...EMPTY_NEW_ITEM })
   }
 
@@ -206,10 +247,21 @@ export function NfEntryWarehouse() {
     const name = newItem.name.trim()
     if (!code) { setNewItemError('Informe o código do item.'); return }
     if (name.length < 3) { setNewItemError('O descritivo precisa ter ao menos 3 caracteres.'); return }
+    // Duplo clique cadastrava o item duas vezes (o disabled so vale no redesenho).
+    if (!travaItem.tentar()) return
 
     setCreatingItem(true)
     setNewItemError(null)
     try {
+      // Nome parecido com item ja cadastrado: avisa uma vez; o 2o clique cadastra.
+      if (parecidosDoNome !== name) {
+        const achados = await itemsService.nomesParecidos(name, 'warehouse')
+        setParecidosDoNome(name)
+        if (achados.length > 0) {
+          setParecidos(achados)
+          return
+        }
+      }
       // current_stock 0 de proposito: o saldo entra pela propria NF logo
       // abaixo (RPC registrar_entrada_nf), nao pelo cadastro. Se mandasse
       // saldo aqui, a quantidade entraria duas vezes.
@@ -237,7 +289,7 @@ export function NfEntryWarehouse() {
       console.error('Create item error:', e)
       const raw = (e?.message || '').toString()
       if (raw.includes('duplicate key') || raw.includes('unique constraint') || raw.includes('code_unique')) {
-        setNewItemError('Já existe um item ativo com esse código. Procure por ele na busca acima ou use outro código.')
+        setNewItemError('Já existe um item com esse código. Procure por ele na busca acima ou use outro código.')
       } else if (raw.includes('row-level security') || raw.includes('violates row-level')) {
         setNewItemError('Seu perfil não tem permissão para cadastrar item no catálogo. Fale com o gestor do almoxarifado.')
       } else {
@@ -245,11 +297,12 @@ export function NfEntryWarehouse() {
       }
     } finally {
       setCreatingItem(false)
+      travaItem.liberar()
     }
   }
 
-  const totalQty = lines.reduce((s, l) => s + (l.quantity || 0), 0)
-  const totalValue = lines.reduce((s, l) => s + (l.quantity || 0) * (l.unit_price || 0), 0)
+  const totalQty = lines.reduce((s, l) => s + (lerQuantidade(l.quantity) ?? 0), 0)
+  const totalValue = lines.reduce((s, l) => s + (lerQuantidade(l.quantity) ?? 0) * (l.unit_price || 0), 0)
 
   // Validacao "estilo antigo do almox": lote/validade NAO sao obrigatorios
   // — muito material de expediente/limpeza nao tem lote nem validade.
@@ -258,10 +311,15 @@ export function NfEntryWarehouse() {
   const canSubmit =
     (isInventario || supplierName.trim()) &&
     (!isCompra || nfPendente || (invoiceNumber.trim() && invoiceDate && afmNumber.trim())) &&
-    lines.length > 0 && lines.every((l) => l.quantity > 0)
+    lines.length > 0 && lines.every((l) => !erroLinha(l.quantity))
 
   async function handleSubmit(confirmarParecida = false) {
     setError(null)
+    const linhaRuim = lines.find((l) => erroLinha(l.quantity))
+    if (linhaRuim) {
+      setError(`${linhaRuim.name}: ${erroLinha(linhaRuim.quantity)}`)
+      return
+    }
     if (!canSubmit) {
       setError(isCompra
         ? 'Para Compra, preencha NF, data, AFM, fornecedor e ao menos uma linha válida — ou marque "a NF ainda não chegou".'
@@ -288,8 +346,8 @@ export function NfEntryWarehouse() {
         p_nf_pendente: isCompra && nfPendente,
         p_items: lines.map((l) => ({
           item_id: l.item_id,
-          quantity: l.quantity,
-          unit_price: l.unit_price,
+          quantity: lerQuantidade(l.quantity),
+          unit_price: l.unit_price ?? 0,
           batch_number: l.batch_number.trim() || null,
           expiry_date: l.expiry_date || null,
         })),
@@ -396,20 +454,26 @@ export function NfEntryWarehouse() {
             <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
               {searching ? (
                 <div className="px-4 py-3 text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Buscando...</div>
+              ) : erroBusca ? (
+                <div className="px-4 py-3 text-sm text-red-700 bg-red-50 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" /> Erro na busca: {erroBusca}. Tente de novo.
+                </div>
               ) : (
                 <>
                   {results.length === 0 ? (
                     <div className="px-4 py-3 text-sm text-gray-400">Nenhum item encontrado.</div>
                   ) : results.map((i) => {
-                    // No Almoxarifado item repetido fica bloqueado; na Satelite
-                    // Terreo nao, porque cada linha e um lote diferente.
-                    const already = !isFarmacia && lines.some((l) => l.item_id === i.id)
+                    // Item ja na lista nao e bloqueado: clicar de novo cria outra
+                    // linha, para lancar um segundo lote do mesmo item.
+                    const qtdLinhas = lines.filter((l) => l.item_id === i.id).length
                     return (
-                      <button key={i.id} onClick={() => addLine(i)} disabled={already}
-                        className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 disabled:opacity-50 flex items-center justify-between">
+                      <button key={i.id} onClick={() => addLine(i)}
+                        className="w-full text-left px-4 py-2.5 border-b last:border-0 hover:bg-gray-50 flex items-center justify-between">
                         <span className="text-sm font-medium text-gray-900 flex items-center gap-1">
                           <Plus className="w-3.5 h-3.5" /> {i.name}
-                          {already && <span className="text-xs text-gray-400 ml-1">(já na lista)</span>}
+                          {qtdLinhas > 0 && (
+                            <span className="text-xs text-blue-500 ml-1">({qtdLinhas} na lista — clique p/ outro lote)</span>
+                          )}
                         </span>
                         <span className="text-xs text-gray-400">{i.code || 'sem código'} · {i.unit}</span>
                       </button>
@@ -493,6 +557,20 @@ export function NfEntryWarehouse() {
                   <AlertCircle className="w-4 h-4 flex-shrink-0" /> {newItemError}
                 </div>
               )}
+              {parecidos.length > 0 && parecidosDoNome === newItem.name.trim() && (
+                <div className="p-3 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded-lg space-y-2">
+                  <p><strong>Já existe item com nome parecido.</strong> Confira se não é o mesmo antes de cadastrar outro:</p>
+                  <ul className="space-y-1">
+                    {parecidos.map((p) => (
+                      <li key={p.id} className="flex items-center justify-between gap-2">
+                        <span>{p.name} <span className="text-xs text-amber-700">({p.code || 'sem código'})</span></span>
+                        <Button size="sm" variant="outline" onClick={() => { addLine(p); closeNewItem() }}>Usar este</Button>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-xs">Se é outro item mesmo, clique em <strong>Cadastrar e adicionar</strong> de novo.</p>
+                </div>
+              )}
 
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs text-gray-500">
@@ -527,7 +605,7 @@ export function NfEntryWarehouse() {
                 </tr>
               </thead>
               <tbody>
-                {lines.map((l, idx) => (
+                {lines.map((l) => (
                   <tr key={l._uid} className="border-b last:border-0">
                     <td className="py-2 pr-2">
                       <p className="font-medium text-gray-900">{l.name}</p>
@@ -535,30 +613,34 @@ export function NfEntryWarehouse() {
                     </td>
                     <td className="py-2 px-2">
                       <Input
-                        type="number"
-                        min={1}
-                        value={l.quantity === 0 ? '' : l.quantity}
+                        type="text"
+                        inputMode="numeric"
+                        value={l.quantity}
                         placeholder="0"
                         onFocus={(e) => e.target.select()}
-                        onChange={(e) => updateLine(idx, { quantity: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+                        onChange={(e) => updateLine(l._uid, { quantity: e.target.value })}
                         onWheel={(e) => e.currentTarget.blur()}
-                        className="w-20 text-right"
+                        className={`w-20 text-right ${erroLinha(l.quantity) ? 'border-red-400' : ''}`}
                       />
+                      {erroLinha(l.quantity) && <p className="text-xs text-red-600 mt-1 max-w-[8rem]">{erroLinha(l.quantity)}</p>}
                     </td>
                     <td className="py-2 px-2">
-                      <Input value={l.batch_number} onChange={(e) => updateLine(idx, { batch_number: e.target.value })} placeholder="Lote (opcional)" className="w-28" />
+                      <Input value={l.batch_number} onChange={(e) => updateLine(l._uid, { batch_number: e.target.value })} placeholder="Lote (opcional)" className="w-28" />
                     </td>
                     <td className="py-2 px-2">
-                      <Input type="date" value={l.expiry_date} onChange={(e) => updateLine(idx, { expiry_date: e.target.value })} className="w-36" />
+                      <Input type="date" value={l.expiry_date} onChange={(e) => updateLine(l._uid, { expiry_date: e.target.value })} className="w-36" />
+                      {avisoValidade(l.expiry_date, invoiceDate || today) && (
+                        <p className="text-xs text-amber-700 mt-1 max-w-[9rem]">{avisoValidade(l.expiry_date, invoiceDate || today)}</p>
+                      )}
                     </td>
                     <td className="py-2 px-2">
-                      <div className="w-28 ml-auto"><CurrencyInput value={l.unit_price} onChange={(v) => updateLine(idx, { unit_price: v as number })} /></div>
+                      <div className="w-28 ml-auto"><CurrencyInput value={l.unit_price} onChange={(v) => updateLine(l._uid, { unit_price: v ?? 0 })} /></div>
                     </td>
                     <td className="py-2 px-2 text-right font-medium text-gray-700">
-                      R$ {((l.quantity || 0) * (l.unit_price || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      R$ {((lerQuantidade(l.quantity) ?? 0) * (l.unit_price || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="py-2 text-right">
-                      <button onClick={() => removeLine(idx)} className="text-red-500 hover:text-red-600 p-1"><Trash2 className="w-4 h-4" /></button>
+                      <button onClick={() => removeLine(l._uid)} className="text-red-500 hover:text-red-600 p-1"><Trash2 className="w-4 h-4" /></button>
                     </td>
                   </tr>
                 ))}
