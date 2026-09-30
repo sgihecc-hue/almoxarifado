@@ -1,5 +1,6 @@
 import { Building2, AlertCircle } from 'lucide-react'
 import { useModule } from '@/contexts/module'
+import { corDoEstoque } from '@/lib/constants/cores-estoque'
 
 /**
  * Faixa horizontal no TOPO da tela mostrando em qual estoque
@@ -31,21 +32,22 @@ export function ActiveStockBanner() {
     )
   }
 
+  const cor = corDoEstoque(activeStock.code)
   return (
     <div
       style={{
-        background: 'linear-gradient(90deg, rgba(45,180,140,0.12), rgba(45,180,140,0.22), rgba(45,180,140,0.12))',
-        borderBottom: '1px solid rgba(45,180,140,0.35)',
+        background: cor?.faixa ?? 'linear-gradient(90deg, rgba(45,180,140,0.12), rgba(45,180,140,0.22), rgba(45,180,140,0.12))',
+        borderBottom: `2px solid ${cor?.destaque ?? 'rgba(45,180,140,0.35)'}`,
         padding: '12px 16px',
       }}
     >
       <div className="flex items-center justify-center gap-3">
-        <Building2 className="w-6 h-6" style={{ color: '#2da362' }} />
+        <Building2 className="w-6 h-6" style={{ color: cor?.destaque ?? '#2da362' }} />
         <div className="text-center">
-          <div className="text-xs uppercase tracking-widest font-semibold" style={{ color: '#1a6b47' }}>
+          <div className="text-xs uppercase tracking-widest font-semibold" style={{ color: cor?.texto ?? '#1a6b47' }}>
             Você está no estoque
           </div>
-          <div className="text-xl md:text-2xl font-bold" style={{ color: '#0d5a3a' }}>
+          <div className="text-xl md:text-2xl font-bold" style={{ color: cor?.texto ?? '#0d5a3a' }}>
             {activeStock.name}
           </div>
         </div>

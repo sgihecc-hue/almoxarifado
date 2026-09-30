@@ -9,6 +9,7 @@ import { ActiveStockBanner } from '@/components/active-stock-banner'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { GuardaAcesso } from '@/components/guarda-acesso'
 import { ErroDeTela, MSG_SEM_SETOR } from '@/components/telas-de-aviso'
+import { corDoEstoque } from '@/lib/constants/cores-estoque'
 
 interface MainLayoutProps {
   children: React.ReactNode
@@ -17,7 +18,7 @@ interface MainLayoutProps {
 export function MainLayout({ children }: MainLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { mode, colors } = useTheme()
-  const { activeModule, isModuleUser, perfil, setorPronto } = useModule()
+  const { activeModule, activeStock, isModuleUser, perfil, setorPronto } = useModule()
   const location = useLocation()
 
   // Cada tela tem seu próprio ErrorBoundary DENTRO do layout: um erro de
@@ -28,6 +29,11 @@ export function MainLayout({ children }: MainLayoutProps) {
       <GuardaAcesso>{children}</GuardaAcesso>
     </ErrorBoundary>
   )
+
+  // Farmácia: cada estoque tem sua cor de fundo (CAF azul, SAT_1 verde,
+  // SAT_2 roxo, SAT_T laranja) para ninguém lançar no estoque errado.
+  const corEstoque = activeModule === 'farmacia' ? corDoEstoque(activeStock?.code) : null
+  const fundo = corEstoque ? (mode === 'dark' ? corEstoque.fundoEscuro : corEstoque.fundoClaro) : colors.gradient
 
   const toggleSidebar = () => {
     setSidebarOpen(!sidebarOpen)
@@ -45,7 +51,7 @@ export function MainLayout({ children }: MainLayoutProps) {
   }
 
   return (
-    <div className="flex h-screen" style={{ background: colors.gradient, transition: 'background 0.6s ease' }}>
+    <div className="flex h-screen" style={{ background: fundo, transition: 'background 0.6s ease' }}>
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex flex-col flex-1 overflow-hidden">
