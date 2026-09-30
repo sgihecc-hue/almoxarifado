@@ -280,6 +280,10 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
   const [erroLots, setErroLots] = useState<string | null>(null)
   const [lotsDirty, setLotsDirty] = useState(false)
 
+  // Estoque ao qual o editor de lotes fica preso (quando a tela veio de um estoque).
+  const estoqueDosLotes = locationId && LOT_LOCATIONS.some((l) => l.id === locationId) ? locationId : null
+  const nomeEstoqueDosLotes = estoqueDosLotes ? LOT_LOCATIONS.find((l) => l.id === estoqueDosLotes)?.label : null
+
   useEffect(() => {
     if (!open || !podeEditarLotes) { setLots([]); setLotsDirty(false); return }
     let alive = true
@@ -290,6 +294,9 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
         .from('expiry_tracking')
         .select('id, batch_number, expiry_date, current_quantity, location_id')
         .eq('item_id', item.id)
+        // 30/09/2026: aberto a partir de um estoque (ex.: Satélite 1), mostra e
+        // edita SÓ os lotes dele — antes vinham os lotes de todas as farmácias.
+        .match(estoqueDosLotes ? { location_id: estoqueDosLotes } : {})
         .order('expiry_date', { ascending: true, nullsFirst: false })
       if (!alive) return
       if (err) {
@@ -311,7 +318,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id, open, type])
+  }, [item.id, open, type, estoqueDosLotes])
 
   // Almoxarifado: motivo e resumo recomeçam a cada abertura; histórico do item.
   useEffect(() => {
@@ -336,7 +343,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
   }
   function addLot() {
     setLots((prev) => [...prev, {
-      _key: newKey(), batch_number: '', expiry_date: '', quantity: '', location_id: LOT_LOCATIONS[0].id,
+      _key: newKey(), batch_number: '', expiry_date: '', quantity: '', location_id: estoqueDosLotes ?? LOT_LOCATIONS[0].id,
     }])
     setLotsDirty(true)
   }
@@ -772,9 +779,9 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
           <div className="rounded-lg border border-indigo-200 overflow-hidden">
               <div className="flex items-center justify-between gap-2 px-4 py-3 bg-indigo-50 border-b border-indigo-200">
                 <div className="flex items-center gap-2 text-sm font-semibold text-indigo-900">
-                  <Layers className="w-4 h-4" /> {lotesLabel}
+                  <Layers className="w-4 h-4" /> {lotesLabel}{nomeEstoqueDosLotes ? ` — ${nomeEstoqueDosLotes}` : ''}
                 </div>
-                <span className="text-xs text-indigo-700">Total: <strong>{totalLotes}</strong></span>
+                <span className="text-xs text-indigo-700">{nomeEstoqueDosLotes ? `Total em ${nomeEstoqueDosLotes}: ` : 'Total: '}<strong>{totalLotes}</strong></span>
               </div>
               <div className="p-4 space-y-3 bg-white">
                 <p className="text-xs text-gray-500">
@@ -813,6 +820,8 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
                             <td className="py-1 px-2">
                               <select
                                 value={l.location_id}
+                                disabled={!!estoqueDosLotes}
+                                title={estoqueDosLotes ? 'Os lotes ficam no estoque em que você está. Para mudar de estoque use Transferência.' : undefined}
                                 onChange={(e) => updateLot(l._key, { location_id: e.target.value })}
                                 className="h-8 rounded-md border border-input bg-white px-2 text-xs"
                               >
