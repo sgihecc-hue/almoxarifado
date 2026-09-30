@@ -25,6 +25,7 @@ import { AtenderPedidoEnfermagem } from '@/components/atender-pedido-enfermagem'
 import { exigirLinhas, lerQuantidade } from '@/lib/utils/seguro'
 import { registrarGravacao } from '@/lib/utils/request-gravacoes'
 import { getErrorMessage } from '@/lib/utils/error-messages'
+import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
 
 interface LotOption { id: string; batch_number: string; expiry_date: string | null; current_quantity: number }
 
@@ -159,7 +160,10 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     // NÃO filtramos por saldo > 0: com o FA5 o item pode sair sem saldo
     // (existe no físico, não foi lançado) e mesmo assim precisa ter o lote
     // atribuído. O saldo aparece ao lado de cada lote pra ficar explícito.
-    const locId = activeStock?.id
+    // 30/09/2026: pedido da farmácia SEMPRE sai da CAF (é de lá que a
+    // confirmação baixa). Mostrar os lotes do estoque ativo deixava escolher
+    // lote de satélite (caso Gabapentina: lotes da Satélite 2 em pedido da CAF).
+    const locId = PHARMACY_STOCKS.find((s) => s.code === 'CAF')?.id ?? activeStock?.id
     let q = supabase
       .from('expiry_tracking')
       .select('id, batch_number, expiry_date, current_quantity')
