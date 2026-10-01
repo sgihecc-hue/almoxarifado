@@ -866,6 +866,13 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
   )
 }
 
+// 01/10/2026: pedido da Satelite 1 e 2 e concluido no atendimento (o banco
+// move CAF -> satelite na hora); demais setores seguem confirmando.
+function conclusaoAutomatica(departmentName?: string) {
+  const d = (departmentName ?? '').toLowerCase()
+  return /sat.?lite/.test(d) && !/t.rreo/.test(d) && /[12]/.test(d)
+}
+
 // Dialog de sucesso da aprovacao/atendimento.
 // IMPORTANTE: quem confirma o recebimento NAO eh quem atende o pedido.
 // O staff que aprovou aqui NUNCA vai para a tela "Confirmar Recebimento"
@@ -914,8 +921,12 @@ function ApprovalSuccessDialog({
           O pedido <strong>#{requestNumber}</strong> foi aprovado com sucesso.
         </p>
         <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 20 }}>
-          {departmentName ? <>O setor <strong>{departmentName}</strong> </> : 'O setor solicitante '}
-          vai receber e confirmar o recebimento.
+          {conclusaoAutomatica(departmentName) ? (
+            <>O estoque já saiu da CAF e entrou na <strong>{departmentName}</strong>. O pedido está concluído (Satélite 1 e 2 não precisam confirmar o recebimento).</>
+          ) : (
+            <>{departmentName ? <>O setor <strong>{departmentName}</strong> </> : 'O setor solicitante '}
+            vai receber e confirmar o recebimento.</>
+          )}
         </p>
         <div className="flex justify-end">
           <Button
