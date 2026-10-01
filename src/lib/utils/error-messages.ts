@@ -1,5 +1,6 @@
 // Maps internal/backend error details to safe user-facing messages.
 // NEVER expose raw error objects or stack traces to the UI.
+import { registrarErro } from '@/lib/registro-erros'
 
 const CODE_MAP: Record<string, string> = {
   '23505': 'Este registro já existe no sistema.',
@@ -37,6 +38,13 @@ function isUserFriendly(msg: string): boolean {
 }
 
 export function getErrorMessage(error: unknown): string {
+  const msg = traduzirErro(error)
+  // Registro interno (app_erros): toda mensagem de erro mostrada ao usuario.
+  registrarErro(error, { mensagemUsuario: msg })
+  return msg
+}
+
+function traduzirErro(error: unknown): string {
   if (!error) return 'Erro desconhecido. Tente novamente.'
 
   // Always log full error server-side for debugging

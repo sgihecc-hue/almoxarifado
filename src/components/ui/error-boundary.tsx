@@ -1,6 +1,7 @@
 import React from 'react'
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react'
 import { Button } from './button'
+import { registrarErro } from '@/lib/registro-erros'
 
 // =============================================================================
 // Captura erro de render (auditoria 28/09/2026, X-04).
@@ -42,6 +43,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('Erro de tela capturado:', error, errorInfo)
+    registrarErro(error, { tipo: 'tela', mensagemUsuario: 'Algo deu errado (tela)', detalhe: { componentes: errorInfo?.componentStack?.slice(0, 1500) } })
     try {
       this.props.onError?.(error, errorInfo)
     } catch (handlerError) {
