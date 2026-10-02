@@ -18,6 +18,15 @@ import { z } from 'zod'
 
 // Item that requires special patient info
 const COLCHAO_CASCA_OVO_CODE = '65.30.19.00114671-8'
+// Itens individuais por paciente: abrem o quadro de paciente/leito/ala e
+// aceitam uma linha por paciente. Pelo id (codigos SC03/SC04 sao provisorios).
+// 02/10/2026: canulas de traqueostomia Blue Line nº 7 e nº 8 (pedido do almox).
+const ITENS_POR_PACIENTE_IDS = new Set([
+  '98f7aa98-ff6a-40ca-97d8-05cde0a1ac6e', // CANULA PARA TRAQUEOSTOMIA Nº 7 BLUE LINE
+  '90593007-d403-444b-9514-f63901185511', // CANULA PARA TRAQUEOSTOMIA Nº 8 BLUE LINE
+])
+const exigePaciente = (item: { id?: string; code?: string | null }) =>
+  item.code === COLCHAO_CASCA_OVO_CODE || (!!item.id && ITENS_POR_PACIENTE_IDS.has(item.id))
 
 const itemSchema = z.object({
   id: z.string().uuid('ID inválido'),
@@ -131,7 +140,7 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   const handleAddItem = async (item: Item) => {
     // Colchão Casca de Ovo: permite múltiplas entradas (uma por paciente).
     // Sempre abre o modal — a checagem de paciente duplicado ocorre ao confirmar.
-    if (item.code === COLCHAO_CASCA_OVO_CODE) {
+    if (exigePaciente(item)) {
       setPendingItem(item)
       setPatientName('')
       setPatientBed('')
@@ -284,7 +293,7 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
                   variant="outline"
                   size="sm"
                   onClick={() => handleAddItem(item)}
-                  disabled={(canSeeStock && isOutOfStock) || (item.code !== COLCHAO_CASCA_OVO_CODE && selectedItems.some(i => i.id === item.id))}
+                  disabled={(canSeeStock && isOutOfStock) || (!exigePaciente(item) && selectedItems.some(i => i.id === item.id))}
                 >
                   <Plus className="w-4 h-4 mr-2" />
                   {canSeeStock && isOutOfStock ? 'Sem estoque' : 'Adicionar'}
@@ -308,7 +317,7 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
             const item = items.find(i => i.id === selectedItem.id)
             if (!item) return null
 
-            const isColchao = item.code === COLCHAO_CASCA_OVO_CODE
+            const isColchao = exigePaciente(item)
             const rowKey = selectedItem._uid || item.id
 
             return (
