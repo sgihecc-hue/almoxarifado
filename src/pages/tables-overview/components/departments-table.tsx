@@ -18,12 +18,12 @@ import { ErroCarregamento } from '@/components/ui/erro-carregamento'
 import { toast } from 'sonner'
 
 export function DepartmentsTable() {
-  // Excluir setor desvincula os usuarios daquele setor e nao tem desfazer na
-  // tela — segue exclusivo de administrador. Gestor cria e edita (RLS
-  // 20260831120000_gestor_cria_setor.sql). Sem esconder o botao, ele
-  // apareceria pro gestor e falharia calado na policy.
+  // Excluir setor = desvincula os usuarios do setor e DESATIVA o setor (nao
+  // apaga). 02/10/2026: liberado tambem para gestor — o banco ja permite
+  // (UPDATE em departments para gestor; gatilho de users deixa o gestor
+  // zerar department_id ao excluir setor).
   const { user } = useAuth()
-  const podeExcluir = user?.role === 'administrador'
+  const podeExcluir = user?.role === 'administrador' || user?.role === 'gestor'
 
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)

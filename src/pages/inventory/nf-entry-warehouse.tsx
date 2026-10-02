@@ -62,7 +62,7 @@ function erroLinha(q: string): string | null {
   return null
 }
 
-const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Consignado', 'Troca de validade'] as const
+const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Permuta', 'Consignado', 'Troca de validade'] as const
 // 'Inventário' nao entra em ENTRY_TYPES pra nao aparecer no Almoxarifado —
 // so o tipo precisa conhece-lo, porque a Satelite Terreo usa esta tela.
 type EntryType = typeof ENTRY_TYPES[number] | 'Inventário'

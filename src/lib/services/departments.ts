@@ -99,36 +99,14 @@ class DepartmentsService {
   }
 
   async delete(id: string): Promise<void> {
-    try {
-      // 1. Desvincular usuarios deste setor (set department_id = null)
-      const { error: usersErr } = await supabase
-        .from('users')
-        .update({ department_id: null })
-        .eq('department_id', id);
-
-      if (usersErr) {
-        console.warn('Aviso ao desvincular usuarios:', usersErr.message);
-      }
-
-      // 2. Soft delete: marca setor como inativo
-      // Mantem o registro para que solicitacoes antigas continuem com referencia
-      const { data, error } = await supabase
-        .from('departments')
-        .update({ is_active: false })
-        .eq('id', id)
-        .select('id');
-
-      if (error) {
-        console.error('Erro ao excluir setor:', error);
-        throw new Error('Erro ao excluir setor: ' + error.message);
-      }
-      // RLS que recusa devolve 0 linhas sem erro: não é "excluído".
-      if (!data || data.length === 0) {
-        throw new Error('Setor não foi excluído: sem permissão ou setor não encontrado.');
-      }
-    } catch (error) {
-      console.error('DepartmentsService: Database error deleting department:', error);
-      throw error;
+    // 02/10/2026: uma função no banco desvincula os usuários e desativa o setor
+    // na mesma transação, conferindo se quem chama é administrador ou gestor.
+    // (Antes eram dois updates do navegador; para o gestor o de usuários
+    // falhava calado e eles ficavam presos a um setor desativado.)
+    const { error } = await supabase.rpc('excluir_setor', { p_department_id: id })
+    if (error) {
+      console.error('DepartmentsService: erro ao excluir setor:', error)
+      throw error
     }
   }
 
