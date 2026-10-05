@@ -30,8 +30,13 @@ const MESSAGE_PATTERNS: Array<[RegExp, string]> = [
 // Cuidado: "error" bate com "Erro" em português case-insensitive — evitar.
 const TECH_PATTERNS = /\bfailed\b|\bexception\b|supabase|postgres|pgrst|\bjwt\b|typeerror|referenceerror|syntaxerror|\bstack\b|\bat \w+\.\w+/i
 
+// Mensagens longas mas escritas para o usuario (Modo Inventario do almox:
+// bloqueio e fechamento recusado listam itens/datas e passam de 200 letras).
+const PREFIXOS_LONGOS_OK = /^(Almoxarifado em inventário|Fechamento recusado)/
+
 function isUserFriendly(msg: string): boolean {
-  if (!msg || msg.length > 200) return false
+  if (!msg) return false
+  if (msg.length > (PREFIXOS_LONGOS_OK.test(msg.trim()) ? 600 : 200)) return false
   if (TECH_PATTERNS.test(msg)) return false
   // Aceita: começa com maiúscula ou letra latina, termina com '.' ou letra
   return /^[A-ZÁÉÍÓÚÂÊÔÃÕÇ]/.test(msg.trim())

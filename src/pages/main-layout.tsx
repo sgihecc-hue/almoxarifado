@@ -6,6 +6,7 @@ import { useTheme } from '@/contexts/theme'
 import { useModule } from '@/contexts/module'
 import { ExpiryAlertPopup } from '@/components/expiry-alert-popup'
 import { ActiveStockBanner } from '@/components/active-stock-banner'
+import { InventarioAlmoxBanner } from '@/components/inventario-almox-banner'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { GuardaAcesso } from '@/components/guarda-acesso'
 import { ErroDeTela, MSG_SEM_SETOR } from '@/components/telas-de-aviso'
@@ -57,6 +58,7 @@ export function MainLayout({ children }: MainLayoutProps) {
       <div className="flex flex-col flex-1 overflow-hidden">
         <Header toggleSidebar={toggleSidebar} isSidebarOpen={sidebarOpen} />
         <ActiveStockBanner />
+        <InventarioAlmoxBanner />
         {setorPronto && perfil.semSetor && (
           <div className="bg-amber-50 border-b border-amber-200 text-amber-800 text-sm px-4 py-2">
             {MSG_SEM_SETOR}
