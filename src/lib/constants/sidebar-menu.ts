@@ -2,6 +2,7 @@ import {
   Ambulance,
   Building2,
   ClipboardList,
+  ClipboardCheck,
   UserCircle,
   LayoutDashboard,
   Settings,
@@ -171,6 +172,9 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         // Livro de movimentacao: toda entrada e saida de material, com saldo
         // antes/depois e autor. Le a view v_almox_movimentacao (so leitura).
         { name: 'Movimentação', icon: ArrowUpDown, href: '/almox/movimentacao', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        // Modo Inventario: contagem item a item (qtd/lote/validade), pedidos
+        // bloqueados enquanto aberto, ajuste pela diferenca e relatorio no fechamento.
+        { name: 'Inventário', icon: ClipboardCheck, href: '/almox/inventario', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
       ],
     },
     // --- OPERAÇÕES: separado por modulo. Farmacia NAO ve "Quebras e

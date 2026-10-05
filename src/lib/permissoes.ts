@@ -161,6 +161,9 @@ export const REGRAS_ROTAS: RegraRota[] = [
   { padrao: /^\/reports\/(pharmacy-|farmacia-|consumo-enfermagem)/, nivel: 'operador', modulo: 'farmacia' },
 
   // --- almoxarifado ---
+  // Modo Inventario: contagem para atendente/gestor/admin do almox; abrir,
+  // conferir, fechar e cancelar sao checados de novo no banco (gestor/admin).
+  { padrao: /^\/almox\/inventario$/, nivel: 'operador', modulo: 'almoxarifado' },
   { padrao: /^\/(almox|almoxarifado|saida-direta)(\/|$)/, nivel: 'operador', modulo: 'almoxarifado' },
   { padrao: /^\/inventory\/warehouse(\/|$)/, nivel: 'operador', modulo: 'almoxarifado' },
   { padrao: /^\/reports\/warehouse-/, nivel: 'operador', modulo: 'almoxarifado' },
