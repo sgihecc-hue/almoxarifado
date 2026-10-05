@@ -29,12 +29,14 @@ import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
 
 interface LotOption { id: string; batch_number: string; expiry_date: string | null; current_quantity: number }
 
-function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
+function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType, sourceLocationId }: {
   item: Request['request_items'][0]
   canEdit: boolean
   isAdmin: boolean
   canSeeStock: boolean
   requestType?: 'pharmacy' | 'warehouse'
+  // Estoque de ORIGEM do pedido (setor solicitado: CAF, Satélite 1 ou 2).
+  sourceLocationId?: string | null
 }) {
   // Estoque de quem está ATENDENDO (CAF ou satélite). O isolamento dos lotes
   // depende disto — nunca mais fixar no CAF.
@@ -163,7 +165,9 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType }: {
     // 30/09/2026: pedido da farmácia SEMPRE sai da CAF (é de lá que a
     // confirmação baixa). Mostrar os lotes do estoque ativo deixava escolher
     // lote de satélite (caso Gabapentina: lotes da Satélite 2 em pedido da CAF).
-    const locId = PHARMACY_STOCKS.find((s) => s.code === 'CAF')?.id ?? activeStock?.id
+    // 05/10/2026: lotes e saldo do estoque de ORIGEM do pedido (setor
+    // solicitado). Pedido de satélite para satélite sai da satélite pedida.
+    const locId = sourceLocationId ?? PHARMACY_STOCKS.find((s) => s.code === 'CAF')?.id ?? activeStock?.id
     let q = supabase
       .from('expiry_tracking')
       .select('id, batch_number, expiry_date, current_quantity')
@@ -1376,6 +1380,7 @@ export function RequestDetails() {
                     isAdmin={user?.role === 'administrador'}
                     canSeeStock={isStaff}
                     requestType={request.type}
+                    sourceLocationId={(request as any).source_location_id ?? null}
                   />
                 )
               })}
