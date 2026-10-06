@@ -115,6 +115,12 @@ export interface ItemInventario {
   current_stock?: number | null
 }
 
+export interface InfoLotes {
+  lotes: { lote: string | null; validade: string | null }[]
+  referencia: number | null
+  ultimaCompra: number | null
+}
+
 export interface Liberacao {
   id: string
   request_id: string
@@ -216,6 +222,43 @@ export const almoxInventarioService = {
         .order('id')
         .range(de, ate) as any,
     )
+  },
+
+  /**
+   * Lotes que o sistema conhece de cada item do almox (para a lista impressa e
+   * para sugerir lote/validade na contagem). Fonte: lotes do ALMOX com saldo e,
+   * para item sem lote cadastrado, o lote/validade antigo gravado no proprio item.
+   * Preco de referencia e ultima compra vem junto (so gestor/admin pede).
+   */
+  async lotesSistema(comPreco: boolean): Promise<Record<string, InfoLotes>> {
+    const campos = comPreco
+      ? 'id, batch_number, expiry_date, reference_price, last_purchase_price'
+      : 'id, batch_number, expiry_date'
+    const [itens, almox] = await Promise.all([
+      buscarTodas<{ id: string; batch_number: string | null; expiry_date: string | null; reference_price?: number | null; last_purchase_price?: number | null }>((de, ate) =>
+        supabase.from('warehouse_items').select(campos).eq('is_active', true).order('id').range(de, ate) as any),
+      supabase.from('stock_locations').select('id').eq('code', 'ALMOX').maybeSingle(),
+    ])
+    const lotes = almox.data?.id
+      ? await buscarTodas<{ item_id: string; batch_number: string | null; expiry_date: string | null }>((de, ate) =>
+          supabase.from('expiry_tracking').select('item_id, batch_number, expiry_date')
+            .eq('location_id', almox.data!.id).gt('current_quantity', 0)
+            .order('expiry_date', { ascending: true, nullsFirst: false }).order('id').range(de, ate) as any)
+      : []
+    const mapa: Record<string, InfoLotes> = {}
+    for (const i of itens) {
+      mapa[i.id] = { lotes: [], referencia: i.reference_price ?? null, ultimaCompra: i.last_purchase_price ?? null }
+    }
+    for (const l of lotes) {
+      const lote = l.batch_number === 'SEMLOTE' ? null : l.batch_number
+      mapa[l.item_id]?.lotes.push({ lote, validade: l.expiry_date })
+    }
+    for (const i of itens) {
+      if (mapa[i.id].lotes.length === 0 && (i.batch_number || i.expiry_date)) {
+        mapa[i.id].lotes.push({ lote: i.batch_number, validade: i.expiry_date })
+      }
+    }
+    return mapa
   },
 
   async liberacoes(inventarioId: string): Promise<Liberacao[]> {

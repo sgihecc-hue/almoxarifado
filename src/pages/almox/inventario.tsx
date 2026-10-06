@@ -21,7 +21,7 @@ import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 import {
   ClipboardCheck, Loader2, RefreshCw, Search, Plus, Trash2, Lock, Unlock, FileSpreadsheet,
-  ArrowLeft, AlertTriangle, CheckCircle2, XCircle,
+  ArrowLeft, AlertTriangle, CheckCircle2, XCircle, Printer,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -34,7 +34,7 @@ import { dataBR, hojeLocal, lerQuantidade, normalizarBusca } from '@/lib/utils/s
 import {
   almoxInventarioService as svc,
   type Bloqueio, type Inventario, type ItemInventario, type LinhaContagem, type LinhaResultado,
-  type NaoContados, type PedidoParado, type ResumoInventario, type Liberacao,
+  type NaoContados, type PedidoParado, type ResumoInventario, type Liberacao, type InfoLotes,
 } from '@/lib/services/almox-inventario'
 
 // ---------------------------------------------------------------------------
@@ -449,13 +449,18 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
   const [filtro, setFiltro] = useState<FiltroContagem>('todos')
   const [editando, setEditando] = useState<ItemInventario | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
+  const [info, setInfo] = useState<Record<string, InfoLotes>>({})
+  const [imprimirSaldo, setImprimirSaldo] = useState(true)
 
   const carregar = useCallback(async () => {
     setCarregando(true); setErro(null)
     try {
-      const [its, ls] = await Promise.all([svc.itensAtivos(gestao), svc.contagens(inv.id)])
+      const [its, ls, inf] = await Promise.all([
+        svc.itensAtivos(gestao), svc.contagens(inv.id), svc.lotesSistema(gestao).catch(() => ({})),
+      ])
       setItens(its)
       setLinhas(ls)
+      setInfo(inf)
     } catch (e) {
       setErro(e)
     } finally {
@@ -493,6 +498,61 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
   const contados = itens.filter((i) => porItem.has(i.id)).length
   const MAX = 300
 
+  /** Lote/validade 1 e 2 do item: o que foi contado manda; sem contagem, o que o sistema conhece. */
+  const lotesDo = (id: string) => {
+    const ls = porItem.get(id)
+    if (ls) return { contado: true, lotes: ls.map((l) => ({ lote: l.lote, validade: l.validade, quantidade: l.quantidade as number | null })) }
+    return { contado: false, lotes: (info[id]?.lotes ?? []).map((l) => ({ ...l, quantidade: null as number | null })) }
+  }
+
+  /** Lista de contagem em papel: os itens da lista atual (respeita busca e filtro), em A4 deitado. */
+  function imprimir() {
+    const comSaldo = gestao && imprimirSaldo
+    const esc = (t: unknown) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
+    const cel = (t: unknown) => `<td>${esc(t)}</td>`
+    const loteTxt = (l: { lote: string | null; validade: string | null; quantidade: number | null }) =>
+      esc(l.lote ?? 'sem lote') + (l.validade ? ` val. ${dataBR(l.validade)}` : '') + (l.quantidade != null ? `: ${inteiro(l.quantidade)}` : '')
+    const corpo = visiveis.map((i, n) => {
+      const { contado, lotes } = lotesDo(i.id)
+      const l1 = lotes[0], l2 = lotes[1]
+      const extra = lotes.length > 2 ? `<div class="mais">+${lotes.length - 2} lote(s): ${lotes.slice(2).map(loteTxt).join('; ')}</div>` : ''
+      const inf = info[i.id]
+      return `<tr>
+        <td class="c">${n + 1}</td>
+        <td><b>${esc(i.name)}</b>${i.code ? `<div class="cod">Cód. ${esc(i.code)}</div>` : ''}${extra}</td>
+        ${cel(i.unit ?? '')}
+        ${gestao ? `<td class="r">${inf?.referencia ? moeda(inf.referencia) : ''}</td><td class="r">${inf?.ultimaCompra ? moeda(inf.ultimaCompra) : ''}</td>` : ''}
+        ${comSaldo ? `<td class="r">${inteiro(i.current_stock)}</td>` : ''}
+        ${cel(l1?.lote ?? '')}${cel(l1?.validade ? dataBR(l1.validade) : '')}<td class="q">${l1?.quantidade != null ? inteiro(l1.quantidade) : ''}</td>
+        ${cel(l2?.lote ?? '')}${cel(l2?.validade ? dataBR(l2.validade) : '')}<td class="q">${l2?.quantidade != null ? inteiro(l2.quantidade) : ''}</td>
+        <td class="q">${contado ? inteiro(lotes.reduce((s, l) => s + (l.quantidade ?? 0), 0)) : ''}</td>
+      </tr>`
+    }).join('')
+    const filtroNome = filtro === 'nao' ? 'não contados' : filtro === 'sim' ? 'contados' : 'todos os itens'
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Inventário nº ${inv.numero} - lista de contagem</title>
+<style>
+@page{size:A4 landscape;margin:10mm}
+body{font-family:Arial,sans-serif;font-size:10px;color:#111;margin:0}
+h1{font-size:15px;margin:0 0 2px}.sub{color:#555;margin-bottom:8px}
+table{width:100%;border-collapse:collapse}th,td{border:1px solid #888;padding:3px 4px;vertical-align:top}
+th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table-header-group}tr{page-break-inside:avoid}
+.r{text-align:right;white-space:nowrap}.c{text-align:center;color:#666}.q{width:46px;text-align:center}.cod,.mais{color:#555;font-size:9px}
+.ass{margin-top:18px;display:flex;gap:40px}.ass div{flex:1;border-top:1px solid #333;padding-top:3px;text-align:center}
+</style></head><body>
+<h1>Inventário do Almoxarifado nº ${inv.numero} — lista de contagem</h1>
+<div class="sub">Aberto em ${dataHora(inv.aberto_em)}${inv.observacao ? ' · ' + esc(inv.observacao) : ''} · ${esc(filtroNome)}${busca.trim() ? ` com "${esc(busca.trim())}"` : ''}: ${inteiro(visiveis.length)} itens · impresso em ${new Date().toLocaleString('pt-BR')}</div>
+<table><thead><tr>
+<th>#</th><th>Item</th><th>Unid.</th>${gestao ? '<th>Valor ref.</th><th>Última compra</th>' : ''}${comSaldo ? '<th>Qtd sistema</th>' : ''}
+<th>Lote 1</th><th>Validade 1</th><th>Qtd 1</th><th>Lote 2</th><th>Validade 2</th><th>Qtd 2</th><th>Qtd física total</th>
+</tr></thead><tbody>${corpo}</tbody></table>
+<div class="ass"><div>Contado por</div><div>Conferido por</div><div>Data</div></div>
+<script>window.onload=function(){window.print()}</script>
+</body></html>`
+    const w = window.open('', '_blank')
+    if (!w) { setAviso('O navegador bloqueou a janela de impressão. Libere pop-ups para este site e tente de novo.'); return }
+    w.document.open(); w.document.write(html); w.document.close()
+  }
+
   return (
     <div className="space-y-3">
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 flex flex-wrap gap-3 items-end">
@@ -511,6 +571,18 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
         <Button size="sm" variant="outline" onClick={() => void carregar()} disabled={carregando} className="gap-1">
           {carregando ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Atualizar
         </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={imprimir} disabled={carregando || visiveis.length === 0} className="gap-1"
+            title="Imprime os itens da lista atual (respeita a busca e o filtro)">
+            <Printer className="w-4 h-4" /> Imprimir lista
+          </Button>
+          {gestao && (
+            <label className="flex items-center gap-1 text-xs text-gray-600 cursor-pointer">
+              <input type="checkbox" checked={imprimirSaldo} onChange={(e) => setImprimirSaldo(e.target.checked)} />
+              com saldo do sistema
+            </label>
+          )}
+        </div>
         <p className="w-full text-sm text-gray-600">
           <strong>{inteiro(contados)}</strong> de {inteiro(itens.length)} itens ativos contados.
           {!gestao && ' O saldo do sistema não aparece aqui, para a contagem ser às cegas.'}
@@ -538,6 +610,8 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
                   <th className="text-left px-4 py-2">Item</th>
                   <th className="text-left px-4 py-2">Unid.</th>
                   {gestao && <th className="text-right px-4 py-2">Saldo sistema</th>}
+                  <th className="text-left px-3 py-2">Lote / Validade 1</th>
+                  <th className="text-left px-3 py-2">Lote / Validade 2</th>
                   <th className="text-right px-4 py-2">Contado</th>
                   <th className="text-left px-4 py-2">Status</th>
                   <th className="px-4 py-2"></th>
@@ -555,6 +629,22 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
                       </td>
                       <td className="px-4 py-2 text-gray-600">{i.unit ?? '—'}</td>
                       {gestao && <td className="px-4 py-2 text-right text-gray-600">{inteiro(i.current_stock)}</td>}
+                      {(() => {
+                        // cinza = lote que o sistema conhece; preto = lote contado
+                        const { contado, lotes } = lotesDo(i.id)
+                        const celula = (l?: { lote: string | null; validade: string | null; quantidade: number | null }, extra = 0) => (
+                          <td className={`px-3 py-2 text-xs ${contado ? 'text-gray-800' : 'text-gray-400'}`}>
+                            {l ? (
+                              <>
+                                <p>{l.lote ?? 'sem lote'}{contado && l.quantidade != null ? `: ${inteiro(l.quantidade)}` : ''}</p>
+                                <p>{l.validade ? `val. ${dataBR(l.validade)}` : 'sem validade'}</p>
+                                {extra > 0 && <p className="text-gray-500">+{extra} lote(s)</p>}
+                              </>
+                            ) : '—'}
+                          </td>
+                        )
+                        return <>{celula(lotes[0])}{celula(lotes[1], lotes.length - 2)}</>
+                      })()}
                       <td className="px-4 py-2 text-right font-semibold">
                         {total === null ? '—' : inteiro(total)}
                         {ls && ls.length > 1 && <span className="block text-xs font-normal text-gray-500">{ls.length} linhas</span>}
@@ -587,6 +677,7 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
           item={editando}
           gestao={gestao}
           linhasAtuais={porItem.get(editando.id) ?? []}
+          sugestao={info[editando.id]?.lotes ?? []}
           onClose={() => setEditando(null)}
           onSalvo={(msg) => { setEditando(null); setAviso(msg); void carregar() }}
         />
@@ -597,16 +688,25 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
 
 interface LinhaEdit { chave: number; quantidade: string; lote: string; validade: string }
 
-function EditorItem({ inv, item, gestao, linhasAtuais, onClose, onSalvo }: {
+function EditorItem({ inv, item, gestao, linhasAtuais, sugestao, onClose, onSalvo }: {
   inv: Inventario; item: ItemInventario; gestao: boolean; linhasAtuais: LinhaContagem[]
+  sugestao: { lote: string | null; validade: string | null }[]
   onClose: () => void; onSalvo: (msg: string) => void
 }) {
   const seq = useRef(0)
   const nova = (l?: Partial<LinhaEdit>): LinhaEdit => ({ chave: ++seq.current, quantidade: '', lote: '', validade: '', ...l })
-  const [linhas, setLinhas] = useState<LinhaEdit[]>(() =>
-    linhasAtuais.length
+  // Sempre aparecem ao menos Lote 1 e Lote 2. Item ainda não contado já vem com
+  // o lote/validade que o sistema conhece (a quantidade fica em branco).
+  const [linhas, setLinhas] = useState<LinhaEdit[]>(() => {
+    const base = linhasAtuais.length
       ? linhasAtuais.map((l) => nova({ quantidade: String(l.quantidade), lote: l.lote ?? '', validade: l.validade ?? '' }))
-      : [nova()])
+      : sugestao.map((l) => nova({ lote: l.lote ?? '', validade: l.validade ?? '' }))
+    while (base.length < 2) base.push(nova())
+    return base
+  })
+  const vazia = (l: LinhaEdit) => !l.quantidade.trim() && !l.lote.trim() && !l.validade
+  // Linha sem quantidade e sem lote/validade é ignorada (ex.: Lote 2 não usado).
+  const preenchidas = linhas.filter((l) => !vazia(l))
   const [salvando, setSalvando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
   const trava = useTrava()
@@ -619,10 +719,11 @@ function EditorItem({ inv, item, gestao, linhasAtuais, onClose, onSalvo }: {
 
   function validar(): string | null {
     for (const [i, l] of linhas.entries()) {
+      if (vazia(l)) continue
       const q = lerQuantidade(l.quantidade)
-      if (q === null) return `Linha ${i + 1}: informe a quantidade (número inteiro, 0 ou mais).`
-      if (q < 0) return `Linha ${i + 1}: a quantidade não pode ser negativa.`
-      if (l.validade && !/^\d{4}-\d{2}-\d{2}$/.test(l.validade)) return `Linha ${i + 1}: validade inválida.`
+      if (q === null) return `Lote ${i + 1}: informe a quantidade (número inteiro, 0 ou mais). Se esse lote não existe, apague a linha.`
+      if (q < 0) return `Lote ${i + 1}: a quantidade não pode ser negativa.`
+      if (l.validade && !/^\d{4}-\d{2}-\d{2}$/.test(l.validade)) return `Lote ${i + 1}: validade inválida.`
     }
     return null
   }
@@ -630,14 +731,14 @@ function EditorItem({ inv, item, gestao, linhasAtuais, onClose, onSalvo }: {
   async function salvar(apagar = false) {
     setErro(null)
     if (!apagar) {
-      if (linhas.length === 0) { setErro('Adicione ao menos uma linha, ou use "Apagar contagem".'); return }
+      if (preenchidas.length === 0) { setErro('Informe a quantidade de ao menos um lote (0 se não encontrou nada), ou use "Apagar contagem".'); return }
       const v = validar()
       if (v) { setErro(v); return }
     }
     if (!trava.tentar()) return
     setSalvando(true)
     try {
-      const enviar = apagar ? [] : linhas.map((l) => ({ quantidade: String(lerQuantidade(l.quantidade)), lote: l.lote, validade: l.validade }))
+      const enviar = apagar ? [] : preenchidas.map((l) => ({ quantidade: String(lerQuantidade(l.quantidade)), lote: l.lote, validade: l.validade }))
       const r = await svc.salvarItem(inv.id, item.id, enviar)
       onSalvo(apagar
         ? `Contagem de "${item.name}" apagada: o item voltou a "não contado".`
@@ -658,22 +759,24 @@ function EditorItem({ inv, item, gestao, linhasAtuais, onClose, onSalvo }: {
           {gestao && <> · Saldo no sistema agora: <strong>{inteiro(item.current_stock)}</strong></>}
         </p>
         <p className="text-xs text-gray-500">
-          Uma linha por lote/validade encontrada. Sem lote? Deixe lote e validade em branco.
+          Uma linha por lote/validade encontrada; o Lote 2 pode ficar em branco se não houver. Item sem lote?
+          Deixe lote e validade em branco e informe só a quantidade. Achou mais lotes? Use "Adicionar lote".
           Salvar de novo substitui a contagem anterior deste item.
         </p>
 
         <div className="space-y-2">
-          <div className="grid grid-cols-[1fr_1.3fr_1.3fr_auto] gap-2 text-xs font-semibold text-gray-500 uppercase">
-            <span>Quantidade</span><span>Lote</span><span>Validade</span><span></span>
+          <div className="grid grid-cols-[3.5rem_1.3fr_1.3fr_1fr_auto] gap-2 text-xs font-semibold text-gray-500 uppercase">
+            <span></span><span>Lote</span><span>Validade</span><span>Quantidade</span><span className="w-8"></span>
           </div>
           {linhas.map((l, i) => (
-            <div key={l.chave} className="grid grid-cols-[1fr_1.3fr_1.3fr_auto] gap-2 items-center">
-              <Input inputMode="numeric" value={l.quantidade} onChange={(e) => mudar(l.chave, 'quantidade', e.target.value)}
-                placeholder="0" aria-label={`Quantidade linha ${i + 1}`} autoFocus={i === linhas.length - 1} />
+            <div key={l.chave} className="grid grid-cols-[3.5rem_1.3fr_1.3fr_1fr_auto] gap-2 items-center">
+              <span className="text-xs font-semibold text-gray-600">Lote {i + 1}</span>
               <Input value={l.lote} onChange={(e) => mudar(l.chave, 'lote', e.target.value)} maxLength={60}
-                placeholder="(sem lote)" aria-label={`Lote linha ${i + 1}`} />
+                placeholder="(sem lote)" aria-label={`Lote ${i + 1}`} />
               <Input type="date" value={l.validade} onChange={(e) => mudar(l.chave, 'validade', e.target.value)}
-                min="2015-01-01" aria-label={`Validade linha ${i + 1}`} />
+                min="2015-01-01" aria-label={`Validade ${i + 1}`} />
+              <Input inputMode="numeric" value={l.quantidade} onChange={(e) => mudar(l.chave, 'quantidade', e.target.value)}
+                placeholder="qtd" aria-label={`Quantidade lote ${i + 1}`} autoFocus={i === 0} />
               <button type="button" onClick={() => remover(l.chave)} title="Remover linha"
                 className="p-2 rounded-md text-red-600 hover:bg-red-50">
                 <Trash2 className="w-4 h-4" />
@@ -682,7 +785,7 @@ function EditorItem({ inv, item, gestao, linhasAtuais, onClose, onSalvo }: {
           ))}
           <div className="flex items-center justify-between">
             <Button type="button" size="sm" variant="outline" onClick={() => setLinhas((ls) => [...ls, nova()])} className="gap-1">
-              <Plus className="w-4 h-4" /> Adicionar linha
+              <Plus className="w-4 h-4" /> Adicionar lote
             </Button>
             <p className="text-sm">Total contado: <strong>{inteiro(total)}</strong> {item.unit ?? ''}</p>
           </div>
