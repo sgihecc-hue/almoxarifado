@@ -1710,10 +1710,27 @@ class ItemsService {
     }
   }
 
-  async exportToExcel(items: Item[], filename: string): Promise<void> {
+  /**
+   * Exporta a lista da tela. `lotesPorItem` (opcional) traz os lotes do LOCAL
+   * exibido; sem ele vale o lote/validade gravado no cadastro do item.
+   */
+  async exportToExcel(
+    items: Item[],
+    filename: string,
+    lotesPorItem?: Map<string, { batch_number: string | null; expiry_date: string | null; current_quantity?: number }[]>,
+  ): Promise<void> {
     try {
       // Create workbook
       const wb = XLSX.utils.book_new()
+
+      const dataBR = (d: string | null | undefined) =>
+        d ? new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('pt-BR') : ''
+      type LoteExp = { batch_number: string | null; expiry_date: string | null; current_quantity?: number }
+      const lotesDo = (item: Item): LoteExp[] => {
+        const x = item as any
+        if (lotesPorItem) return lotesPorItem.get(item.id) ?? []
+        return x.batch_number || x.expiry_date ? [{ batch_number: x.batch_number ?? null, expiry_date: x.expiry_date ?? null }] : []
+      }
 
       // Create headers
       const headers = [
@@ -1722,30 +1739,45 @@ class ItemsService {
         'Descrição',
         'Categoria',
         'Unidade',
+        'Lote',
+        'Validade',
+        'Outros lotes',
+        'Valor da Última Compra',
+        'Valor Referencial',
         'Estoque Atual',
         'Estoque Mínimo',
-        'Valor Unitário',
         'Valor Total',
         'Status'
       ]
 
       // Format data
-      const data = items.map(item => [
-        item.code,
-        item.name,
-        item.description || '',
-        item.category,
-        item.unit,
-        item.current_stock,
-        item.min_stock,
-        item.price || 0,
-        (item.price || 0) * item.current_stock,
-        item.current_stock === 0 
-          ? 'Sem Estoque' 
-          : item.current_stock <= item.min_stock 
-            ? 'Estoque Baixo' 
-            : 'Normal'
-      ])
+      const data = items.map(item => {
+        const x = item as any
+        const ls = lotesDo(item)
+        const ultima = Number(x.last_purchase_price) || null
+        const referencial = Number(x.reference_price) || null
+        const unit = ultima ?? referencial ?? (Number(item.price) || 0)
+        return [
+          item.code,
+          item.name,
+          item.description || '',
+          item.category,
+          item.unit,
+          ls[0] ? (ls[0].batch_number || 'sem lote') : '',
+          ls[0] ? dataBR(ls[0].expiry_date) : '',
+          ls.slice(1).map((l) => `${l.batch_number || 'sem lote'}${l.expiry_date ? ' val. ' + dataBR(l.expiry_date) : ''}${l.current_quantity != null ? ': ' + l.current_quantity : ''}`).join('; '),
+          ultima ?? '',
+          referencial ?? '',
+          item.current_stock,
+          item.min_stock,
+          Math.round(unit * item.current_stock * 100) / 100,
+          item.current_stock === 0
+            ? 'Sem Estoque'
+            : item.current_stock <= item.min_stock
+              ? 'Estoque Baixo'
+              : 'Normal'
+        ]
+      })
 
       // Create worksheet
       const ws = XLSX.utils.aoa_to_sheet([headers, ...data])
@@ -1757,9 +1789,13 @@ class ItemsService {
         { wch: 30 }, // Descrição
         { wch: 20 }, // Categoria
         { wch: 15 }, // Unidade
+        { wch: 18 }, // Lote
+        { wch: 12 }, // Validade
+        { wch: 30 }, // Outros lotes
+        { wch: 15 }, // Valor da Última Compra
+        { wch: 15 }, // Valor Referencial
         { wch: 15 }, // Estoque Atual
         { wch: 15 }, // Estoque Mínimo
-        { wch: 15 }, // Valor Unitário
         { wch: 15 }, // Valor Total
         { wch: 15 }, // Status
       ]

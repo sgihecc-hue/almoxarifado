@@ -206,7 +206,9 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
       // Exporta exatamente as linhas da tela, com o saldo do LOCAL exibido.
       await itemsService.exportToExcel(
         filteredItems.map((i) => ({ ...i, current_stock: getLocalQty(i) })),
-        `itens_almoxarifado_${hojeLocal()}`
+        `itens_almoxarifado_${hojeLocal()}`,
+        // Num satélite vão os lotes DAQUELE local; no Almoxarifado, o do cadastro (igual à tela).
+        locationId ? lotesById : undefined,
       )
     } catch (error) {
       console.error('Error exporting items:', error)
