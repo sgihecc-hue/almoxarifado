@@ -232,10 +232,10 @@ export const almoxInventarioService = {
    */
   async lotesSistema(comPreco: boolean): Promise<Record<string, InfoLotes>> {
     const campos = comPreco
-      ? 'id, batch_number, expiry_date, reference_price, last_purchase_price'
+      ? 'id, batch_number, expiry_date, reference_price, last_purchase_price, price'
       : 'id, batch_number, expiry_date'
     const [itens, almox] = await Promise.all([
-      buscarTodas<{ id: string; batch_number: string | null; expiry_date: string | null; reference_price?: number | null; last_purchase_price?: number | null }>((de, ate) =>
+      buscarTodas<{ id: string; batch_number: string | null; expiry_date: string | null; reference_price?: number | null; last_purchase_price?: number | null; price?: number | null }>((de, ate) =>
         supabase.from('warehouse_items').select(campos).eq('is_active', true).order('id').range(de, ate) as any),
       supabase.from('stock_locations').select('id').eq('code', 'ALMOX').maybeSingle(),
     ])
@@ -247,7 +247,7 @@ export const almoxInventarioService = {
       : []
     const mapa: Record<string, InfoLotes> = {}
     for (const i of itens) {
-      mapa[i.id] = { lotes: [], referencia: i.reference_price ?? null, ultimaCompra: i.last_purchase_price ?? null }
+      mapa[i.id] = { lotes: [], referencia: i.reference_price || i.price || null, ultimaCompra: i.last_purchase_price ?? null }
     }
     for (const l of lotes) {
       const lote = l.batch_number === 'SEMLOTE' ? null : l.batch_number

@@ -456,7 +456,7 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
     setCarregando(true); setErro(null)
     try {
       const [its, ls, inf] = await Promise.all([
-        svc.itensAtivos(gestao), svc.contagens(inv.id), svc.lotesSistema(gestao).catch(() => ({})),
+        svc.itensAtivos(gestao), svc.contagens(inv.id), svc.lotesSistema(true).catch(() => ({})),
       ])
       setItens(its)
       setLinhas(ls)
@@ -521,7 +521,7 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
         <td class="c">${n + 1}</td>
         <td><b>${esc(i.name)}</b>${i.code ? `<div class="cod">Cód. ${esc(i.code)}</div>` : ''}${extra}</td>
         ${cel(i.unit ?? '')}
-        ${gestao ? `<td class="r">${inf?.referencia ? moeda(inf.referencia) : ''}</td><td class="r">${inf?.ultimaCompra ? moeda(inf.ultimaCompra) : ''}</td>` : ''}
+        <td class="r">${inf?.referencia ? moeda(inf.referencia) : ''}</td><td class="r">${inf?.ultimaCompra ? moeda(inf.ultimaCompra) : ''}</td>
         ${comSaldo ? `<td class="r">${inteiro(i.current_stock)}</td>` : ''}
         ${cel(l1?.lote ?? '')}${cel(l1?.validade ? dataBR(l1.validade) : '')}<td class="q">${l1?.quantidade != null ? inteiro(l1.quantidade) : ''}</td>
         ${cel(l2?.lote ?? '')}${cel(l2?.validade ? dataBR(l2.validade) : '')}<td class="q">${l2?.quantidade != null ? inteiro(l2.quantidade) : ''}</td>
@@ -542,7 +542,7 @@ th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table
 <h1>Inventário do Almoxarifado nº ${inv.numero} — lista de contagem</h1>
 <div class="sub">Aberto em ${dataHora(inv.aberto_em)}${inv.observacao ? ' · ' + esc(inv.observacao) : ''} · ${esc(filtroNome)}${busca.trim() ? ` com "${esc(busca.trim())}"` : ''}: ${inteiro(visiveis.length)} itens · impresso em ${new Date().toLocaleString('pt-BR')}</div>
 <table><thead><tr>
-<th>#</th><th>Item</th><th>Unid.</th>${gestao ? '<th>Valor ref.</th><th>Última compra</th>' : ''}${comSaldo ? '<th>Qtd sistema</th>' : ''}
+<th>#</th><th>Item</th><th>Unid.</th><th>Valor unit.</th><th>Última compra</th>${comSaldo ? '<th>Qtd sistema</th>' : ''}
 <th>Lote 1</th><th>Validade 1</th><th>Qtd 1</th><th>Lote 2</th><th>Validade 2</th><th>Qtd 2</th><th>Qtd física total</th>
 </tr></thead><tbody>${corpo}</tbody></table>
 <div class="ass"><div>Contado por</div><div>Conferido por</div><div>Data</div></div>
@@ -609,6 +609,8 @@ th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table
                 <tr>
                   <th className="text-left px-4 py-2">Item</th>
                   <th className="text-left px-4 py-2">Unid.</th>
+                  <th className="text-right px-3 py-2">Valor unit.</th>
+                  <th className="text-right px-3 py-2">Última compra</th>
                   {gestao && <th className="text-right px-4 py-2">Saldo sistema</th>}
                   <th className="text-left px-3 py-2">Lote / Validade 1</th>
                   <th className="text-left px-3 py-2">Lote / Validade 2</th>
@@ -628,6 +630,8 @@ th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table
                         {i.code && <p className="text-xs text-gray-500">Cód. {i.code}</p>}
                       </td>
                       <td className="px-4 py-2 text-gray-600">{i.unit ?? '—'}</td>
+                      <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">{info[i.id]?.referencia ? moeda(info[i.id].referencia) : '—'}</td>
+                      <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">{info[i.id]?.ultimaCompra ? moeda(info[i.id].ultimaCompra) : '—'}</td>
                       {gestao && <td className="px-4 py-2 text-right text-gray-600">{inteiro(i.current_stock)}</td>}
                       {(() => {
                         // cinza = lote que o sistema conhece; preto = lote contado
@@ -678,6 +682,7 @@ th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table
           gestao={gestao}
           linhasAtuais={porItem.get(editando.id) ?? []}
           sugestao={info[editando.id]?.lotes ?? []}
+          precos={info[editando.id]}
           onClose={() => setEditando(null)}
           onSalvo={(msg) => { setEditando(null); setAviso(msg); void carregar() }}
         />
@@ -688,9 +693,10 @@ th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table
 
 interface LinhaEdit { chave: number; quantidade: string; lote: string; validade: string }
 
-function EditorItem({ inv, item, gestao, linhasAtuais, sugestao, onClose, onSalvo }: {
+function EditorItem({ inv, item, gestao, linhasAtuais, sugestao, precos, onClose, onSalvo }: {
   inv: Inventario; item: ItemInventario; gestao: boolean; linhasAtuais: LinhaContagem[]
   sugestao: { lote: string | null; validade: string | null }[]
+  precos?: InfoLotes
   onClose: () => void; onSalvo: (msg: string) => void
 }) {
   const seq = useRef(0)
@@ -757,6 +763,8 @@ function EditorItem({ inv, item, gestao, linhasAtuais, sugestao, onClose, onSalv
         <p className="text-sm text-gray-600">
           {item.code ? `Cód. ${item.code} · ` : ''}Unidade: {item.unit ?? '—'}
           {gestao && <> · Saldo no sistema agora: <strong>{inteiro(item.current_stock)}</strong></>}
+          <br />Valor unit.: <strong>{precos?.referencia ? moeda(precos.referencia) : '—'}</strong>
+          {' · '}Última compra: <strong>{precos?.ultimaCompra ? moeda(precos.ultimaCompra) : '—'}</strong>
         </p>
         <p className="text-xs text-gray-500">
           Uma linha por lote/validade encontrada; o Lote 2 pode ficar em branco se não houver. Item sem lote?
