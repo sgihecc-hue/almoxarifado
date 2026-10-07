@@ -65,9 +65,21 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   }, [user?.department_id])
   const canManageRequests = !isEnfermagem && (isAdmin || isManager || isPharmacyOperator)
 
+  // Inventário da farmácia: só quem está na lista do banco.
+  const [inventarioFarmacia, setInventarioFarmacia] = useState(false)
+  useEffect(() => {
+    if (!user?.id) { setInventarioFarmacia(false); return }
+    let cancelled = false
+    supabase.rpc('farmacia_inventario_pode').then(
+      ({ data }) => { if (!cancelled) setInventarioFarmacia(!!data) },
+      () => { if (!cancelled) setInventarioFarmacia(false) },
+    )
+    return () => { cancelled = true }
+  }, [user?.id])
+
   // isAtendente nos flags = "operador de farmácia" (atendente OU farmacêutico):
   // todos os itens de menu gated por f.isAtendente valem também pro farmacêutico.
-  const flags: VisibilityFlags = { isAdmin, isManager, isAtendente: isPharmacyOperator, isEnfermagem, pedeKitEnfermagem, canManageRequests }
+  const flags: VisibilityFlags = { isAdmin, isManager, isAtendente: isPharmacyOperator, isEnfermagem, pedeKitEnfermagem, canManageRequests, inventarioFarmacia }
 
   // Contador de solicitacoes pendentes para o setor que o user atende
   // (destination_department). Aparece como badge ao lado de "Solicitações".

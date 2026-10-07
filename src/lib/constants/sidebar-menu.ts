@@ -68,6 +68,8 @@ export interface VisibilityFlags {
   // Internacao, que nao tem codigo ENF.
   pedeKitEnfermagem: boolean
   canManageRequests: boolean
+  // Lista farmacia_inventario_acesso (Andressa, Pedro, Roselia...). 07/10/2026.
+  inventarioFarmacia?: boolean
 }
 
 export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | null }): SidebarSection[] {
@@ -192,6 +194,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Empréstimos', icon: Handshake, href: '/estoque/emprestimos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Vencimentos', icon: CalendarX, href: '/estoque/vencimentos', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Etiquetas de Lote', icon: Barcode, href: '/farmacia/etiquetas', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Inventário', icon: ClipboardCheck, href: '/farmacia/inventario', show: (f) => !!f.inventarioFarmacia },
       ],
     },
     {
