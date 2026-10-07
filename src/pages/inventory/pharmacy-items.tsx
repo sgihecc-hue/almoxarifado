@@ -577,7 +577,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                 Valor total do estoque{activeStock ? ` ${activeStock.name}` : ''}: <strong className="text-lg">{brl(geral.total)}</strong>
               </span>
               <span className="text-xs text-emerald-800">
-                {geral.comSaldo.toLocaleString('pt-BR')} itens com saldo
+                {items.length.toLocaleString('pt-BR')} itens ativos, {geral.comSaldo.toLocaleString('pt-BR')} com saldo neste estoque
                 {geral.semPreco > 0 && <> · <strong>{geral.semPreco}</strong> sem valor (contam R$ 0)</>}
               </span>
               {filtrado && (
