@@ -387,6 +387,26 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
 
   // N16: categorias do filtro = as que existem no cadastro carregado (DISTINCT).
   // A lista fixa ('Medicamentos', 'Material Hospitalar') nao casava com o
+  // Valor em R$ do estoque ativo (pedido da Andressa, 07/10): saldo do LOCAL x
+  // valor unitário (última compra; sem ela, o referencial; sem ele, o preço antigo).
+  const valorUnit = (item: Item) => {
+    const x = item as any
+    return Number(x.last_purchase_price) || Number(x.reference_price) || Number(item.price) || 0
+  }
+  const valorDe = (lista: Item[]) => {
+    let total = 0, comSaldo = 0, semPreco = 0
+    for (const i of lista) {
+      const q = getLocalQty(i)
+      if (q <= 0) continue
+      comSaldo++
+      const vu = valorUnit(i)
+      if (!vu) semPreco++
+      total += q * vu
+    }
+    return { total, comSaldo, semPreco }
+  }
+  const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+
   // cadastro real (MEDICAMENTO, MAT/MED...) e o filtro zerava a lista.
   const categoriasReais = [...new Set(items.map((i) => (i.category as string | null) ?? '').filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, 'pt-BR'))
@@ -548,6 +568,24 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+        {(() => {
+          const geral = valorDe(items)
+          const filtrado = filteredItems.length !== items.length ? valorDe(filteredItems) : null
+          return (
+            <div className="mt-3 flex flex-wrap items-baseline gap-x-6 gap-y-1 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900">
+              <span>
+                Valor total do estoque{activeStock ? ` ${activeStock.name}` : ''}: <strong className="text-lg">{brl(geral.total)}</strong>
+              </span>
+              <span className="text-xs text-emerald-800">
+                {geral.comSaldo.toLocaleString('pt-BR')} itens com saldo
+                {geral.semPreco > 0 && <> · <strong>{geral.semPreco}</strong> sem valor (contam R$ 0)</>}
+              </span>
+              {filtrado && (
+                <span className="text-xs text-emerald-800">Na lista filtrada: <strong>{brl(filtrado.total)}</strong></span>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {/* Inventory Table — barra de rolagem sempre visivel embaixo, pra o

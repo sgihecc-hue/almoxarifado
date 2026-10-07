@@ -1779,8 +1779,12 @@ class ItemsService {
         ]
       })
 
+      // Linha de total no fim (valor total do estoque exportado)
+      const totalGeral = data.reduce((acc, l) => acc + (Number(l[12]) || 0), 0)
+      const linhaTotal = headers.map((_, i) => (i === 1 ? 'TOTAL' : i === 12 ? Math.round(totalGeral * 100) / 100 : ''))
+
       // Create worksheet
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...data])
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...data, [], linhaTotal])
 
       // Set column widths
       const colWidths = [
