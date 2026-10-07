@@ -33,6 +33,7 @@ interface MovRow {
   pedido: number | null
   destino: string | null
   responsavel: string | null
+  motivo: string | null
 }
 
 // Validade vem como aaaa-mm-dd; sem fuso pra nao virar o dia anterior.
@@ -42,11 +43,25 @@ const fmtValidade = (d: string | null) => (d ? d.split('-').reverse().join('/') 
 const TIPO_LABEL: Record<string, string> = {
   PRESCRICAO: 'Dispensação',
   SOLICITACAO: 'Solicitação (atendimento)',
-  SAIDA_AVULSA: 'Quebra / Avulsa',
+  SAIDA_AVULSA: 'Saída avulsa',
   AJUSTE: 'Ajuste',
   TRANSFERENCIA: 'Transferência',
 }
 const tipoLabel = (t: string) => TIPO_LABEL[t] ?? t
+
+// Motivo gravado na saída avulsa/transferência (stock_movements.reason).
+const MOTIVO_LABEL: Record<string, string> = {
+  quebra: 'Quebra / Avaria', vencimento: 'Vencimento', transferencia: 'Transferência',
+  devolucao_fornecedor: 'Devolução ao fornecedor', defeito_fabricacao: 'Defeito de fabricação',
+  embalagem_violada: 'Embalagem violada', ajuste_inventario: 'Ajuste de inventário', outro: 'Outro',
+  emprestimo: 'Empréstimo', pagamento_emprestimo: 'Pagamento de empréstimo', permuta: 'Permuta',
+  consignado: 'Consignado', troca_validade: 'Troca por validade', doacao: 'Doação',
+}
+/** Rótulo da linha: saída avulsa mostra o motivo escolhido (não "Quebra" para tudo). */
+const rotulo = (r: { tipo: string; motivo: string | null }) =>
+  r.tipo === 'SAIDA_AVULSA' || r.tipo === 'AJUSTE' || r.tipo === 'TRANSFERENCIA'
+    ? (r.motivo ? (MOTIVO_LABEL[r.motivo] ?? r.motivo) : tipoLabel(r.tipo))
+    : tipoLabel(r.tipo)
 
 type Modo = 'dia' | 'semana' | 'mes' | 'personalizado'
 
@@ -150,7 +165,7 @@ export function MovimentacaoDiaria() {
     if (vis.length === 0) return
     const dados = vis.map((r) => ({
       'Data/Hora': fmtMomento(r.momento),
-      Tipo: tipoLabel(r.tipo),
+      Tipo: rotulo(r),
       Pedido: r.pedido ?? '',
       Destino: r.destino ?? '',
       Medicamento: r.item_name,
@@ -184,7 +199,7 @@ export function MovimentacaoDiaria() {
     const linhas = vis.map((r) => `
       <tr>
         <td>${fmtMomento(r.momento)}</td>
-        <td>${tipoLabel(r.tipo)}</td>
+        <td>${escapeHtml(rotulo(r))}</td>
         <td>${r.pedido ?? ''}</td>
         <td>${escapeHtml(r.destino ?? '')}</td>
         <td>${escapeHtml(r.item_name)}</td>
@@ -300,7 +315,7 @@ export function MovimentacaoDiaria() {
               <option value="">Todas as saídas</option>
               <option value="SOLICITACAO">Envios por pedido (satélites/setores)</option>
               <option value="PRESCRICAO">Dispensações</option>
-              <option value="SAIDA_AVULSA">Quebra / Avulsa</option>
+              <option value="SAIDA_AVULSA">Saídas avulsas (quebra, vencimento, ajuste…)</option>
               <option value="TRANSFERENCIA">Transferências</option>
               <option value="AJUSTE">Ajustes</option>
             </select>
@@ -361,7 +376,7 @@ export function MovimentacaoDiaria() {
                 ) : vis.map((r, i) => (
                   <tr key={`${r.item_id}-${r.momento}-${i}`} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txt }}>{fmtMomento(r.momento)}</td>
-                    <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{tipoLabel(r.tipo)}</td>
+                    <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{rotulo(r)}</td>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{r.pedido ? `#${r.pedido}` : '—'}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txtSec }}>{r.destino ?? '—'}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txt }}>{r.item_name}</td>
