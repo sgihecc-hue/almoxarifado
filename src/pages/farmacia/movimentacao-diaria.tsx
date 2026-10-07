@@ -29,6 +29,10 @@ interface MovRow {
   // Lote e validade do proprio movimento no livro-razao (22/09/2026).
   lote: string | null
   validade: string | null
+  // 07/10/2026 (pedido da Andressa): p/ quem foi e qual pedido.
+  pedido: number | null
+  destino: string | null
+  responsavel: string | null
 }
 
 // Validade vem como aaaa-mm-dd; sem fuso pra nao virar o dia anterior.
@@ -40,6 +44,7 @@ const TIPO_LABEL: Record<string, string> = {
   SOLICITACAO: 'Solicitação (atendimento)',
   SAIDA_AVULSA: 'Quebra / Avulsa',
   AJUSTE: 'Ajuste',
+  TRANSFERENCIA: 'Transferência',
 }
 const tipoLabel = (t: string) => TIPO_LABEL[t] ?? t
 
@@ -97,6 +102,9 @@ export function MovimentacaoDiaria() {
   const [ini, setIni] = useState(hojeISO())
   const [fim, setFim] = useState(hojeISO())
   const [classe, setClasse] = useState<string>('') // '' = todas
+  // Filtro por tipo de saída (no cliente). 'SOLICITACAO' = o que foi mandado
+  // para as satélites/setores atendendo pedido.
+  const [tipoFiltro, setTipoFiltro] = useState<string>('')
 
   const [rows, setRows] = useState<MovRow[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -136,17 +144,22 @@ export function MovimentacaoDiaria() {
     }
   }
 
+  const vis = useMemo(() => (rows ?? []).filter((r) => !tipoFiltro || r.tipo === tipoFiltro), [rows, tipoFiltro])
+
   function exportar() {
-    if (!rows || rows.length === 0) return
-    const dados = rows.map((r) => ({
+    if (vis.length === 0) return
+    const dados = vis.map((r) => ({
       'Data/Hora': fmtMomento(r.momento),
       Tipo: tipoLabel(r.tipo),
+      Pedido: r.pedido ?? '',
+      Destino: r.destino ?? '',
       Medicamento: r.item_name,
       Lote: r.lote ?? '',
       Validade: fmtValidade(r.validade),
+      Quantidade: r.movimentado,
+      'Registrado por': r.responsavel ?? '',
       Classe: r.medication_class ? (MEDICATION_CLASS_LABEL[r.medication_class as MedicationClass] ?? r.medication_class) : '—',
       'Estoque anterior': r.saldo_antes,
-      Movimentado: r.movimentado,
       'Estoque atual': r.saldo_depois,
     }))
     const ws = XLSX.utils.json_to_sheet(dados)
@@ -154,10 +167,10 @@ export function MovimentacaoDiaria() {
     XLSX.utils.book_append_sheet(wb, ws, 'Movimentação')
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
     saveAs(new Blob([buf], { type: 'application/octet-stream' }),
-      `movimentacao_${activeStock?.code}_${periodo.inicio}_a_${periodo.fim}.xlsx`)
+      `movimentacao_${activeStock?.code}${tipoFiltro ? '_' + tipoFiltro.toLowerCase() : ''}_${periodo.inicio}_a_${periodo.fim}.xlsx`)
   }
 
-  const totalQtd = (rows ?? []).reduce((s, r) => s + Number(r.movimentado || 0), 0)
+  const totalQtd = vis.reduce((s, r) => s + Number(r.movimentado || 0), 0)
 
   // dd/mm HH:MM do momento do movimento
   const fmtMomento = (iso: string) => {
@@ -167,11 +180,13 @@ export function MovimentacaoDiaria() {
 
   // Impressão: abre uma janela limpa só com o relatório e chama print().
   function imprimir() {
-    if (!rows || rows.length === 0) return
-    const linhas = rows.map((r) => `
+    if (vis.length === 0) return
+    const linhas = vis.map((r) => `
       <tr>
         <td>${fmtMomento(r.momento)}</td>
         <td>${tipoLabel(r.tipo)}</td>
+        <td>${r.pedido ?? ''}</td>
+        <td>${escapeHtml(r.destino ?? '')}</td>
         <td>${escapeHtml(r.item_name)}</td>
         <td>${escapeHtml(r.lote ?? '')}</td>
         <td>${fmtValidade(r.validade)}</td>
@@ -191,14 +206,14 @@ export function MovimentacaoDiaria() {
         @media print{ button{display:none} }
       </style></head><body>
       <h1>Movimentação Diária — ${escapeHtml(activeStock?.name ?? '')}</h1>
-      <p class="sub">Período: ${fmtBR(periodo.inicio)} a ${fmtBR(periodo.fim)}${classe ? ' · Classe: ' + escapeHtml(MEDICATION_CLASS_LABEL[classe as MedicationClass] ?? classe) : ''} · Emitido em ${new Date().toLocaleString('pt-BR')}</p>
+      <p class="sub">Período: ${fmtBR(periodo.inicio)} a ${fmtBR(periodo.fim)}${tipoFiltro ? ' · ' + escapeHtml(tipoLabel(tipoFiltro)) : ''}${classe ? ' · Classe: ' + escapeHtml(MEDICATION_CLASS_LABEL[classe as MedicationClass] ?? classe) : ''} · Emitido em ${new Date().toLocaleString('pt-BR')}</p>
       <table>
         <thead><tr>
-          <th>Data/Hora</th><th>Tipo</th><th>Medicamento</th><th>Lote</th><th>Validade</th>
+          <th>Data/Hora</th><th>Tipo</th><th>Pedido</th><th>Destino</th><th>Medicamento</th><th>Lote</th><th>Validade</th>
           <th style="text-align:right">Estoque anterior</th><th style="text-align:right">Movim.</th><th style="text-align:right">Estoque atual</th>
         </tr></thead>
         <tbody>${linhas}</tbody>
-        <tfoot><tr><td colspan="6">Total movimentado</td><td style="text-align:right">${totalQtd}</td><td></td></tr></tfoot>
+        <tfoot><tr><td colspan="8">Total movimentado</td><td style="text-align:right">${totalQtd}</td><td></td></tr></tfoot>
       </table>
       <button onclick="window.print()" style="margin-top:16px;padding:8px 16px">Imprimir</button>
       </body></html>`
@@ -219,7 +234,7 @@ export function MovimentacaoDiaria() {
         <div>
           <h1 className="text-2xl font-bold" style={{ color: txt }}>Movimentação Diária</h1>
           <p className="text-sm" style={{ color: txtSec }}>
-            Todas as saídas do estoque, por dia (dispensações, quebras/avulsas, solicitações)
+            Todas as saídas do estoque, por dia (dispensações, quebras/avulsas, envios por pedido). Na CAF, filtre "Envios por pedido" para ver o que foi mandado para cada satélite
             {activeStock && <> — <strong>{activeStock.name}</strong></>}
           </p>
         </div>
@@ -279,15 +294,27 @@ export function MovimentacaoDiaria() {
             </select>
           </div>
 
+          <div className="flex flex-col gap-1">
+            <label style={lbl}>Tipo de saída</label>
+            <select value={tipoFiltro} onChange={(e) => setTipoFiltro(e.target.value)} style={{ ...inputStyle, minWidth: 240 }}>
+              <option value="">Todas as saídas</option>
+              <option value="SOLICITACAO">Envios por pedido (satélites/setores)</option>
+              <option value="PRESCRICAO">Dispensações</option>
+              <option value="SAIDA_AVULSA">Quebra / Avulsa</option>
+              <option value="TRANSFERENCIA">Transferências</option>
+              <option value="AJUSTE">Ajustes</option>
+            </select>
+          </div>
+
           <div className="flex items-center gap-2 ml-auto">
             <Button onClick={gerar} disabled={loading || !activeStock} className="bg-emerald-600 hover:bg-emerald-700 text-white">
               {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
               Gerar
             </Button>
-            <Button variant="outline" onClick={imprimir} disabled={!rows || rows.length === 0}>
+            <Button variant="outline" onClick={imprimir} disabled={vis.length === 0}>
               <Printer className="w-4 h-4 mr-2" /> Imprimir
             </Button>
-            <Button variant="outline" onClick={exportar} disabled={!rows || rows.length === 0}>
+            <Button variant="outline" onClick={exportar} disabled={vis.length === 0}>
               <Download className="w-4 h-4 mr-2" /> Exportar XLSX
             </Button>
           </div>
@@ -308,15 +335,17 @@ export function MovimentacaoDiaria() {
         <div style={glass} className="overflow-hidden">
           <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}` }}>
             <span className="text-sm font-semibold" style={{ color: txt }}>
-              {rows.length} linha(s) · total {totalQtd.toLocaleString('pt-BR')} un
+              {vis.length} linha(s) · total {totalQtd.toLocaleString('pt-BR')} un
             </span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px]">
+            <table className="w-full min-w-[1020px]">
               <thead>
                 <tr style={{ background: mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)', color: txtMut }}>
                   <th className="text-left px-4 py-2 text-xs font-medium">Data/Hora</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Tipo</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium">Pedido</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium">Destino</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Medicamento</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Lote</th>
                   <th className="text-left px-4 py-2 text-xs font-medium">Validade</th>
@@ -327,12 +356,14 @@ export function MovimentacaoDiaria() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 ? (
-                  <tr><td colSpan={9} className="text-center py-8 text-sm" style={{ color: txtMut }}>Nenhuma saída no período.</td></tr>
-                ) : rows.map((r, i) => (
+                {vis.length === 0 ? (
+                  <tr><td colSpan={11} className="text-center py-8 text-sm" style={{ color: txtMut }}>Nenhuma saída no período.</td></tr>
+                ) : vis.map((r, i) => (
                   <tr key={`${r.item_id}-${r.momento}-${i}`} style={{ borderTop: `1px solid ${mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txt }}>{fmtMomento(r.momento)}</td>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{tipoLabel(r.tipo)}</td>
+                    <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{r.pedido ? `#${r.pedido}` : '—'}</td>
+                    <td className="px-4 py-2 text-sm" style={{ color: txtSec }}>{r.destino ?? '—'}</td>
                     <td className="px-4 py-2 text-sm" style={{ color: txt }}>{r.item_name}</td>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{r.lote ?? '—'}</td>
                     <td className="px-4 py-2 text-sm whitespace-nowrap" style={{ color: txtSec }}>{fmtValidade(r.validade) || '—'}</td>

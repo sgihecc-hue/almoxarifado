@@ -151,6 +151,7 @@ const schema = z.object({
   controlled_subclass: z.enum(['A1', 'A2', 'A3', 'B1', 'B2', 'C1', 'C2', 'C3', 'C4']).optional(),
   // Farmácia: item faz parte da padronização da farmácia.
   padronizado: z.boolean().optional(),
+  nao_padronizado: z.boolean().optional(),
 })
 
 type FormData = z.infer<typeof schema>
@@ -396,6 +397,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
     reference_price: (item as any).reference_price ?? undefined,
     controlled_subclass: (item as any).controlled_subclass ?? undefined,
     padronizado: (item as any).padronizado ?? false,
+    nao_padronizado: (item as any).nao_padronizado ?? false,
   })
 
   const { register, handleSubmit, formState: { errors }, reset, watch, setValue } = useForm<FormData>({
@@ -530,7 +532,9 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
       // service sincroniza medication_class (single) com a 1ª do array.
       medication_classes: selectedClasses.length > 0 ? selectedClasses : ['uso_geral'],
       controlled_subclass: hasControlados ? (data.controlled_subclass ?? null) : null,
-      padronizado: !!data.padronizado,
+      // As duas marcas são excludentes: não padronizado vence.
+      padronizado: !!data.padronizado && !data.nao_padronizado,
+      nao_padronizado: !!data.nao_padronizado,
       batch_number: data.batch_number || null,
       expiry_date: data.expiry_date || null,
       last_purchase_price: data.last_purchase_price ?? null,
@@ -768,6 +772,19 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
                   <div className="text-sm font-medium text-gray-900">Medicamento padronizado</div>
                   <p className="text-xs text-gray-500 mt-0.5">
                     Marque se este item faz parte da padronização da farmácia.
+                  </p>
+                </div>
+              </label>
+              <label className="flex items-start gap-2 cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  {...register('nao_padronizado')}
+                  className="w-4 h-4 mt-0.5 flex-shrink-0 accent-orange-500"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-orange-700">Medicamento NÃO padronizado</div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Marcado, a linha do item fica laranja na tela de estoque.
                   </p>
                 </div>
               </label>

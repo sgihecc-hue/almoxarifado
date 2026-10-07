@@ -61,6 +61,7 @@ const itemSchema = z.object({
     'xarope', 'supositorio', 'gotas', 'outros',
   ]).optional(),
   padronizado: z.boolean().optional(),
+  nao_padronizado: z.boolean().optional(),
 })
 
 type ItemFormData = z.infer<typeof itemSchema>
@@ -115,6 +116,7 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
       unit: 'Un',
       min_stock: 0,
       padronizado: false,
+      nao_padronizado: false,
     }
   })
 
@@ -177,7 +179,8 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
         controlled_subclass: type === 'pharmacy' && hasControlados
           ? data.controlled_subclass : null,
         presentation: type === 'pharmacy' ? data.presentation : undefined,
-        padronizado: type === 'pharmacy' ? !!data.padronizado : undefined,
+        padronizado: type === 'pharmacy' ? !!data.padronizado && !data.nao_padronizado : undefined,
+        nao_padronizado: type === 'pharmacy' ? !!data.nao_padronizado : undefined,
         avg_monthly_consumption: type === 'pharmacy'
           ? data.avg_monthly_consumption : undefined,
         lead_time_days: type === 'warehouse' ? data.lead_time_days : undefined,
@@ -543,6 +546,19 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
                     <div className="text-sm font-medium text-gray-900">Medicamento padronizado</div>
                     <p className="text-xs text-gray-500 mt-0.5">
                       Marque se este item faz parte da padronização da farmácia.
+                    </p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 p-3 rounded-lg cursor-pointer select-none border border-orange-200 bg-orange-50 hover:bg-orange-100 transition-colors">
+                  <input
+                    type="checkbox"
+                    {...register('nao_padronizado')}
+                    className="w-4 h-4 mt-0.5 flex-shrink-0 accent-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-orange-700">Medicamento NÃO padronizado</div>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Marcado, a linha do item fica laranja na tela de estoque.
                     </p>
                   </div>
                 </label>

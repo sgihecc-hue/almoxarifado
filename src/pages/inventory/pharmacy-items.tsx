@@ -746,9 +746,16 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                 const supplyPoint = pontoDePedido(item)
                 
                 return (
-                  <tr key={item.id} className="hover:bg-gray-50">
+                  <tr key={item.id}
+                    className={(item as any).nao_padronizado ? 'bg-orange-100 hover:bg-orange-200' : 'hover:bg-gray-50'}
+                    title={(item as any).nao_padronizado ? 'Medicamento não padronizado' : undefined}>
                     <td className="px-2 py-2 text-xs text-gray-600 whitespace-nowrap">{item.code}</td>
-                    <td className="px-2 py-2 text-sm font-medium text-gray-900">{item.name}</td>
+                    <td className="px-2 py-2 text-sm font-medium text-gray-900">
+                      {item.name}
+                      {(item as any).nao_padronizado && (
+                        <span className="ml-1 inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-500 text-white align-middle">NÃO PADRONIZADO</span>
+                      )}
+                    </td>
                     <td className="px-2 py-2 text-xs text-gray-600 whitespace-nowrap">{item.category}</td>
                     <td className="px-2 py-2 text-xs text-center text-gray-700 font-medium">{item.unit}</td>
                     <td className="px-2 py-2 text-xs whitespace-nowrap">

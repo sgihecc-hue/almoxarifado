@@ -66,7 +66,7 @@ export function PharmacyCatalogo() {
       // filtra inativos por padrão); usamos query crua aqui.
       const { data, error } = await supabase
         .from('pharmacy_items')
-        .select('id, code, name, description, category, unit, current_stock, min_stock, is_active, padronizado, medication_class, medication_classes, controlled_subclass, presentation, is_mav, created_at, updated_at')
+        .select('id, code, name, description, category, unit, current_stock, min_stock, is_active, padronizado, nao_padronizado, medication_class, medication_classes, controlled_subclass, presentation, is_mav, created_at, updated_at')
         .order('name', { ascending: true })
         .limit(2000)
       if (error) throw error
@@ -235,7 +235,11 @@ export function PharmacyCatalogo() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      {(it as any).padronizado ? (
+                      {(it as any).nao_padronizado ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-800 border border-orange-300">
+                          Não padronizado
+                        </span>
+                      ) : (it as any).padronizado ? (
                         <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-800 border border-green-200">
                           Padronizado
                         </span>

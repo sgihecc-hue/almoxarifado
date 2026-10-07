@@ -75,6 +75,7 @@ export interface Item {
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
+  nao_padronizado?: boolean
   // Consumo médio mensal informado no cadastro (un/mês). Null/undefined =>
   // a tela cai no cálculo por consumption_history.
   avg_monthly_consumption?: number | null
@@ -124,6 +125,7 @@ interface CreateItemData {
   // Setores autorizados a solicitar o item; vazio = todos. Padronizado (farmácia).
   allowed_department_ids?: string[]
   padronizado?: boolean
+  nao_padronizado?: boolean
   expiry_date?: string
   batch_number?: string
   invoice_number?: string
@@ -187,6 +189,7 @@ interface UpdateItemData {
     | 'xarope' | 'supositorio' | 'gotas' | 'outros'
   is_mav?: boolean
   padronizado?: boolean
+  nao_padronizado?: boolean
   avg_monthly_consumption?: number | null
   avg_daily_consumption?: number | null
 }
@@ -974,6 +977,7 @@ class ItemsService {
         allowed_department_ids: data.allowed_department_ids ?? [],
         padronizado: data.padronizado ?? false,
       }
+      if (data.nao_padronizado !== undefined) insertData.nao_padronizado = data.nao_padronizado
 
       // Add optional fields only if they exist
       if (data.description !== undefined && data.description !== null && data.description.trim() !== '') {
