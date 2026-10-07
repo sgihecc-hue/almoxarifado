@@ -66,6 +66,115 @@ const NOME_STATUS_PEDIDO: Record<string, string> = {
   processing: 'Em processamento',
 }
 
+// ---------------------------------------------------------------------------
+// Relatório para o financeiro (pedido da Rafaela, 07/10): qtd do sistema x qtd
+// achada, diferença e valores. Serve para a prévia (inventário aberto) e para
+// o resultado gravado no fechamento.
+// ---------------------------------------------------------------------------
+const qtdSistema = (r: LinhaResultado) => (r.contado ? Number(r.saldo_sistema_contagem ?? 0) : Number(r.saldo_antes ?? 0))
+const qtdAchada = (r: LinhaResultado) => (r.contado ? Number(r.quantidade_contada ?? 0) : null)
+
+function somaFinanceira(linhas: LinhaResultado[]) {
+  let vSis = 0, vAch = 0, vSobra = 0, vFalta = 0, qSobra = 0, qFalta = 0
+  for (const r of linhas) {
+    const vu = Number(r.valor_unitario ?? 0)
+    vSis += qtdSistema(r) * vu
+    vAch += (qtdAchada(r) ?? qtdSistema(r) + r.diferenca) * vu
+    if (r.diferenca > 0) { qSobra += r.diferenca; vSobra += Number(r.valor_diferenca ?? 0) }
+    if (r.diferenca < 0) { qFalta += -r.diferenca; vFalta += -Number(r.valor_diferenca ?? 0) }
+  }
+  return { vSis, vAch, vSobra, vFalta, qSobra, qFalta, liquido: vSobra - vFalta }
+}
+
+function linhasPlanilha(linhas: LinhaResultado[]) {
+  return linhas.map((x) => {
+    const vu = Number(x.valor_unitario ?? 0)
+    const ach = qtdAchada(x)
+    return {
+      Item: x.item_nome ?? '',
+      'Código': x.item_codigo ?? '',
+      Unidade: x.unidade ?? '',
+      Contado: x.contado ? 'Sim' : 'Não',
+      'Qtd sistema': qtdSistema(x),
+      'Qtd achada': ach ?? '',
+      'Diferença': x.diferenca,
+      'Valor unitário (R$)': vu,
+      'Valor sistema (R$)': Math.round(qtdSistema(x) * vu * 100) / 100,
+      'Valor achado (R$)': ach == null ? '' : Math.round(ach * vu * 100) / 100,
+      'Valor diferença (R$)': Number(x.valor_diferenca ?? 0),
+      'Saldo antes': x.saldo_antes,
+      'Saldo depois': x.saldo_depois,
+      Lotes: (x.lotes ?? []).map((l) => `${l.lote ?? 'sem lote'}${l.validade ? ` val ${dataBR(l.validade)}` : ''}: ${l.quantidade}`).join('; '),
+    }
+  })
+}
+
+/** Abre o relatório em A4 deitado e chama a impressão (dá p/ salvar em PDF). */
+function imprimirRelatorioFinanceiro(o: {
+  inv: Inventario; linhas: LinhaResultado[]; previa: boolean; filtroNome: string; nomes?: Record<string, string>
+}): string | null {
+  const { inv, linhas, previa } = o
+  const esc = (t: unknown) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
+  const t = somaFinanceira(linhas)
+  const cor = (n: number) => (n > 0 ? 'pos' : n < 0 ? 'neg' : '')
+  const corpo = linhas.map((r, i) => {
+    const vu = Number(r.valor_unitario ?? 0)
+    const ach = qtdAchada(r)
+    return `<tr>
+      <td class="c">${i + 1}</td>
+      <td><b>${esc(r.item_nome ?? '')}</b>${r.item_codigo ? `<div class="cod">Cód. ${esc(r.item_codigo)}</div>` : ''}</td>
+      <td>${esc(r.unidade ?? '')}</td>
+      <td class="r">${inteiro(qtdSistema(r))}</td>
+      <td class="r">${ach == null ? 'não contado' : inteiro(ach)}</td>
+      <td class="r ${cor(r.diferenca)}">${sinal(r.diferenca)}</td>
+      <td class="r">${moeda(vu)}</td>
+      <td class="r">${moeda(qtdSistema(r) * vu)}</td>
+      <td class="r">${ach == null ? '' : moeda(ach * vu)}</td>
+      <td class="r ${cor(Number(r.valor_diferenca))}">${moeda(r.valor_diferenca)}</td>
+    </tr>`
+  }).join('')
+  const nomes = o.nomes ?? {}
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<title>Inventário nº ${inv.numero} - relatório de ajustes</title>
+<style>
+@page{size:A4 landscape;margin:10mm}
+body{font-family:Arial,sans-serif;font-size:10px;color:#111;margin:0}
+h1{font-size:16px;margin:0 0 2px}.sub{color:#555;margin-bottom:10px}
+.aviso{border:1px solid #e0b000;background:#fff8dc;padding:6px;margin-bottom:8px}
+.cards{display:flex;gap:8px;margin-bottom:10px}.card{flex:1;border:1px solid #bbb;border-radius:4px;padding:6px}
+.card .t{font-size:9px;color:#555;text-transform:uppercase}.card .v{font-size:14px;font-weight:bold}
+table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:3px 4px;vertical-align:top}
+th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table-header-group}tr{page-break-inside:avoid}
+.r{text-align:right;white-space:nowrap}.c{text-align:center;color:#666}.cod{color:#555;font-size:9px}
+.pos{color:#0a7a3e}.neg{color:#b00020}tfoot td{font-weight:bold;background:#f2f2f2}
+.ass{margin-top:28px;display:flex;gap:40px}.ass div{flex:1;border-top:1px solid #333;padding-top:3px;text-align:center}
+</style></head><body>
+<h1>Inventário do Almoxarifado nº ${inv.numero} — relatório de ajustes</h1>
+<div class="sub">Aberto em ${dataHora(inv.aberto_em)}${nomes[inv.aberto_por] ? ' por ' + esc(nomes[inv.aberto_por]) : ''}${inv.fechado_em ? ` · fechado em ${dataHora(inv.fechado_em)}${inv.fechado_por && nomes[inv.fechado_por] ? ' por ' + esc(nomes[inv.fechado_por]) : ''}` : ''}${inv.observacao ? ' · ' + esc(inv.observacao) : ''} · ${esc(o.filtroNome)}: ${inteiro(linhas.length)} itens · emitido em ${new Date().toLocaleString('pt-BR')}</div>
+${previa ? '<div class="aviso"><b>Prévia:</b> o inventário ainda está aberto. Os números podem mudar até o fechamento.</div>' : ''}
+<div class="cards">
+<div class="card"><div class="t">Valor no sistema</div><div class="v">${moeda(t.vSis)}</div></div>
+<div class="card"><div class="t">Valor achado</div><div class="v">${moeda(t.vAch)}</div></div>
+<div class="card"><div class="t">Sobras</div><div class="v pos">${moeda(t.vSobra)}</div>${inteiro(t.qSobra)} un</div>
+<div class="card"><div class="t">Faltas</div><div class="v neg">${moeda(t.vFalta)}</div>${inteiro(t.qFalta)} un</div>
+<div class="card"><div class="t">Resultado líquido</div><div class="v ${cor(t.liquido)}">${moeda(t.liquido)}</div></div>
+</div>
+<table><thead><tr>
+<th>#</th><th>Item</th><th>Unid.</th><th>Qtd sistema</th><th>Qtd achada</th><th>Diferença</th>
+<th>Valor unit.</th><th>Valor sistema</th><th>Valor achado</th><th>Valor diferença</th>
+</tr></thead><tbody>${corpo}</tbody>
+<tfoot><tr><td></td><td colspan="6">Total</td><td class="r">${moeda(t.vSis)}</td><td class="r">${moeda(t.vAch)}</td><td class="r ${cor(t.liquido)}">${moeda(t.liquido)}</td></tr></tfoot>
+</table>
+<p class="sub">Qtd sistema = saldo do sistema quando o item foi contado. Valor unit. = último preço de compra (sem ele, o preço do cadastro).</p>
+<div class="ass"><div>Responsável pelo inventário</div><div>Conferido por</div><div>Financeiro</div></div>
+<script>window.onload=function(){window.print()}</script>
+</body></html>`
+  const w = window.open('', '_blank')
+  if (!w) return 'O navegador bloqueou a janela de impressão. Libere pop-ups para este site e tente de novo.'
+  w.document.open(); w.document.write(html); w.document.close()
+  return null
+}
+
 /** Trava de duplo clique: o estado do React não bloqueia o 2º clique no mesmo tick. */
 function useTrava() {
   const ref = useRef(false)
@@ -850,6 +959,17 @@ function Conferencia({ inv }: { inv: Inventario }) {
   useEffect(() => { void carregar() }, [carregar])
 
   const t = useMemo(() => totais(rs), [rs])
+  const [avisoImp, setAvisoImp] = useState<string | null>(null)
+  const nomeFiltro = filtro === 'diferenca' ? 'itens com diferença' : filtro === 'nao_contados' ? 'itens não contados' : 'todos os itens'
+  function imprimir() {
+    setAvisoImp(imprimirRelatorioFinanceiro({ inv, linhas: visiveis, previa: true, filtroNome: nomeFiltro }))
+  }
+  function exportar() {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhasPlanilha(visiveis)), 'Itens')
+    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    saveAs(new Blob([buf], { type: 'application/octet-stream' }), `inventario_almox_${inv.numero}_previa_${hojeLocal()}.xlsx`)
+  }
   const visiveis = useMemo(() => {
     const q = normalizarBusca(busca)
     return rs.filter((r) => {
@@ -889,7 +1009,15 @@ function Conferencia({ inv }: { inv: Inventario }) {
         <Button size="sm" variant="outline" onClick={() => void carregar()} disabled={carregando} className="gap-1">
           {carregando ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Atualizar
         </Button>
+        <Button size="sm" variant="outline" onClick={imprimir} disabled={carregando || visiveis.length === 0} className="gap-1"
+          title="Relatório p/ o financeiro: qtd sistema x achada, diferença e valores (imprime ou salva em PDF)">
+          <Printer className="w-4 h-4" /> Imprimir relatório
+        </Button>
+        <Button size="sm" variant="outline" onClick={exportar} disabled={carregando || visiveis.length === 0} className="gap-1">
+          <FileSpreadsheet className="w-4 h-4" /> Exportar .xlsx
+        </Button>
       </div>
+      {avisoImp && <p className="text-sm text-red-700">{avisoImp}</p>}
       {!erro && <TabelaResultado linhas={visiveis} carregando={carregando} />}
     </div>
   )
@@ -1223,6 +1351,7 @@ function Relatorio({ id, nomes: nomesBase, onVoltar }: { id: string; nomes: Reco
   const [erro, setErro] = useState<unknown>(null)
   const [filtro, setFiltro] = useState<FiltroRel>('diferenca')
   const [busca, setBusca] = useState('')
+  const [avisoImp, setAvisoImp] = useState<string | null>(null)
 
   const carregar = useCallback(async () => {
     setCarregando(true); setErro(null)
@@ -1295,21 +1424,7 @@ function Relatorio({ id, nomes: nomesBase, onVoltar }: { id: string; nomes: Reco
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Campo', 'Valor'], ...resumo]), 'Resumo')
     if (rs.length) {
-      const itens = rs.map((x) => ({
-        Item: x.item_nome ?? '',
-        'Código': x.item_codigo ?? '',
-        Unidade: x.unidade ?? '',
-        Contado: x.contado ? 'Sim' : 'Não',
-        'Qtd contada': x.contado ? x.quantidade_contada : '',
-        'Sistema na contagem': x.contado ? x.saldo_sistema_contagem : '',
-        'Saldo antes': x.saldo_antes,
-        'Diferença': x.diferenca,
-        'Saldo depois': x.saldo_depois,
-        'Valor unitário (R$)': Number(x.valor_unitario),
-        'Valor diferença (R$)': Number(x.valor_diferenca),
-        'Valor final (R$)': Number(x.valor_final),
-        Lotes: (x.lotes ?? []).map((l) => `${l.lote ?? 'sem lote'}${l.validade ? ` val ${dataBR(l.validade)}` : ''}: ${l.quantidade}`).join('; '),
-      }))
+      const itens = linhasPlanilha(rs).map((x, i) => ({ ...x, 'Valor final (R$)': Number(rs[i].valor_final) }))
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itens), 'Itens')
     }
     if (libs.length) {
@@ -1331,9 +1446,19 @@ function Relatorio({ id, nomes: nomesBase, onVoltar }: { id: string; nomes: Reco
           <Button variant="outline" size="sm" onClick={onVoltar} className="gap-1"><ArrowLeft className="w-4 h-4" /> Voltar</Button>
           <h1 className="text-2xl font-bold text-gray-900">Relatório do inventário {inv ? `nº ${inv.numero}` : ''}</h1>
         </div>
-        <Button onClick={exportar} disabled={!inv} className="gap-2"><FileSpreadsheet className="w-4 h-4" /> Exportar .xlsx</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" disabled={!inv || visiveis.length === 0} className="gap-2"
+            onClick={() => inv && setAvisoImp(imprimirRelatorioFinanceiro({
+              inv, linhas: visiveis, previa: false, nomes,
+              filtroNome: filtro === 'diferenca' ? 'itens com diferença' : filtro === 'contados' ? 'itens contados' : filtro === 'nao_contados' ? 'itens não contados' : 'todos os itens',
+            }))}>
+            <Printer className="w-4 h-4" /> Imprimir relatório
+          </Button>
+          <Button onClick={exportar} disabled={!inv} className="gap-2"><FileSpreadsheet className="w-4 h-4" /> Exportar .xlsx</Button>
+        </div>
       </div>
 
+      {avisoImp && <p className="text-sm text-red-700">{avisoImp}</p>}
       <ErroCarregamento erro={erro} onTentar={carregar} titulo="Não foi possível carregar o relatório." />
       {carregando && !inv && !erro && <div className="p-10 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-gray-400" /></div>}
 
