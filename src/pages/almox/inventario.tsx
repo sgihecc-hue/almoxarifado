@@ -165,7 +165,7 @@ ${previa ? '<div class="aviso"><b>Prévia:</b> o inventário ainda está aberto.
 </tr></thead><tbody>${corpo}</tbody>
 <tfoot><tr><td></td><td colspan="6">Total</td><td class="r">${moeda(t.vSis)}</td><td class="r">${moeda(t.vAch)}</td><td class="r ${cor(t.liquido)}">${moeda(t.liquido)}</td></tr></tfoot>
 </table>
-<p class="sub">Qtd sistema = saldo do sistema quando o item foi contado. Valor unit. = último preço de compra (sem ele, o preço do cadastro).</p>
+<p class="sub">Qtd sistema = saldo do sistema quando o item foi contado. Valor unit. = última compra (item nunca comprado = valor referencial).</p>
 <div class="ass"><div>Responsável pelo inventário</div><div>Conferido por</div><div>Financeiro</div></div>
 <script>window.onload=function(){window.print()}</script>
 </body></html>`
@@ -638,6 +638,17 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
       </tr>`
     }).join('')
     const filtroNome = filtro === 'nao' ? 'não contados' : filtro === 'sim' ? 'contados' : 'todos os itens'
+    // Valor = última compra; nunca comprado = valor referencial (pedido da Rafaela, 08/10).
+    const vuDe = (id: string) => Number(info[id]?.ultimaCompra) || Number(info[id]?.referencia) || 0
+    let totSis = 0, totFis = 0, semValor = 0
+    for (const i of visiveis) {
+      const vu = vuDe(i.id)
+      if (!vu) semValor++
+      totSis += Number(i.current_stock ?? 0) * vu
+      const ls = porItem.get(i.id)
+      if (ls) totFis += ls.reduce((s, l) => s + l.quantidade, 0) * vu
+    }
+    const totais = `<div class="tot"><b>Valor total</b> ${comSaldo ? `no sistema ${moeda(totSis)} · ` : ''}contado ${moeda(totFis)}${semValor ? ` · ${semValor} itens sem valor (contam R$ 0)` : ''} · valor = última compra, item nunca comprado = valor referencial</div>`
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Inventário nº ${inv.numero} - lista de contagem</title>
 <style>
 @page{size:A4 landscape;margin:10mm}
@@ -647,6 +658,7 @@ table{width:100%;border-collapse:collapse}th,td{border:1px solid #888;padding:3p
 th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table-header-group}tr{page-break-inside:avoid}
 .r{text-align:right;white-space:nowrap}.c{text-align:center;color:#666}.q{width:46px;text-align:center}.cod,.mais{color:#555;font-size:9px}
 .ass{margin-top:18px;display:flex;gap:40px}.ass div{flex:1;border-top:1px solid #333;padding-top:3px;text-align:center}
+.tot{border:1px solid #1f6f5c;background:#e8f3ee;padding:6px 8px;margin:6px 0 8px;font-size:11px}
 </style></head><body>
 <h1>Inventário do Almoxarifado nº ${inv.numero} — lista de contagem</h1>
 <div class="sub">Aberto em ${dataHora(inv.aberto_em)}${inv.observacao ? ' · ' + esc(inv.observacao) : ''} · ${esc(filtroNome)}${busca.trim() ? ` com "${esc(busca.trim())}"` : ''}: ${inteiro(visiveis.length)} itens · impresso em ${new Date().toLocaleString('pt-BR')}</div>
@@ -654,6 +666,7 @@ th{background:#e8f3ee;font-size:9px;text-transform:uppercase}thead{display:table
 <th>#</th><th>Item</th><th>Unid.</th><th>Valor unit.</th><th>Última compra</th>${comSaldo ? '<th>Qtd sistema</th>' : ''}
 <th>Lote 1</th><th>Validade 1</th><th>Qtd 1</th><th>Lote 2</th><th>Validade 2</th><th>Qtd 2</th><th>Qtd física total</th>
 </tr></thead><tbody>${corpo}</tbody></table>
+${totais}
 <div class="ass"><div>Contado por</div><div>Conferido por</div><div>Data</div></div>
 <script>window.onload=function(){window.print()}</script>
 </body></html>`
@@ -985,7 +998,7 @@ function Conferencia({ inv }: { inv: Inventario }) {
       <p className="text-sm text-gray-600">
         Prévia do que o fechamento faria <strong>agora</strong>. Diferença = contado − saldo do sistema no momento
         em que o item foi contado; ela é somada ao saldo atual (saídas e entradas feitas depois da contagem continuam valendo).
-        Valor unitário = último preço de compra (sem ele, o preço do cadastro).
+        Valor unitário = última compra (item nunca comprado = valor referencial).
       </p>
       <ErroCarregamento erro={erro} onTentar={carregar} titulo="Não foi possível carregar a conferência." />
       {!erro && (

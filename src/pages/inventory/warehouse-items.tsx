@@ -376,6 +376,25 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
               <span className="text-xs text-gray-500">({zeroStockCount} ocultos)</span>
             )}
           </label>
+          {(() => {
+            // Valor do almox (pedido da Rafaela, 08/10): saldo x última compra;
+            // item nunca comprado vale pelo valor referencial.
+            const vu = (it: Item) => Number((it as any).last_purchase_price) || Number((it as any).reference_price) || Number(it.price) || 0
+            let total = 0, comSaldo = 0, semValor = 0
+            for (const it of items) {
+              const q = getLocalQty(it)
+              if (q <= 0) continue
+              comSaldo++
+              if (!vu(it)) semValor++
+              total += q * vu(it)
+            }
+            return (
+              <span className="text-sm rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-900">
+                Valor total do estoque: <strong>{total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
+                <span className="text-xs text-emerald-800"> · {comSaldo} itens com saldo{semValor > 0 ? ` · ${semValor} sem valor` : ''}</span>
+              </span>
+            )
+          })()}
         </div>
 
         <div className="relative">
