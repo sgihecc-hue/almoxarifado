@@ -307,8 +307,10 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType, sourceLocat
             return {
               request_item_id: item.id,
               expiry_tracking_id: l.expiry_tracking_id,
-              batch_number: lo?.batch_number ?? l.batch_number ?? null,
-              expiry_date: lo?.expiry_date ?? l.expiry_date ?? null,
+              // `||` e não `??`: lote digitado sem validade chega como "" e o
+              // banco recusava a data vazia (pedido da Rebeca, 07/10).
+              batch_number: lo?.batch_number || l.batch_number || null,
+              expiry_date: lo?.expiry_date || l.expiry_date || null,
               quantity: l.quantity,
             }
           })
