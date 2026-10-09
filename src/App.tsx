@@ -83,6 +83,7 @@ import { VencimentosABaixar } from '@/pages/estoque/vencimentos'
 import { FarmaciaMultiEstoqueReport } from '@/pages/reports/farmacia-multi-estoque'
 import { FarmaciaDevolucoesReport } from '@/pages/reports/farmacia-devolucoes'
 import { MovementsReport } from '@/pages/reports/movimentacoes'
+import { PedidosValor } from '@/pages/reports/pedidos-valor'
 import { PharmacyLoansList } from '@/pages/farmacia/movimentacoes/index'
 import { NewPharmacyLoan } from '@/pages/farmacia/movimentacoes/new'
 import { PharmacyLoanDetail } from '@/pages/farmacia/movimentacoes/detail'
@@ -734,6 +735,13 @@ export default function App() {
                 <ProtectedRoute>
                   <MainLayout>
                     <FarmaciaMultiEstoqueReport />
+                  </MainLayout>
+                </ProtectedRoute>
+              } />
+              <Route path="/reports/pedidos-valor" element={
+                <ProtectedRoute>
+                  <MainLayout>
+                    <PedidosValor />
                   </MainLayout>
                 </ProtectedRoute>
               } />

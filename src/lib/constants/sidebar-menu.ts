@@ -261,6 +261,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Multi-Estoque', icon: BarChart3, href: '/reports/farmacia-multi-estoque', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Validade', icon: CalendarClock, href: '/reports/stock-expiry?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Movimentações', icon: BarChart3, href: '/reports/movimentacoes?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Pedidos com valor', icon: FileText, href: '/reports/pedidos-valor?type=pharmacy', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         // Relatório de dispensações por dia. Aparece em qualquer estoque; a
         // própria tela orienta a escolher um satélite (é onde há dispensação).
         { name: 'Movimentação Diária', icon: CalendarClock, href: '/farmacia/movimentacao-diaria', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
@@ -316,6 +317,7 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         { name: 'Gestão de Consumo', icon: FileText, href: '/reports/warehouse-admin-consumption', show: (f) => f.isAdmin },
         { name: 'Validade', icon: CalendarClock, href: '/reports/stock-expiry?type=warehouse', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
         { name: 'Movimentações', icon: BarChart3, href: '/reports/movimentacoes?type=warehouse', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
+        { name: 'Pedidos com valor', icon: FileText, href: '/reports/pedidos-valor?type=warehouse', show: (f) => f.isManager || f.isAdmin || f.isAtendente },
       ],
     },
     // --- ADMIN + CONFIG (no fim) ---

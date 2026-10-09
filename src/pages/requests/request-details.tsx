@@ -1337,9 +1337,12 @@ export function RequestDetails() {
 
       {/* Items - Spreadsheet Table (Full Width) */}
       <div className="bg-white rounded-xl p-6 border border-gray-100 print:p-2 print:border print:border-gray-300 print:shadow-none">
-        <h2 className="text-lg font-semibold text-gray-900 mb-6 print:mb-2 print:text-base">
-          Itens Solicitados
-        </h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-6 print:mb-2">
+          <h2 className="text-lg font-semibold text-gray-900 print:text-base">
+            Itens Solicitados
+          </h2>
+          {id && request && <ValorPedido requestId={id} tipo={request.type} />}
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1465,5 +1468,26 @@ export function RequestDetails() {
         `}
       </style>
     </div>
+  )
+}
+
+// Valor em R$ do pedido (09/10/2026, Rafaela): solicitado, aprovado e atendido.
+// Só aparece para quem atende (a RPC recusa os demais e aí não mostra nada).
+function ValorPedido({ requestId, tipo }: { requestId: string; tipo: string }) {
+  const [v, setV] = useState<{ valor_solicitado: number; valor_aprovado: number; valor_atendido: number } | null>(null)
+  useEffect(() => {
+    let vivo = true
+    supabase.rpc('relatorio_pedidos_valor', { p_tipo: tipo, p_inicio: '2000-01-01', p_fim: '2100-01-01', p_request_id: requestId })
+      .then(({ data, error }) => { if (vivo && !error && data?.[0]) setV(data[0] as any) })
+    return () => { vivo = false }
+  }, [requestId, tipo])
+  if (!v) return null
+  const m = (x: number) => Number(x || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  return (
+    <p className="text-sm text-gray-600">
+      Valor solicitado <strong>{m(v.valor_solicitado)}</strong>
+      {' · '}aprovado <strong className="text-emerald-700">{m(v.valor_aprovado)}</strong>
+      {' · '}atendido <strong>{m(v.valor_atendido)}</strong>
+    </p>
   )
 }

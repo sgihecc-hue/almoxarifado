@@ -170,7 +170,7 @@ export const REGRAS_ROTAS: RegraRota[] = [
 
   // --- comuns aos dois módulos (o módulo vem do ?type= quando houver) ---
   { padrao: /^\/estoque\//, nivel: 'operador' },
-  { padrao: /^\/reports\/(stock-expiry|movimentacoes)$/, nivel: 'operador', modulo: 'tipo' },
+  { padrao: /^\/reports\/(stock-expiry|movimentacoes|pedidos-valor)$/, nivel: 'operador', modulo: 'tipo' },
 ]
 
 export type ResultadoAcesso =
