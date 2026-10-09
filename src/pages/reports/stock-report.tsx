@@ -42,7 +42,7 @@ const validadeMaisProxima = (ls: LoteSaldo[]) =>
 
 type SortField = 'name' | 'code' | 'category' | 'current_stock' | 'min_stock' | 'status'
 type SortDir = 'asc' | 'desc'
-type StockFilter = 'all' | 'normal' | 'low' | 'critical' | 'out'
+type StockFilter = 'all' | 'com_saldo' | 'normal' | 'low' | 'critical' | 'out'
 
 function getStockStatus(item: StockItem) {
   if (item.current_stock === 0) return { label: 'Sem Estoque', color: '#ef4444', bg: 'rgba(239,68,68,0.12)', key: 'out' }
@@ -220,7 +220,10 @@ export function StockReport({ type }: StockReportProps) {
       result = result.filter(i => (i.category ?? '') === categoryFilter)
     }
 
-    if (stockFilter !== 'all') {
+    if (stockFilter === 'com_saldo') {
+      // Só itens com saldo (Andressa, 09/10)
+      result = result.filter(i => Number(i.current_stock) > 0)
+    } else if (stockFilter !== 'all') {
       result = result.filter(i => getStockStatus(i).key === stockFilter)
     }
 
@@ -334,6 +337,7 @@ export function StockReport({ type }: StockReportProps) {
 
   const statCards = [
     { label: 'Total de Itens', value: stats.total, color: txt, filter: 'all' as StockFilter },
+    { label: 'Com saldo', value: items.filter(i => Number(i.current_stock) > 0).length, color: '#0ea5e9', filter: 'com_saldo' as StockFilter },
     { label: 'Normal', value: stats.normal, color: '#22c55e', filter: 'normal' as StockFilter },
     { label: 'Estoque Baixo', value: stats.low, color: '#eab308', filter: 'low' as StockFilter },
     { label: 'Critico', value: stats.critical, color: '#f97316', filter: 'critical' as StockFilter },
@@ -366,7 +370,7 @@ export function StockReport({ type }: StockReportProps) {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         {statCards.map((s) => (
           <button
             key={s.label}
