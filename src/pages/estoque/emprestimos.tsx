@@ -1158,6 +1158,9 @@ function PrintDocument({ loan, unidades, autor }: { loan: Loan; unidades: Record
   const setor = loan.modulo === 'almoxarifado' ? 'Almoxarifado' : 'Farmácia'
   return (
     <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#000', padding: '20mm', maxWidth: '180mm', margin: '0 auto', lineHeight: 1.6 }}>
+      <div style={{ textAlign: 'center', marginBottom: 6 }}>
+        <img src="/assets/logo-fesf.svg" alt="FESF" style={{ height: 48 }} />
+      </div>
       <p style={{ textAlign: 'center', fontWeight: 700, fontSize: 14, margin: 0 }}>Hospital Estadual Costa dos Coqueiros</p>
       <p style={{ textAlign: 'right', margin: '18px 0 0' }}>{dataExtenso}</p>
       <p style={{ textAlign: 'center', fontWeight: 700, margin: '18px 0 4px' }}>{ACAO[loan.categoria]} DE {material}</p>
