@@ -38,7 +38,7 @@ interface Lote { chave: string; lot_id: string | null; lote: string; validade: s
 interface ItemGrade { item_id: string; nome: string; codigo: string | null; unidade: string | null; naoPadronizado: boolean; saldo: number; lotes: Lote[] }
 
 type Filtro = 'todos' | 'com_saldo' | 'negativos' | 'divergentes'
-const MAX = 150
+const POR_PAGINA = 100
 const inteiro = (n: number) => n.toLocaleString('pt-BR')
 
 const ESTOQUES_OK = ['CAF', 'SAT_1', 'SAT_2', 'SAT_T']
@@ -54,6 +54,7 @@ export function InventarioFarmacia() {
   const [filtro, setFiltro] = useState<Filtro>('todos')
   const [aviso, setAviso] = useState<{ tipo: 'ok' | 'erro'; msg: string } | null>(null)
   const [salvando, setSalvando] = useState<string | null>(null)
+  const [pagina, setPagina] = useState(0)
   const seq = useRef(0)
 
   useEffect(() => {
@@ -105,6 +106,23 @@ export function InventarioFarmacia() {
       return true
     })
   }, [itens, busca, filtro])
+  // Volta pra 1ª página quando muda a busca/filtro/estoque.
+  useEffect(() => { setPagina(0) }, [busca, filtro, code])
+  const totalPaginas = Math.max(1, Math.ceil(visiveis.length / POR_PAGINA))
+  const paginaAtual = Math.min(pagina, totalPaginas - 1)
+  const daPagina = visiveis.slice(paginaAtual * POR_PAGINA, (paginaAtual + 1) * POR_PAGINA)
+  const Paginacao = () => totalPaginas <= 1 ? null : (
+    <div className="flex items-center justify-between gap-2 px-4 py-2 text-sm text-gray-600">
+      <span>
+        Mostrando {inteiro(paginaAtual * POR_PAGINA + 1)} a {inteiro(Math.min((paginaAtual + 1) * POR_PAGINA, visiveis.length))} de {inteiro(visiveis.length)} medicamentos
+      </span>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="outline" disabled={paginaAtual === 0} onClick={() => { setPagina(paginaAtual - 1); window.scrollTo({ top: 0 }) }}>Anterior</Button>
+        <span>Página {paginaAtual + 1} de {totalPaginas}</span>
+        <Button size="sm" variant="outline" disabled={paginaAtual >= totalPaginas - 1} onClick={() => { setPagina(paginaAtual + 1); window.scrollTo({ top: 0 }) }}>Próxima</Button>
+      </div>
+    </div>
+  )
 
   function mudar(itemId: string, chave: string, campo: 'lote' | 'validade' | 'quantidade', valor: string) {
     setItens((xs) => xs.map((it) => it.item_id !== itemId ? it : {
@@ -230,6 +248,7 @@ export function InventarioFarmacia() {
         <div className="p-10 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-gray-400" /></div>
       ) : (
         <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-x-auto">
+          <Paginacao />
           <table className="w-full text-sm min-w-[900px]">
             <thead className="bg-gray-50 text-xs uppercase text-gray-500">
               <tr>
@@ -242,7 +261,7 @@ export function InventarioFarmacia() {
               </tr>
             </thead>
             <tbody>
-              {visiveis.slice(0, MAX).map((it) => {
+              {daPagina.map((it) => {
                 const div = somaLotes(it) !== it.saldo
                 const linhas = it.lotes.length ? it.lotes : [null]
                 return linhas.map((l, i) => (
@@ -290,11 +309,7 @@ export function InventarioFarmacia() {
               })}
             </tbody>
           </table>
-          {visiveis.length > MAX && (
-            <p className="px-4 py-2 text-xs text-gray-500 border-t border-gray-100">
-              Mostrando {MAX} de {inteiro(visiveis.length)} medicamentos. Use a busca para achar os demais.
-            </p>
-          )}
+          <Paginacao />
         </div>
       )}
     </div>
