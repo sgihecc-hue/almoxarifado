@@ -860,7 +860,7 @@ export function RequestDetails() {
     }
   }
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!request) { window.print(); return }
     const win = window.open('', '_blank', 'width=900,height=700')
     if (!win) { window.print(); return }
@@ -868,6 +868,22 @@ export function RequestDetails() {
     const items = request.request_items || []
     const totalItems = items.length
     const totalQtd = items.reduce((sum, it) => sum + (it.approved_quantity ?? it.quantity), 0)
+
+    // Valor do que foi aprovado (Rafaela, 09/10): qtd aprovada x valor do item
+    // (última compra; nunca comprado = valor referencial).
+    const ids = items.map((it) => it.item?.id).filter(Boolean) as string[]
+    const vuPorId = new Map<string, number>()
+    if (ids.length) {
+      const { data: precos } = await supabase
+        .from(request.type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items')
+        .select('id, last_purchase_price, reference_price, price')
+        .in('id', ids)
+      for (const p of (precos ?? []) as any[]) {
+        vuPorId.set(p.id, Number(p.last_purchase_price) || Number(p.reference_price) || Number(p.price) || 0)
+      }
+    }
+    const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+    const totalValor = items.reduce((sum, it) => sum + (it.approved_quantity ?? it.quantity) * (vuPorId.get(it.item?.id ?? '') ?? 0), 0)
 
     const reqNumber = request.request_number ? '#' + request.request_number : request.id.substring(0, 8)
     const createdDate = new Date(request.created_at).toLocaleString('pt-BR')
@@ -898,6 +914,7 @@ export function RequestDetails() {
   .col-qty { width: 60px; text-align: center; font-weight: bold; }
   .col-check { width: 40px; text-align: center; }
   .col-lote { width: 150px; font-size: 9pt; }
+  .col-val { width: 80px; text-align: right; white-space: nowrap; font-size: 9pt; }
   .qty-fornec { background: #fffacd; font-size: 14pt; }
   .checkbox { display: inline-block; width: 16px; height: 16px; border: 2px solid #000; }
   .totals { margin-top: 20px; padding: 10px; background: #f0f0f0; border: 1px solid #888; font-size: 10pt; }
@@ -936,6 +953,8 @@ export function RequestDetails() {
         <th class="col-qty">Qtd Sol.</th>
         <th class="col-qty qty-fornec">Qtd Fornec.</th>
         <th class="col-lote">Lote / Validade</th>
+        <th class="col-val">Valor unit.</th>
+        <th class="col-val">Valor aprovado</th>
         <th class="col-check">✓</th>
       </tr>
     </thead>
@@ -961,6 +980,8 @@ export function RequestDetails() {
           <td class="col-qty">${qtd}</td>
           <td class="col-qty qty-fornec">${fornec}</td>
           <td class="col-lote">${loteHtml}</td>
+          <td class="col-val">${brl(vuPorId.get(it.item?.id ?? '') ?? 0)}</td>
+          <td class="col-val">${brl(qtd * (vuPorId.get(it.item?.id ?? '') ?? 0))}</td>
           <td class="col-check"><span class="checkbox"></span></td>
         </tr>`
       }).join('')}
@@ -970,6 +991,7 @@ export function RequestDetails() {
   <div class="totals">
     <strong>Total de Itens:</strong> ${totalItems}
     <strong>Quantidade Total Aprovada:</strong> ${totalQtd}
+    <strong>Valor Total Aprovado:</strong> ${brl(totalValor)}
   </div>
 
   <div class="signature">
