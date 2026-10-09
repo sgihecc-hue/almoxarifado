@@ -218,6 +218,7 @@ class RequestService {
             supplied_quantity,
             almox_batch_number,
             almox_expiry_date,
+            almox_lotes,
             observation,
             is_checked
           ),
@@ -288,6 +289,7 @@ class RequestService {
                       supplied_quantity: item.supplied_quantity,
                       almox_batch_number: item.almox_batch_number,
                       almox_expiry_date: item.almox_expiry_date,
+                      almox_lotes: item.almox_lotes ?? null,
                       observation: item.observation,
                       is_checked: item.is_checked || false,
                       status: 'available' as const,
@@ -441,6 +443,7 @@ class RequestService {
             supplied_quantity,
             almox_batch_number,
             almox_expiry_date,
+            almox_lotes,
             observation,
             is_checked
           ),
@@ -489,6 +492,8 @@ class RequestService {
             // blur acidental gravaria null por cima do que ja estava salvo.
             almox_batch_number: item.almox_batch_number,
             almox_expiry_date: item.almox_expiry_date,
+            // Lista completa dos lotes do almox (antes so o 1º atravessava o map).
+            almox_lotes: item.almox_lotes ?? null,
             observation: item.observation,
             is_checked: item.is_checked || false,
             status: 'available' as const,

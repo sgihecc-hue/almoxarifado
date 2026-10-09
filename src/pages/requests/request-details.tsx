@@ -897,6 +897,7 @@ export function RequestDetails() {
   .col-code { width: 120px; font-family: monospace; font-size: 9pt; }
   .col-qty { width: 60px; text-align: center; font-weight: bold; }
   .col-check { width: 40px; text-align: center; }
+  .col-lote { width: 150px; font-size: 9pt; }
   .qty-fornec { background: #fffacd; font-size: 14pt; }
   .checkbox { display: inline-block; width: 16px; height: 16px; border: 2px solid #000; }
   .totals { margin-top: 20px; padding: 10px; background: #f0f0f0; border: 1px solid #888; font-size: 10pt; }
@@ -934,6 +935,7 @@ export function RequestDetails() {
         <th>Item</th>
         <th class="col-qty">Qtd Sol.</th>
         <th class="col-qty qty-fornec">Qtd Fornec.</th>
+        <th class="col-lote">Lote / Validade</th>
         <th class="col-check">✓</th>
       </tr>
     </thead>
@@ -941,6 +943,14 @@ export function RequestDetails() {
       ${items.map((it, idx) => {
         const qtd = it.approved_quantity ?? it.quantity
         const fornec = it.supplied_quantity ?? ''
+        // Lote(s) escolhidos no atendimento (almox: almox_lotes; legado: 1º lote).
+        const dBR = (d: string | null | undefined) => (d ? String(d).slice(0, 10).split('-').reverse().join('/') : '')
+        const lotesIt: Array<{ lote: string; validade?: string | null; quantidade?: number | string | null }> =
+          Array.isArray((it as any).almox_lotes) && (it as any).almox_lotes.length
+            ? (it as any).almox_lotes
+            : (it as any).almox_batch_number ? [{ lote: (it as any).almox_batch_number, validade: (it as any).almox_expiry_date }] : []
+        const loteHtml = lotesIt.map((l) =>
+          `<div>${String(l.lote || 's/ lote').replace(/</g, '&lt;')}${l.validade ? ' · val. ' + dBR(l.validade) : ''}${l.quantidade !== undefined && l.quantidade !== null && l.quantidade !== '' && lotesIt.length > 1 ? ' · ' + l.quantidade : ''}</div>`).join('')
         return `
         <tr>
           <td class="col-num">${idx + 1}</td>
@@ -950,6 +960,7 @@ export function RequestDetails() {
           </td>
           <td class="col-qty">${qtd}</td>
           <td class="col-qty qty-fornec">${fornec}</td>
+          <td class="col-lote">${loteHtml}</td>
           <td class="col-check"><span class="checkbox"></span></td>
         </tr>`
       }).join('')}
