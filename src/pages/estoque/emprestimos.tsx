@@ -337,7 +337,7 @@ export function EmprestimosAbertos() {
         .insert({
           destino: destino.trim(),
           categoria,
-          status: 'pending',
+          status: categoria === 'doacao' ? 'closed' : 'pending',
           observacao: observacao.trim() || null,
           contrapartida: (categoria === 'permuta' || categoria === 'troca_validade') ? (contrapartida.trim() || null) : null,
           created_by: user?.id ?? null,
@@ -405,6 +405,15 @@ export function EmprestimosAbertos() {
 
   // ---------- Impressao ----------
 
+  // Encerra o empréstimo/permuta quando o retorno chega (09/10: todos ficavam
+  // "Pendente" para sempre). Doação já nasce encerrada.
+  const encerrar = async (loan: Loan) => {
+    if (!window.confirm(`Encerrar o nº ${loan.loan_number} (${loan.destino})? Use quando o retorno já foi recebido.`)) return
+    const { error: err } = await supabase.from('loans').update({ status: 'closed' }).eq('id', loan.id)
+    if (err) { setError(getErrorMessage(err)); return }
+    await loadLoans()
+  }
+
   const handlePrint = (loan: Loan) => {
     setPrintLoan(loan)
     setTimeout(() => window.print(), 200)
@@ -414,7 +423,7 @@ export function EmprestimosAbertos() {
 
   const statusBadge = (status: Loan['status']) => {
     const map: Record<string, { label: string; color: string }> = {
-      pending: { label: 'Pendente', color: '#f59e0b' },
+      pending: { label: 'Aguardando retorno', color: '#f59e0b' },
       closed: { label: 'Encerrado', color: '#10b981' },
       cancelled: { label: 'Cancelado', color: '#ef4444' },
     }
@@ -551,6 +560,7 @@ export function EmprestimosAbertos() {
                 statusBadge={statusBadge}
                 catBadge={catBadge}
                 onPrint={handlePrint}
+                onEncerrar={encerrar}
               />
             ))
           )}
@@ -748,6 +758,7 @@ interface LoanCardProps {
   statusBadge: (s: Loan['status']) => React.ReactNode
   catBadge: (c: LoanCategory) => React.ReactNode
   onPrint: (loan: Loan) => void
+  onEncerrar: (loan: Loan) => void
 }
 
 function LoanCard({
@@ -759,6 +770,7 @@ function LoanCard({
   statusBadge,
   catBadge,
   onPrint,
+  onEncerrar,
 }: LoanCardProps) {
   const [expanded, setExpanded] = useState(false)
 
@@ -847,6 +859,18 @@ function LoanCard({
           >
             <Printer size={13} /> PDF
           </button>
+          {loan.status === 'pending' && (
+            <button
+              onClick={() => onEncerrar(loan)}
+              title="Marcar que o retorno (devolução ou troca) já foi recebido"
+              style={{
+                fontSize: 12, color: '#10b981', cursor: 'pointer', padding: '4px 10px', borderRadius: 6,
+                border: '1px solid #10b98133', background: '#10b98111',
+              }}
+            >
+              Encerrar (retorno recebido)
+            </button>
+          )}
         </div>
       </div>
 
