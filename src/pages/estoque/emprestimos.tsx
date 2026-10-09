@@ -160,7 +160,7 @@ export function EmprestimosAbertos() {
 
   // Itens do catálogo do módulo ativo para busca (farmácia ou almoxarifado).
   // 09/10/2026: no almox a tela só achava itens da farmácia (Rafaela).
-  const { activeModule, homeModule } = useModule()
+  const { activeModule, homeModule, activeStock } = useModule()
   // Módulo ativo; sem ele (path neutro antes de escolher), o módulo do setor.
   const modulo: 'farmacia' | 'almoxarifado' =
     (activeModule ?? homeModule) === 'almoxarifado' ? 'almoxarifado' : 'farmacia'
@@ -259,6 +259,26 @@ export function EmprestimosAbertos() {
     })
     setItemSearches((m) => ({ ...m, [idx]: pi.name }))
     setShowDropdowns((m) => ({ ...m, [idx]: false }))
+    void preencherLote(idx, pi.id)
+  }
+
+  // Lote e validade automáticos (Rafaela, 09/10): o lote com saldo que vence
+  // primeiro no estoque de onde sai (ALMOX ou o estoque do topo na farmácia).
+  const preencherLote = async (idx: number, itemId: string) => {
+    const code = modulo === 'almoxarifado' ? 'ALMOX' : (activeStock?.code ?? 'CAF')
+    const { data: loc } = await supabase.from('stock_locations').select('id').eq('code', code).maybeSingle()
+    if (!loc?.id) return
+    const { data: lote } = await supabase
+      .from('expiry_tracking')
+      .select('batch_number, expiry_date')
+      .eq('item_id', itemId).eq('location_id', loc.id).gt('current_quantity', 0)
+      .order('expiry_date', { ascending: true, nullsFirst: false })
+      .limit(1).maybeSingle()
+    if (!lote) return
+    updateFormItem(idx, {
+      batch_number: lote.batch_number && lote.batch_number !== 'SEMLOTE' ? lote.batch_number : '',
+      expiry_date: lote.expiry_date ?? '',
+    })
   }
 
   const filteredItems = (search: string) => {
@@ -308,18 +328,6 @@ export function EmprestimosAbertos() {
     salvandoRef.current = true
     setSaving(true)
     try {
-      // Almoxarifado: dá a saída no estoque ANTES de gravar (recusa se não houver saldo).
-      let saida: { id: string; dispatch_number: number } | null = null
-      if (modulo === 'almoxarifado') {
-        const tipo = categoria === 'troca_validade' ? 'outro' : categoria
-        saida = await warehouseDispatchService.create({
-          items: formItems.map((fi) => ({ item_id: fi.item_id as string, quantity: fi.quantity })),
-          destination_department_text: destino.trim(),
-          dispatch_type: tipo as any,
-          notes: `${CATEGORY_LABEL[categoria] ?? categoria} para ${destino.trim()}${observacao.trim() ? ' · ' + observacao.trim() : ''}`,
-        } as any, crypto.randomUUID())
-      }
-
       const { data: loanData, error: loanErr } = await supabase
         .from('loans')
         .insert({
@@ -329,14 +337,10 @@ export function EmprestimosAbertos() {
           observacao: observacao.trim() || null,
           created_by: user?.id ?? null,
           modulo,
-          saida_id: saida?.id ?? null,
         })
         .select('id')
         .single()
-      if (loanErr) {
-        if (saida) throw new Error(`A saída nº ${saida.dispatch_number} já foi feita no estoque, mas o registro do empréstimo não gravou (${getErrorMessage(loanErr)}). Avise o suporte.`)
-        throw loanErr
-      }
+      if (loanErr) throw loanErr
 
       const loanId = loanData.id
       const itemsPayload = formItems.map((fi) => ({
@@ -353,7 +357,28 @@ export function EmprestimosAbertos() {
       const { error: itemsErr } = await supabase
         .from('loan_items')
         .insert(itemsPayload)
-      if (itemsErr) throw itemsErr
+      if (itemsErr) {
+        await supabase.from('loans').delete().eq('id', loanId)
+        throw itemsErr
+      }
+
+      // Almoxarifado: só depois do registro gravado dá a saída no estoque
+      // (recusa se não houver saldo). Se a saída falhar, o registro é apagado.
+      if (modulo === 'almoxarifado') {
+        const tipo = categoria === 'troca_validade' ? 'outro' : categoria
+        try {
+          const saida = await warehouseDispatchService.create({
+            items: formItems.map((fi) => ({ item_id: fi.item_id as string, quantity: fi.quantity })),
+            destination_department_text: destino.trim(),
+            dispatch_type: tipo as any,
+            notes: `${CATEGORY_LABEL[categoria] ?? categoria} para ${destino.trim()}${observacao.trim() ? ' · ' + observacao.trim() : ''}`,
+          } as any, crypto.randomUUID())
+          await supabase.from('loans').update({ saida_id: saida.id }).eq('id', loanId)
+        } catch (e) {
+          await supabase.from('loans').delete().eq('id', loanId)
+          throw e
+        }
+      }
 
       setShowModal(false)
       await loadLoans()

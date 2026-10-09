@@ -176,7 +176,29 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
         setLotesById(mapa)
       } else {
         setLocalQtyById(new Map())
-        setLotesById(new Map())
+        // Almoxarifado: lotes reais do ALMOX (o fechamento do inventário refaz
+        // os lotes pelo contado). O lote/validade do cadastro ficou velho e o
+        // Exportar saía com vencimento errado (Rafaela, 09/10).
+        const { data: almox } = await supabase.from('stock_locations').select('id').eq('code', 'ALMOX').maybeSingle()
+        const mapa = new Map<string, LoteLocal[]>()
+        if (almox?.id) {
+          const lotes = await buscarTodas<any>((de, ate) =>
+            supabase
+              .from('expiry_tracking')
+              .select('id, item_id, batch_number, expiry_date, current_quantity')
+              .eq('location_id', almox.id)
+              .gt('current_quantity', 0)
+              .order('expiry_date', { ascending: true, nullsFirst: false })
+              .order('id')
+              .range(de, ate)
+          )
+          for (const l of lotes as any[]) {
+            const lista = mapa.get(l.item_id) ?? []
+            lista.push({ batch_number: l.batch_number, expiry_date: l.expiry_date, current_quantity: l.current_quantity })
+            mapa.set(l.item_id, lista)
+          }
+        }
+        setLotesById(mapa)
       }
     } catch (error) {
       console.error('Error loading items:', error)
@@ -208,7 +230,10 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
         filteredItems.map((i) => ({ ...i, current_stock: getLocalQty(i) })),
         `itens_almoxarifado_${hojeLocal()}`,
         // Num satélite vão os lotes DAQUELE local; no Almoxarifado, o do cadastro (igual à tela).
-        locationId ? lotesById : undefined,
+        locationId ? lotesById : new Map(filteredItems.map((i) => [i.id, lotesById.get(i.id) ??
+          ((i as any).batch_number || (i as any).expiry_date
+            ? [{ batch_number: (i as any).batch_number ?? null, expiry_date: (i as any).expiry_date ?? null }]
+            : [])])),
       )
     } catch (error) {
       console.error('Error exporting items:', error)
@@ -522,7 +547,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                       {(() => {
                         // Num satelite mostra os lotes DAQUELE local; no
                         // Almoxarifado segue o campo do cadastro, como antes.
-                        if (!locationId) return (item as any).batch_number || '-'
+                        if (!locationId && !lotesById.has(item.id)) return (item as any).batch_number || '-'
                         const ls = lotesById.get(item.id) ?? []
                         if (ls.length === 0) return '-'
                         return (
@@ -539,7 +564,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
                       {(() => {
                         const fmt = (d: string | null) =>
                           d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '-'
-                        if (!locationId) return fmt(item.expiry_date ?? null)
+                        if (!locationId && !lotesById.has(item.id)) return fmt(item.expiry_date ?? null)
                         const ls = lotesById.get(item.id) ?? []
                         return ls.length === 0 ? '-' : fmt(ls[0].expiry_date)
                       })()}
