@@ -1164,7 +1164,7 @@ function PrintDocument({ loan }: { loan: Loan }) {
             textTransform: 'uppercase',
           }}
         >
-          EMPRESTIMO / DOACAO DE MEDICAMENTO
+          EMPRESTIMO / DOACAO DE {loan.modulo === 'almoxarifado' ? 'MATERIAL' : 'MEDICAMENTO'}
         </p>
         <p style={{ margin: '4px 0 0', fontSize: 11, color: '#555' }}>
           N° {loan.loan_number} — {CATEGORY_LABEL[loan.categoria]}
