@@ -160,8 +160,10 @@ export function EmprestimosAbertos() {
 
   // Itens do catálogo do módulo ativo para busca (farmácia ou almoxarifado).
   // 09/10/2026: no almox a tela só achava itens da farmácia (Rafaela).
-  const { activeModule } = useModule()
-  const modulo: 'farmacia' | 'almoxarifado' = activeModule === 'almoxarifado' ? 'almoxarifado' : 'farmacia'
+  const { activeModule, homeModule } = useModule()
+  // Módulo ativo; sem ele (path neutro antes de escolher), o módulo do setor.
+  const modulo: 'farmacia' | 'almoxarifado' =
+    (activeModule ?? homeModule) === 'almoxarifado' ? 'almoxarifado' : 'farmacia'
   const [pharmacyItems, setPharmacyItems] = useState<PharmacyItemRow[]>([])
 
   // Loan selecionado para impressao
