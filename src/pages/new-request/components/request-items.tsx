@@ -35,6 +35,9 @@ const itemSchema = z.object({
   patient_bed: z.string().optional(),
   patient_ward: z.string().optional(),
   nurse_name: z.string().optional(),
+  // Cânulas Blue Line (09/10/2026, pedido da Rafaela): médico e fisioterapeuta
+  doctor_name: z.string().optional(),
+  physio_name: z.string().optional(),
   _uid: z.string().optional(),
   // justificativa para itens de farmacia
   justificativa_motivo: z.string().optional(),
@@ -90,6 +93,12 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   const [patientBed, setPatientBed] = useState('')
   const [patientWard, setPatientWard] = useState('')
   const [nurseName, setNurseName] = useState('')
+  const [doctorName, setDoctorName] = useState('')
+  const [physioName, setPhysioName] = useState('')
+  // Cânulas Blue Line pedem médico e fisioterapeuta no lugar da enfermeira.
+  const ehCanula = !!pendingItem?.id && ITENS_POR_PACIENTE_IDS.has(pendingItem.id)
+  const pacienteCompleto = !!patientName.trim() && !!patientBed.trim() && !!patientWard.trim() &&
+    (ehCanula ? !!doctorName.trim() && !!physioName.trim() : !!nurseName.trim())
   const [patientError, setPatientError] = useState<string | null>(null)
 
 
@@ -146,6 +155,8 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
       setPatientBed('')
       setPatientWard('')
       setNurseName('')
+      setDoctorName('')
+      setPhysioName('')
       setPatientError(null)
       setShowPatientModal(true)
       return
@@ -166,7 +177,7 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   }
 
   const handleConfirmPatientItem = () => {
-    if (!pendingItem || !patientName.trim() || !patientBed.trim() || !patientWard.trim() || !nurseName.trim()) return
+    if (!pendingItem || !pacienteCompleto) return
 
     // Regra: um item individual por paciente — não permite mesmo paciente duas vezes
     const normalizedName = patientName.trim().toLowerCase()
@@ -186,7 +197,9 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
       patient_name: patientName.trim(),
       patient_bed: patientBed.trim(),
       patient_ward: patientWard.trim(),
-      nurse_name: nurseName.trim(),
+      ...(ehCanula
+        ? { doctor_name: doctorName.trim(), physio_name: physioName.trim() }
+        : { nurse_name: nurseName.trim() }),
       _uid: makeUid(),
     }])
     setShowPatientModal(false)
@@ -329,7 +342,10 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
                   </p>
                   {selectedItem.patient_name && (
                     <div className="mt-1 text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1 text-blue-800">
-                      <strong>Paciente:</strong> {selectedItem.patient_name} | <strong>Leito:</strong> {selectedItem.patient_bed} | <strong>Posto:</strong> {selectedItem.patient_ward} | <strong>Enf:</strong> {selectedItem.nurse_name}
+                      <strong>Paciente:</strong> {selectedItem.patient_name} | <strong>Leito:</strong> {selectedItem.patient_bed} | <strong>Posto:</strong> {selectedItem.patient_ward}
+                      {selectedItem.nurse_name && <> | <strong>Enf:</strong> {selectedItem.nurse_name}</>}
+                      {selectedItem.doctor_name && <> | <strong>Médico:</strong> {selectedItem.doctor_name}</>}
+                      {selectedItem.physio_name && <> | <strong>Fisio:</strong> {selectedItem.physio_name}</>}
                     </div>
                   )}
                   {/* Justificativa de farmacia */}
@@ -464,13 +480,26 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
               <Input value={patientBed} onChange={(e) => setPatientBed(e.target.value)} placeholder="Ex: 201, 302-A" className="mt-1" />
             </div>
             <div>
-              <Label>Posto *</Label>
+              <Label>{ehCanula ? 'Enfermaria / Posto *' : 'Posto *'}</Label>
               <Input value={patientWard} onChange={(e) => setPatientWard(e.target.value)} placeholder="Ex: Posto 1, Posto 2, UTI" className="mt-1" />
             </div>
-            <div>
-              <Label>Enfermeira de Plantao *</Label>
-              <Input value={nurseName} onChange={(e) => setNurseName(e.target.value)} placeholder="Nome da enfermeira" className="mt-1" />
-            </div>
+            {ehCanula ? (
+              <>
+                <div>
+                  <Label>Médico que solicitou *</Label>
+                  <Input value={doctorName} onChange={(e) => setDoctorName(e.target.value)} placeholder="Nome do médico" className="mt-1" />
+                </div>
+                <div>
+                  <Label>Fisioterapeuta *</Label>
+                  <Input value={physioName} onChange={(e) => setPhysioName(e.target.value)} placeholder="Nome do(a) fisioterapeuta" className="mt-1" />
+                </div>
+              </>
+            ) : (
+              <div>
+                <Label>Enfermeira de Plantao *</Label>
+                <Input value={nurseName} onChange={(e) => setNurseName(e.target.value)} placeholder="Nome da enfermeira" className="mt-1" />
+              </div>
+            )}
           </div>
           {patientError && (
             <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-700">
@@ -481,7 +510,7 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
             <Button variant="outline" onClick={() => { setShowPatientModal(false); setPatientError(null) }}>Cancelar</Button>
             <Button
               onClick={handleConfirmPatientItem}
-              disabled={!patientName.trim() || !patientBed.trim() || !patientWard.trim() || !nurseName.trim()}
+              disabled={!pacienteCompleto}
               className="bg-primary-500 hover:bg-primary-600 text-white"
             >
               Adicionar Item

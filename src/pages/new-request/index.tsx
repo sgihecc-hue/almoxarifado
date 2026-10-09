@@ -280,7 +280,10 @@ export function NewRequest() {
       let notes = ''
       if (patientItems.length > 0) {
         notes = patientItems.map(i =>
-          `[Dados do Paciente] Nome: ${i.patient_name} | Leito: ${i.patient_bed} | Posto: ${i.patient_ward} | Enfermeira: ${i.nurse_name}`
+          `[Dados do Paciente] Nome: ${i.patient_name} | Leito: ${i.patient_bed} | Posto: ${i.patient_ward}` +
+          (i.nurse_name ? ` | Enfermeira: ${i.nurse_name}` : '') +
+          ((i as any).doctor_name ? ` | Médico: ${(i as any).doctor_name}` : '') +
+          ((i as any).physio_name ? ` | Fisioterapeuta: ${(i as any).physio_name}` : '')
         ).join('\n')
       }
 
