@@ -95,7 +95,8 @@ export function buildSidebarSections(ctx?: { pharmacyStock?: PharmacyStock | nul
         // some do menu junto com o painel — nao adianta oferecer atalho pra
         // uma tela de "desativado". Religar: PAINEL_FARMACIA_ATIVO em
         // lib/constants/tv-panels.
-        { name: 'Painel TV', icon: Tv, href: '/tv/pharmacy', show: () => PAINEL_FARMACIA_ATIVO },
+        // Só para quem atende (solicitante via o painel: Elaine/RH, 09/10).
+        { name: 'Painel TV', icon: Tv, href: '/tv/pharmacy', show: (f) => PAINEL_FARMACIA_ATIVO && (f.isManager || f.isAdmin || f.isAtendente) },
       ],
     },
     {
