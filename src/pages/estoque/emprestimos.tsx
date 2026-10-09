@@ -59,6 +59,7 @@ interface Loan {
   modulo?: 'farmacia' | 'almoxarifado'
   saida_id?: string | null
   observacao: string | null
+  contrapartida?: string | null
   created_by: string | null
   created_at: string
   loan_items: LoanItem[]
@@ -144,6 +145,8 @@ export function EmprestimosAbertos() {
   const [destino, setDestino] = useState('')
   const [categoria, setCategoria] = useState<LoanCategory>('emprestimo')
   const [observacao, setObservacao] = useState('')
+  // Permuta/troca: o que vem em troca (bloco "Por:" do termo). Rafaela, 09/10.
+  const [contrapartida, setContrapartida] = useState('')
 
   const emptyItem = (): LoanItem => ({
     item_id: null,
@@ -177,7 +180,7 @@ export function EmprestimosAbertos() {
       const { data, error: err } = await supabase
         .from('loans')
         .select(
-          `id, loan_number, destino, categoria, status, observacao, created_by, created_at, modulo, saida_id,
+          `id, loan_number, destino, categoria, status, observacao, contrapartida, created_by, created_at, modulo, saida_id,
            loan_items ( id, loan_id, item_id, item_nome, batch_number, expiry_date, quantity, valor_unit, valor_total )`
         )
         .eq('modulo', modulo)
@@ -229,6 +232,7 @@ export function EmprestimosAbertos() {
     setDestino('')
     setCategoria('emprestimo')
     setObservacao('')
+    setContrapartida('')
     setFormItems([emptyItem()])
     setItemSearches({})
     setShowDropdowns({})
@@ -335,6 +339,7 @@ export function EmprestimosAbertos() {
           categoria,
           status: 'pending',
           observacao: observacao.trim() || null,
+          contrapartida: (categoria === 'permuta' || categoria === 'troca_validade') ? (contrapartida.trim() || null) : null,
           created_by: user?.id ?? null,
           modulo,
         })
@@ -385,7 +390,7 @@ export function EmprestimosAbertos() {
       // Já abre o formulário pronto para imprimir/assinar.
       const { data: novo } = await supabase
         .from('loans')
-        .select(`id, loan_number, destino, categoria, status, observacao, created_by, created_at, modulo, saida_id,
+        .select(`id, loan_number, destino, categoria, status, observacao, contrapartida, created_by, created_at, modulo, saida_id,
                  loan_items ( id, loan_id, item_id, item_nome, batch_number, expiry_date, quantity, valor_unit, valor_total )`)
         .eq('id', loanId)
         .maybeSingle()
@@ -464,7 +469,7 @@ export function EmprestimosAbertos() {
       {/* Documento para impressao (visivel apenas ao imprimir) */}
       {printLoan && (
         <div className="print-only">
-          <PrintDocument loan={printLoan} />
+          <PrintDocument loan={printLoan} unidades={Object.fromEntries(pharmacyItems.map((i) => [i.id, i.unit]))} autor={user?.full_name ?? ''} />
         </div>
       )}
 
@@ -630,6 +635,18 @@ export function EmprestimosAbertos() {
                 />
               </div>
             </div>
+
+            {(categoria === 'permuta' || categoria === 'troca_validade') && (
+              <div>
+                <label style={labelStyle}>Em troca de (o que vamos receber)</label>
+                <textarea
+                  style={{ ...inputStyle, minHeight: 64, width: '100%' }}
+                  placeholder={'Um item por linha. Ex:\nCaixa arquivo\nPilha alcalina AAA'}
+                  value={contrapartida}
+                  onChange={(e) => setContrapartida(e.target.value)}
+                />
+              </div>
+            )}
 
             {/* Itens */}
             <div>
@@ -1127,242 +1144,65 @@ function FormItemRow({
 
 // ---------- Documento para impressao ----------
 
-function PrintDocument({ loan }: { loan: Loan }) {
-  const totalValue = (loan.loan_items ?? []).reduce(
-    (acc, i) => acc + (i.valor_total ?? 0),
-    0
-  )
+// Termo no formato que o almox já usava (modelo da Rafaela, 09/10/2026):
+// carta com a lista de itens, o que vem em troca (permuta) e as assinaturas.
+const ACAO: Record<LoanCategory, string> = {
+  emprestimo: 'EMPRÉSTIMO', doacao: 'DOAÇÃO', permuta: 'PERMUTA', troca_validade: 'TROCA POR VALIDADE',
+}
 
+function PrintDocument({ loan, unidades, autor }: { loan: Loan; unidades: Record<string, string>; autor: string }) {
+  const material = loan.modulo === 'almoxarifado' ? 'MATERIAL' : 'MEDICAMENTO'
+  const plural = loan.modulo === 'almoxarifado' ? 'materiais' : 'medicamentos'
+  const dataExtenso = new Date(loan.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })
+  const troca = (loan.contrapartida ?? '').split('\n').map((t) => t.trim()).filter(Boolean)
+  const setor = loan.modulo === 'almoxarifado' ? 'Almoxarifado' : 'Farmácia'
   return (
-    <div
-      style={{
-        fontFamily: 'Arial, sans-serif',
-        fontSize: 12,
-        color: '#000',
-        padding: '20mm',
-        maxWidth: '180mm',
-        margin: '0 auto',
-      }}
-    >
-      {/* Cabecalho */}
-      <div style={{ textAlign: 'center', marginBottom: 24 }}>
-        <p
-          style={{
-            fontWeight: 700,
-            fontSize: 13,
-            margin: 0,
-            textTransform: 'uppercase',
-          }}
-        >
-          HOSPITAL ESTADUAL COSTA DOS COQUEIROS - HECC
-        </p>
-        <p
-          style={{
-            fontWeight: 600,
-            fontSize: 13,
-            margin: '6px 0 0',
-            textTransform: 'uppercase',
-          }}
-        >
-          EMPRESTIMO / DOACAO DE {loan.modulo === 'almoxarifado' ? 'MATERIAL' : 'MEDICAMENTO'}
-        </p>
-        <p style={{ margin: '4px 0 0', fontSize: 11, color: '#555' }}>
-          N° {loan.loan_number} — {CATEGORY_LABEL[loan.categoria]}
-        </p>
-      </div>
-
-      {/* Dados gerais */}
-      <table
-        style={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          marginBottom: 16,
-        }}
-      >
-        <tbody>
-          <tr>
-            <td
-              style={{ width: '50%', padding: '4px 0', verticalAlign: 'top' }}
-            >
-              <strong>Destino:</strong> {loan.destino}
-            </td>
-            <td
-              style={{ width: '50%', padding: '4px 0', verticalAlign: 'top' }}
-            >
-              <strong>Data:</strong>{' '}
-              {new Date(loan.created_at).toLocaleDateString('pt-BR', {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-              })}
-            </td>
-          </tr>
-          {loan.observacao && (
-            <tr>
-              <td colSpan={2} style={{ padding: '4px 0' }}>
-                <strong>Observacao:</strong> {loan.observacao}
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-
-      {/* Tabela de itens */}
-      <table
-        style={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          border: '1px solid #999',
-          marginBottom: 20,
-        }}
-      >
-        <thead>
-          <tr style={{ background: '#f0f0f0' }}>
-            {[
-              'Produto',
-              'Qtd',
-              'Apresentacao',
-              'Lote',
-              'Validade',
-              'Valor Unit',
-              'Valor Total',
-            ].map((h) => (
-              <th
-                key={h}
-                style={{
-                  border: '1px solid #999',
-                  padding: '5px 6px',
-                  textAlign: 'left',
-                  fontSize: 11,
-                  fontWeight: 700,
-                }}
-              >
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {(loan.loan_items ?? []).map((li, i) => (
-            <tr key={li.id ?? i}>
-              <td style={{ border: '1px solid #ccc', padding: '5px 6px' }}>
-                {li.item_nome}
-              </td>
-              <td
-                style={{
-                  border: '1px solid #ccc',
-                  padding: '5px 6px',
-                  textAlign: 'center',
-                }}
-              >
-                {li.quantity}
-              </td>
-              <td style={{ border: '1px solid #ccc', padding: '5px 6px' }} />
-              <td style={{ border: '1px solid #ccc', padding: '5px 6px' }}>
-                {li.batch_number || '—'}
-              </td>
-              <td style={{ border: '1px solid #ccc', padding: '5px 6px' }}>
-                {li.expiry_date ? fmtDate(li.expiry_date) : '—'}
-              </td>
-              <td
-                style={{
-                  border: '1px solid #ccc',
-                  padding: '5px 6px',
-                  textAlign: 'right',
-                }}
-              >
-                {loan.categoria === 'troca_validade'
-                  ? '—'
-                  : fmtCurrency(li.valor_unit)}
-              </td>
-              <td
-                style={{
-                  border: '1px solid #ccc',
-                  padding: '5px 6px',
-                  textAlign: 'right',
-                }}
-              >
-                {loan.categoria === 'troca_validade'
-                  ? '—'
-                  : fmtCurrency(li.valor_total)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        {loan.categoria !== 'troca_validade' && totalValue > 0 && (
-          <tfoot>
-            <tr style={{ background: '#f8f8f8' }}>
-              <td
-                colSpan={6}
-                style={{
-                  border: '1px solid #ccc',
-                  padding: '5px 6px',
-                  textAlign: 'right',
-                  fontWeight: 700,
-                }}
-              >
-                TOTAL
-              </td>
-              <td
-                style={{
-                  border: '1px solid #ccc',
-                  padding: '5px 6px',
-                  textAlign: 'right',
-                  fontWeight: 700,
-                }}
-              >
-                {totalValue.toLocaleString('pt-BR', {
-                  style: 'currency',
-                  currency: 'BRL',
-                })}
-              </td>
-            </tr>
-          </tfoot>
-        )}
-      </table>
-
-      {/* Assinaturas */}
-      <div
-        style={{
-          display: 'flex',
-          gap: 24,
-          marginTop: 40,
-          justifyContent: 'space-between',
-        }}
-      >
-        {['Entregue por (responsável):', 'Recebido por (nome legível e documento):'].map((label) => (
-          <div key={label} style={{ flex: 1, textAlign: 'center' }}>
-            <div
-              style={{
-                borderTop: '1px solid #000',
-                paddingTop: 6,
-                marginTop: 40,
-                fontSize: 11,
-              }}
-            >
-              {label}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <p
-        style={{
-          marginTop: 24,
-          fontSize: 10,
-          color: '#888',
-          textAlign: 'center',
-        }}
-      >
-        Documento gerado em{' '}
-        {new Date().toLocaleString('pt-BR', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        })}
+    <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#000', padding: '20mm', maxWidth: '180mm', margin: '0 auto', lineHeight: 1.6 }}>
+      <p style={{ textAlign: 'center', fontWeight: 700, fontSize: 14, margin: 0 }}>Hospital Estadual Costa dos Coqueiros</p>
+      <p style={{ textAlign: 'right', margin: '18px 0 0' }}>{dataExtenso}</p>
+      <p style={{ textAlign: 'center', fontWeight: 700, margin: '18px 0 4px' }}>{ACAO[loan.categoria]} DE {material}</p>
+      <p style={{ textAlign: 'center', fontSize: 11, color: '#555', margin: '0 0 18px' }}>Nº {loan.loan_number}</p>
+      <p style={{ margin: '0 0 10px' }}>Prezados,</p>
+      <p style={{ margin: '0 0 10px' }}>
+        Estamos enviando em caráter de <strong>{ACAO[loan.categoria]}</strong> para <strong>{loan.destino}</strong> os seguintes {plural}:
       </p>
+      <ul style={{ margin: '0 0 12px', paddingLeft: 22 }}>
+        {(loan.loan_items ?? []).map((li, i) => (
+          <li key={li.id ?? i}>
+            {li.item_nome}: <strong>{li.quantity} {unidades[li.item_id ?? ''] ?? 'un'}</strong>
+            {(li.batch_number || li.expiry_date) && (
+              <span style={{ fontSize: 11, color: '#444' }}>
+                {' '}(lote {li.batch_number || '—'}{li.expiry_date ? `, validade ${fmtDate(li.expiry_date)}` : ''})
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {troca.length > 0 && (
+        <>
+          <p style={{ margin: '0 0 4px' }}>Por:</p>
+          <ul style={{ margin: '0 0 12px', paddingLeft: 22 }}>
+            {troca.map((t, i) => <li key={i}>{t}</li>)}
+          </ul>
+        </>
+      )}
+      {loan.observacao && <p style={{ margin: '0 0 12px' }}>Observação: {loan.observacao}</p>}
+      <p style={{ margin: '24px 0 0' }}>Atenciosamente,</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 40, marginTop: 48 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ borderTop: '1px solid #000', paddingTop: 4 }}>
+            <div>{autor || ' '}</div>
+            <div>{setor}</div>
+            <div>Hospital Estadual Costa dos Coqueiros</div>
+          </div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ borderTop: '1px solid #000', paddingTop: 4 }}>
+            <div>Recebido por (nome legível e documento)</div>
+            <div style={{ marginTop: 18 }}>Em: ____/____/________</div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
