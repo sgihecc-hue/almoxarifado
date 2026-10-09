@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/contexts/theme'
+import { useModule } from '@/contexts/module'
 import { supabase } from '@/lib/supabase'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
@@ -67,9 +68,15 @@ export function StockReport({ type }: StockReportProps) {
   const [erro, setErro] = useState<string | null>(null)
   // Farmacia: locais (CAF, SAT_1, SAT_2, SAT_T) na ordem das colunas
   const [locais, setLocais] = useState<Array<{ id: string; code: string }>>([])
+  // Farmácia: relatório de UM estoque (o do topo) ou de todos. Pedido da
+  // Andressa (09/10): total, status, valor e lotes eram a soma das satélites.
+  const { activeStock } = useModule()
+  const [estoqueSel, setEstoqueSel] = useState<string>(() =>
+    type === 'pharmacy' && activeStock && ['CAF', 'SAT_1', 'SAT_2', 'SAT_T'].includes(activeStock.code) ? activeStock.code : 'TODOS')
+  const NOME_ESTOQUE: Record<string, string> = { CAF: 'CAF', SAT_1: 'Satélite 1', SAT_2: 'Satélite 2', SAT_T: 'Satélite Térreo', TODOS: 'Todos os estoques' }
 
   const table = type === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items'
-  const title = type === 'pharmacy' ? 'Relatorio de Estoque — Farmacia' : 'Relatorio de Estoque — Almoxarifado'
+  const title = type === 'pharmacy' ? `Relatorio de Estoque — Farmacia (${NOME_ESTOQUE[estoqueSel] ?? estoqueSel})` : 'Relatorio de Estoque — Almoxarifado'
   const Icon = type === 'pharmacy' ? Pill : Package2
 
   const txt = mode === 'dark' ? '#e8f0ec' : '#0d2e1c'
@@ -91,7 +98,7 @@ export function StockReport({ type }: StockReportProps) {
     color: txt, outline: 'none',
   }
 
-  useEffect(() => { loadItems() }, [])
+  useEffect(() => { loadItems() }, [estoqueSel])
 
   async function loadItems() {
     setLoading(true)
@@ -111,7 +118,7 @@ export function StockReport({ type }: StockReportProps) {
       const { data: locs, error: eLoc } = await supabase
         .from('stock_locations')
         .select('id, code')
-        .in('code', type === 'pharmacy' ? ['CAF', 'SAT_1', 'SAT_2', 'SAT_T'] : ['ALMOX'])
+        .in('code', type === 'pharmacy' ? (estoqueSel === 'TODOS' ? ['CAF', 'SAT_1', 'SAT_2', 'SAT_T'] : [estoqueSel]) : ['ALMOX'])
         .order('code')
       if (eLoc) throw eLoc
       const listaLocais = (locs || []) as Array<{ id: string; code: string }>
@@ -403,6 +410,11 @@ export function StockReport({ type }: StockReportProps) {
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
+        {type === 'pharmacy' && (
+          <select value={estoqueSel} onChange={(e) => setEstoqueSel(e.target.value)} style={inputStyle} title="Estoque do relatório">
+            {['CAF', 'SAT_1', 'SAT_2', 'SAT_T', 'TODOS'].map((c) => <option key={c} value={c}>{NOME_ESTOQUE[c]}</option>)}
+          </select>
+        )}
       </div>
 
       {/* Table */}
