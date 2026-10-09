@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { 
   Search, Filter, AlertCircle,
@@ -16,6 +16,7 @@ import { useListaSolicitacoes, periodoParaFiltro } from '@/lib/utils/request-lis
 import { RequestStatusBadge } from '@/components/request-status-badge'
 import { getDepartmentName } from '@/lib/constants/departments'
 import { useAuth } from '@/contexts/auth'
+import { useModule } from '@/contexts/module'
 import { PeriodFilterDialog } from '@/components/period-filter-dialog'
 import { isWithinPeriod, getDefaultDateRange } from '@/lib/utils/date'
 import type { Request } from '@/lib/services/requests'
@@ -25,6 +26,7 @@ export function MyRequests() {
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useAuth()
+  const { activeStock } = useModule()
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'delivered' | 'cancelled'>('pending')
   const [showPeriodDialog, setShowPeriodDialog] = useState(false)
@@ -37,7 +39,7 @@ export function MyRequests() {
   // os 100 pedidos mais recentes de todo o hospital e, para gestor/atendente/
   // farmacêutico, a lista mostrava pedidos de outras pessoas. Quem atende
   // usa a Caixa de Entrada/Pendências.
-  const { requests, loading, erro: erroLista, recarregar } = useListaSolicitacoes(
+  const { requests: meus, loading: carregandoMeus, erro: erroMeus, recarregar: recarregarMeus } = useListaSolicitacoes(
     user ? {
       requesterId: user.id,
       type: isWarehouse ? 'warehouse' : undefined,
@@ -45,6 +47,27 @@ export function MyRequests() {
     } : null,
     { atualizarCadaMs: 60000 },
   )
+  // Quem atende na farmácia (CAF/satélite) também vê aqui os pedidos que saem
+  // do estoque selecionado no topo — é na aba Pendentes que a equipe trabalha.
+  // A auditoria de 28/09 tinha deixado só os pedidos da própria pessoa e a aba
+  // ficou vazia para quem atende (Andressa, 30/09 e 09/10).
+  const atende = !!user && ['administrador', 'gestor', 'atendente', 'pharmacist'].includes(user.role as string)
+  const { requests: doEstoque, loading: carregandoEstoque, erro: erroEstoque, recarregar: recarregarEstoque } = useListaSolicitacoes(
+    user && atende && !isWarehouse && activeStock && activeStock.itemType === 'pharmacy' ? {
+      type: 'pharmacy',
+      sourceLocationId: activeStock.id,
+      ...periodoParaFiltro(dateRange),
+    } : null,
+    { atualizarCadaMs: 60000 },
+  )
+  const requests = useMemo(() => {
+    const m = new Map<string, (typeof meus)[number]>()
+    for (const r of [...meus, ...doEstoque]) m.set(r.id, r)
+    return [...m.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+  }, [meus, doEstoque])
+  const loading = carregandoMeus || (carregandoEstoque && doEstoque.length === 0 && !!activeStock && atende && !isWarehouse)
+  const erroLista = erroMeus || erroEstoque
+  const recarregar = async (silencioso = false) => { await Promise.all([recarregarMeus(silencioso), recarregarEstoque(silencioso)]) }
 
   useEffect(() => {
     // Check for success message from location state (after creating a new request)

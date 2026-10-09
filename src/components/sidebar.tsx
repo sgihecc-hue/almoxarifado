@@ -373,10 +373,8 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                         <item.icon className="w-5 h-5" />
                         {item.name}
                       </div>
-                      {/* O contador fica em Pendências (onde os pedidos a atender aparecem).
-                          Em "Solicitações" a lista é só dos pedidos da própria pessoa e
-                          o número levava a uma tela vazia (Andressa, 30/09 e 09/10). */}
-                      {(item.href === '/requests/pending' || item.href === '/almox/requests/pending') && pendingCount > 0 && (
+                      {/* Contador de pedidos a atender: em Solicitações, aba Pendentes. */}
+                      {item.href === '/requests' && pendingCount > 0 && (
                         <span
                           title={`${pendingCount} solicitação(oes) pendente(s)`}
                           style={{

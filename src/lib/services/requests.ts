@@ -27,6 +27,8 @@ export interface FiltroSolicitacoes {
   /** created_at <= ate (null = sem limite: pedido novo sempre aparece) */
   ate?: Date | null
   requesterId?: string
+  /** Pedidos que saem deste estoque (quem atende: CAF ou satélite). */
+  sourceLocationId?: string
 }
 
 /** Mensagem quando o pedido mudou entre abrir a tela e clicar. */
@@ -243,6 +245,7 @@ class RequestService {
         if (filtro.desde) q = q.gte('created_at', filtro.desde.toISOString())
         if (filtro.ate) q = q.lte('created_at', filtro.ate.toISOString())
         if (filtro.requesterId) q = q.eq('requester_id', filtro.requesterId)
+        if (filtro.sourceLocationId) q = q.eq('source_location_id', filtro.sourceLocationId)
         return q
           .order('created_at', { ascending: false })
           .order('id', { ascending: true })

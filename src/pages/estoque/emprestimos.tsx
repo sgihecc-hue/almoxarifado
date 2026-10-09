@@ -20,6 +20,8 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth'
+import { useModule } from '@/contexts/module'
+import { warehouseDispatchService } from '@/lib/services/warehouse-dispatch'
 import { useTheme } from '@/contexts/theme'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
@@ -54,6 +56,8 @@ interface Loan {
   destino: string
   categoria: LoanCategory
   status: 'pending' | 'closed' | 'cancelled'
+  modulo?: 'farmacia' | 'almoxarifado'
+  saida_id?: string | null
   observacao: string | null
   created_by: string | null
   created_at: string
@@ -66,6 +70,7 @@ interface PharmacyItemRow {
   name: string
   unit: string
   price: number | null
+  saldo?: number
 }
 
 // ---------- Helpers ----------
@@ -153,7 +158,10 @@ export function EmprestimosAbertos() {
   const [itemSearches, setItemSearches] = useState<Record<number, string>>({})
   const [showDropdowns, setShowDropdowns] = useState<Record<number, boolean>>({})
 
-  // Itens da farmacia para busca
+  // Itens do catálogo do módulo ativo para busca (farmácia ou almoxarifado).
+  // 09/10/2026: no almox a tela só achava itens da farmácia (Rafaela).
+  const { activeModule } = useModule()
+  const modulo: 'farmacia' | 'almoxarifado' = activeModule === 'almoxarifado' ? 'almoxarifado' : 'farmacia'
   const [pharmacyItems, setPharmacyItems] = useState<PharmacyItemRow[]>([])
 
   // Loan selecionado para impressao
@@ -167,9 +175,10 @@ export function EmprestimosAbertos() {
       const { data, error: err } = await supabase
         .from('loans')
         .select(
-          `id, loan_number, destino, categoria, status, observacao, created_by, created_at,
+          `id, loan_number, destino, categoria, status, observacao, created_by, created_at, modulo, saida_id,
            loan_items ( id, loan_id, item_id, item_nome, batch_number, expiry_date, quantity, valor_unit, valor_total )`
         )
+        .eq('modulo', modulo)
         .order('created_at', { ascending: false })
         .limit(100)
       if (err) throw err
@@ -182,6 +191,21 @@ export function EmprestimosAbertos() {
   }
 
   const loadPharmacyItems = async () => {
+    if (modulo === 'almoxarifado') {
+      // Valor = última compra; nunca comprado = valor referencial.
+      const { data } = await supabase
+        .from('warehouse_items')
+        .select('id, code, name, unit, price, last_purchase_price, reference_price, current_stock')
+        .eq('is_active', true)
+        .order('name')
+        .limit(3000)
+      setPharmacyItems(((data || []) as any[]).map((w) => ({
+        id: w.id, code: w.code, name: w.name, unit: w.unit,
+        price: Number(w.last_purchase_price) || Number(w.reference_price) || Number(w.price) || null,
+        saldo: w.current_stock ?? 0,
+      })))
+      return
+    }
     const { data } = await supabase
       .from('pharmacy_items')
       .select('id, code, name, unit, price')
@@ -194,7 +218,8 @@ export function EmprestimosAbertos() {
   useEffect(() => {
     loadLoans()
     loadPharmacyItems()
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modulo])
 
   // ---------- Modal helpers ----------
 
@@ -270,9 +295,29 @@ export function EmprestimosAbertos() {
       }
     }
 
+    if (modulo === 'almoxarifado') {
+      const semItem = formItems.findIndex((fi) => !fi.item_id)
+      if (semItem >= 0) {
+        setFormError(`Item ${semItem + 1}: escolha o produto na lista (precisa ser do cadastro para dar saída no estoque).`)
+        return
+      }
+    }
+
     salvandoRef.current = true
     setSaving(true)
     try {
+      // Almoxarifado: dá a saída no estoque ANTES de gravar (recusa se não houver saldo).
+      let saida: { id: string; dispatch_number: number } | null = null
+      if (modulo === 'almoxarifado') {
+        const tipo = categoria === 'troca_validade' ? 'outro' : categoria
+        saida = await warehouseDispatchService.create({
+          items: formItems.map((fi) => ({ item_id: fi.item_id as string, quantity: fi.quantity })),
+          destination_department_text: destino.trim(),
+          dispatch_type: tipo as any,
+          notes: `${CATEGORY_LABEL[categoria] ?? categoria} para ${destino.trim()}${observacao.trim() ? ' · ' + observacao.trim() : ''}`,
+        } as any, crypto.randomUUID())
+      }
+
       const { data: loanData, error: loanErr } = await supabase
         .from('loans')
         .insert({
@@ -281,10 +326,15 @@ export function EmprestimosAbertos() {
           status: 'pending',
           observacao: observacao.trim() || null,
           created_by: user?.id ?? null,
+          modulo,
+          saida_id: saida?.id ?? null,
         })
         .select('id')
         .single()
-      if (loanErr) throw loanErr
+      if (loanErr) {
+        if (saida) throw new Error(`A saída nº ${saida.dispatch_number} já foi feita no estoque, mas o registro do empréstimo não gravou (${getErrorMessage(loanErr)}). Avise o suporte.`)
+        throw loanErr
+      }
 
       const loanId = loanData.id
       const itemsPayload = formItems.map((fi) => ({
@@ -305,6 +355,14 @@ export function EmprestimosAbertos() {
 
       setShowModal(false)
       await loadLoans()
+      // Já abre o formulário pronto para imprimir/assinar.
+      const { data: novo } = await supabase
+        .from('loans')
+        .select(`id, loan_number, destino, categoria, status, observacao, created_by, created_at, modulo, saida_id,
+                 loan_items ( id, loan_id, item_id, item_nome, batch_number, expiry_date, quantity, valor_unit, valor_total )`)
+        .eq('id', loanId)
+        .maybeSingle()
+      if (novo) handlePrint(novo as Loan)
     } catch (e: any) {
       setFormError(getErrorMessage(e))
     } finally {
@@ -1245,7 +1303,7 @@ function PrintDocument({ loan }: { loan: Loan }) {
           justifyContent: 'space-between',
         }}
       >
-        {['Solicitado por:', 'Atendido por:', 'Recebido por:'].map((label) => (
+        {['Entregue por (responsável):', 'Recebido por (nome legível e documento):'].map((label) => (
           <div key={label} style={{ flex: 1, textAlign: 'center' }}>
             <div
               style={{
