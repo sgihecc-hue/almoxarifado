@@ -217,6 +217,9 @@ export function AddItemDialog({ type, open, onOpenChange, onSuccess }: AddItemDi
     if (type === 'pharmacy') {
       return [
         { value: 'MEDICAMENTO', label: 'Medicamento' },
+        // Valor comeca com MEDICAMENTO de proposito: a exigencia de lote/validade
+        // (saida e dispensacao) usa startsWith('MEDICAMENTO') e tem que valer aqui.
+        { value: 'MEDICAMENTO ALTO CUSTO', label: 'Alto Custo' },
         { value: 'MAT/MED', label: 'Material/Medicamento' },
         { value: 'HIGIENE E LIMPEZA', label: 'Higiene e Limpeza' }
       ]

@@ -416,6 +416,8 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
     type === 'pharmacy'
       ? [
           { value: 'MEDICAMENTO', label: 'Medicamento' },
+          // Comeca com MEDICAMENTO: mantem a exigencia de lote/validade (startsWith).
+          { value: 'MEDICAMENTO ALTO CUSTO', label: 'Alto Custo' },
           { value: 'MAT/MED', label: 'Material/Medicamento' },
           { value: 'HIGIENE E LIMPEZA', label: 'Higiene e Limpeza' },
         ]

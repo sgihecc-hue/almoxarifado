@@ -960,7 +960,7 @@ class ItemsService {
         throw new Error('O cadastro do item não grava saldo. Cadastre com estoque 0 e lance a quantidade pela Nova Entrada.')
       }
 
-      const pharmacyCategories = ['Medicamentos', 'Material Hospitalar', 'MEDICAMENTO', 'MAT/MED', 'HIGIENE E LIMPEZA']
+      const pharmacyCategories = ['Medicamentos', 'Material Hospitalar', 'MEDICAMENTO', 'MEDICAMENTO ALTO CUSTO', 'MAT/MED', 'HIGIENE E LIMPEZA']
       const table = typeOverride
         ? (typeOverride === 'pharmacy' ? 'pharmacy_items' : 'warehouse_items')
         : (pharmacyCategories.includes(data.category as string) ? 'pharmacy_items' : 'warehouse_items')
