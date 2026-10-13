@@ -27,6 +27,9 @@ interface StockItem {
   is_active: boolean
   batch_number?: string | null
   expiry_date?: string | null
+  // Farmacia: classes do cadastro (curativo, sgv...) para o valor por categoria
+  medication_class?: string | null
+  medication_classes?: string[] | null
 }
 
 // Lote com saldo, do MESMO estoque que o relatorio soma (todos os estoques da
@@ -39,6 +42,22 @@ const textoLotes = (ls: LoteSaldo[]) =>
   ls.map((l) => `${l.lote}${l.validade ? ` (${dataBR(l.validade)})` : ''}: ${l.qtd}`).join('; ')
 const validadeMaisProxima = (ls: LoteSaldo[]) =>
   ls.map((l) => l.validade).filter(Boolean).sort()[0] ?? null
+
+// Valor por categoria (Andressa 13/10): cada item da farmacia cai em UM grupo,
+// senao o item com duas classes seria somado duas vezes. Alto Custo e
+// categoria do cadastro; SGV e Curativo sao classes; o resto pela categoria.
+const GRUPOS_FARMACIA = ['Medicamento', 'Curativo', 'Solução de Grande Volume', 'Alto Custo', 'Higiene e Limpeza', 'Outros materiais'] as const
+type GrupoFarmacia = typeof GRUPOS_FARMACIA[number]
+function grupoFarmacia(i: StockItem): GrupoFarmacia {
+  const cat = String(i.category ?? '').toUpperCase()
+  const classes = (i.medication_classes && i.medication_classes.length ? i.medication_classes : [i.medication_class ?? ''])
+  if (cat.startsWith('MEDICAMENTO ALTO CUSTO')) return 'Alto Custo'
+  if (classes.includes('sgv')) return 'Solução de Grande Volume'
+  if (classes.includes('curativo')) return 'Curativo'
+  if (cat.startsWith('MEDICAMENTO')) return 'Medicamento'
+  if (cat.startsWith('HIGIENE')) return 'Higiene e Limpeza'
+  return 'Outros materiais'
+}
 
 type SortField = 'name' | 'code' | 'category' | 'current_stock' | 'min_stock' | 'status'
 type SortDir = 'asc' | 'desc'
@@ -62,6 +81,7 @@ export function StockReport({ type }: StockReportProps) {
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [stockFilter, setStockFilter] = useState<StockFilter>('all')
+  const [grupoFilter, setGrupoFilter] = useState<GrupoFarmacia | 'all'>('all')
   const [sortField, setSortField] = useState<SortField>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [lotes, setLotes] = useState<Map<string, LoteSaldo[]>>(new Map())
@@ -107,7 +127,8 @@ export function StockReport({ type }: StockReportProps) {
       const data = await buscarTodas<StockItem>((de, ate) =>
         supabase
           .from(table)
-          .select('id, code, name, category, unit, current_stock, min_stock, price, last_purchase_price, is_active, batch_number, expiry_date')
+          .select('id, code, name, category, unit, current_stock, min_stock, price, last_purchase_price, is_active, batch_number, expiry_date'
+            + (type === 'pharmacy' ? ', medication_class, medication_classes' : ''))
           .eq('is_active', true)
           .order('name')
           .order('id')
@@ -220,6 +241,10 @@ export function StockReport({ type }: StockReportProps) {
       result = result.filter(i => (i.category ?? '') === categoryFilter)
     }
 
+    if (type === 'pharmacy' && grupoFilter !== 'all') {
+      result = result.filter(i => grupoFarmacia(i) === grupoFilter)
+    }
+
     if (stockFilter === 'com_saldo') {
       // Só itens com saldo (Andressa, 09/10)
       result = result.filter(i => Number(i.current_stock) > 0)
@@ -241,7 +266,7 @@ export function StockReport({ type }: StockReportProps) {
     })
 
     return result
-  }, [items, search, categoryFilter, stockFilter, sortField, sortDir])
+  }, [items, search, categoryFilter, grupoFilter, stockFilter, sortField, sortDir])
 
   // Stats
   const stats = useMemo(() => {
@@ -253,6 +278,22 @@ export function StockReport({ type }: StockReportProps) {
     const totalValue = items.reduce((sum, i) => sum + (i.current_stock * precoDe(i)), 0)
     return { total, normal, low, critical, out, totalValue }
   }, [items])
+
+  // Farmacia: valor em estoque por grupo, do estoque escolhido no topo.
+  const valorPorGrupo = useMemo(() => {
+    if (type !== 'pharmacy') return []
+    const acc = new Map<GrupoFarmacia, { itens: number; comSaldo: number; valor: number }>()
+    for (const i of items) {
+      const g = grupoFarmacia(i)
+      const a = acc.get(g) ?? { itens: 0, comSaldo: 0, valor: 0 }
+      a.itens += 1
+      if (Number(i.current_stock) > 0) a.comSaldo += 1
+      a.valor += i.current_stock * precoDe(i)
+      acc.set(g, a)
+    }
+    return GRUPOS_FARMACIA.filter((g) => acc.has(g)).map((g) => ({ grupo: g, ...acc.get(g)! }))
+  }, [items, type])
+  const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
   function toggleSort(field: SortField) {
     if (sortField === field) {
@@ -275,6 +316,7 @@ export function StockReport({ type }: StockReportProps) {
         'Codigo': item.code ?? '',
         'Nome': item.name,
         'Categoria': item.category ?? '',
+        ...(type === 'pharmacy' ? { 'Grupo de valor': grupoFarmacia(item) } : {}),
         'Unidade': item.unit ?? '',
         'Estoque Atual': item.current_stock,
         'Estoque Minimo': item.min_stock,
@@ -294,6 +336,22 @@ export function StockReport({ type }: StockReportProps) {
     const ws = XLSX.utils.json_to_sheet(data)
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Estoque')
+
+    // Farmacia: aba "Valor por categoria" (do estoque escolhido, sem filtro).
+    if (type === 'pharmacy' && valorPorGrupo.length) {
+      const resumo = [
+        ...valorPorGrupo.map((g) => ({ 'Categoria': g.grupo, 'Itens': g.itens, 'Itens com saldo': g.comSaldo, 'Valor em estoque': g.valor })),
+        { 'Categoria': 'TOTAL', 'Itens': stats.total, 'Itens com saldo': valorPorGrupo.reduce((a, g) => a + g.comSaldo, 0), 'Valor em estoque': stats.totalValue },
+      ]
+      const wsRes = XLSX.utils.json_to_sheet(resumo)
+      wsRes['!cols'] = [{ wch: 28 }, { wch: 8 }, { wch: 16 }, { wch: 18 }]
+      const fx = XLSX.utils.decode_range(wsRes['!ref'] || 'A1')
+      for (let r = 1; r <= fx.e.r; r++) {
+        const cel = wsRes[XLSX.utils.encode_cell({ r, c: 3 })]
+        if (cel && typeof cel.v === 'number') cel.z = '#,##0.00'
+      }
+      XLSX.utils.book_append_sheet(wb, wsRes, 'Valor por categoria')
+    }
 
     // Aba "Por lote": uma linha por lote com saldo, ordenada por validade.
     const porLote = filteredItems.flatMap((item) =>
@@ -315,13 +373,13 @@ export function StockReport({ type }: StockReportProps) {
     // Formatacao (queixa de 22/09/2026: planilha "mal formatada"): largura por
     // coluna, filtro no cabecalho e dinheiro com 2 casas.
     ws['!cols'] = [
-      { wch: 20 }, { wch: 55 }, { wch: 22 }, { wch: 8 }, { wch: 13 }, { wch: 13 },
+      { wch: 20 }, { wch: 55 }, { wch: 22 }, ...(type === 'pharmacy' ? [{ wch: 24 }] : []), { wch: 8 }, { wch: 13 }, { wch: 13 },
       { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 60 }, { wch: 20 },
     ]
     if (ws['!ref']) ws['!autofilter'] = { ref: ws['!ref'] }
     const faixa = XLSX.utils.decode_range(ws['!ref'] || 'A1')
     for (let r = 1; r <= faixa.e.r; r++) {
-      for (const c of [6, 7]) {
+      for (const c of (type === 'pharmacy' ? [7, 8] : [6, 7])) {
         const cel = ws[XLSX.utils.encode_cell({ r, c })]
         if (cel && typeof cel.v === 'number') cel.z = '#,##0.00'
       }
@@ -387,6 +445,35 @@ export function StockReport({ type }: StockReportProps) {
           </button>
         ))}
       </div>
+
+      {/* Farmacia: valor por categoria (clique filtra a lista) */}
+      {type === 'pharmacy' && valorPorGrupo.length > 0 && (
+        <div className="p-4 rounded-xl" style={glass}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold" style={{ color: txt }}>Valor por categoria · {NOME_ESTOQUE[estoqueSel] ?? estoqueSel}</div>
+            <div className="text-sm" style={{ color: txtSec }}>Total: <strong style={{ color: txt }}>{brl(stats.totalValue)}</strong></div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            {valorPorGrupo.map((g) => (
+              <button
+                key={g.grupo}
+                onClick={() => setGrupoFilter(grupoFilter === g.grupo ? 'all' : g.grupo)}
+                className="p-3 rounded-lg text-left transition-all"
+                style={{
+                  background: mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)',
+                  outline: grupoFilter === g.grupo ? '2px solid #10b981' : 'none',
+                  cursor: 'pointer',
+                }}
+                title="Clique para filtrar a lista por esta categoria"
+              >
+                <div className="text-xs font-medium" style={{ color: txtSec }}>{g.grupo}</div>
+                <div className="text-lg font-bold mt-1" style={{ color: txt }}>{brl(g.valor)}</div>
+                <div className="text-xs mt-1" style={{ color: txtMut }}>{g.comSaldo} com saldo de {g.itens} itens</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {erro && (
         <div className="flex items-center justify-between gap-3 p-4 rounded-xl text-sm" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}>
