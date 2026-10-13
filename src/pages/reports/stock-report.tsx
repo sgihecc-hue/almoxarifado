@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   Package2, Pill, Download, Search, AlertTriangle,
-  ChevronDown, ChevronUp, Filter
+  ChevronDown, ChevronUp, Filter, Printer
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/contexts/theme'
@@ -43,15 +43,18 @@ const textoLotes = (ls: LoteSaldo[]) =>
 const validadeMaisProxima = (ls: LoteSaldo[]) =>
   ls.map((l) => l.validade).filter(Boolean).sort()[0] ?? null
 
-// Valor por categoria (Andressa 13/10): cada item da farmacia cai em UM grupo,
-// senao o item com duas classes seria somado duas vezes. Alto Custo e
-// categoria do cadastro; SGV e Curativo sao classes; o resto pela categoria.
-const GRUPOS_FARMACIA = ['Medicamento', 'Curativo', 'Solução de Grande Volume', 'Alto Custo', 'Higiene e Limpeza', 'Outros materiais'] as const
+// Valor por categoria (Andressa e Cris 13/10): cada item da farmacia cai em UM
+// grupo, senao o item com duas classes seria somado duas vezes. Alto Custo e
+// categoria do cadastro; Inflamavel, Higiene, SGV e Curativo sao classes (nessa
+// ordem de prioridade); o resto pela categoria.
+const GRUPOS_FARMACIA = ['Medicamento', 'Curativo', 'Solução de Grande Volume', 'Inflamável', 'Higiene e Limpeza', 'Alto Custo', 'Outros materiais'] as const
 type GrupoFarmacia = typeof GRUPOS_FARMACIA[number]
 function grupoFarmacia(i: StockItem): GrupoFarmacia {
   const cat = String(i.category ?? '').toUpperCase()
   const classes = (i.medication_classes && i.medication_classes.length ? i.medication_classes : [i.medication_class ?? ''])
   if (cat.startsWith('MEDICAMENTO ALTO CUSTO')) return 'Alto Custo'
+  if (classes.includes('inflamavel')) return 'Inflamável'
+  if (classes.includes('higiene_limpeza')) return 'Higiene e Limpeza'
   if (classes.includes('sgv')) return 'Solução de Grande Volume'
   if (classes.includes('curativo')) return 'Curativo'
   if (cat.startsWith('MEDICAMENTO')) return 'Medicamento'
@@ -295,6 +298,27 @@ export function StockReport({ type }: StockReportProps) {
   }, [items, type])
   const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
+  // Folha so com o valor por categoria, para levar a coordenacao (Cris 13/10).
+  function imprimirValorPorCategoria() {
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    const linhas = valorPorGrupo.map((g) =>
+      `<tr><td>${esc(g.grupo)}</td><td class="n">${g.comSaldo}</td><td class="n">${g.itens}</td><td class="n">${brl(g.valor)}</td></tr>`).join('')
+    const comSaldo = valorPorGrupo.reduce((a, g) => a + g.comSaldo, 0)
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Valor em estoque por categoria</title>
+<style>body{font-family:Arial,sans-serif;margin:32px;color:#111}h1{font-size:18px;margin:0 0 4px}p{margin:0 0 16px;color:#555;font-size:13px}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{border:1px solid #ccc;padding:8px}th{background:#f2f2f2;text-align:left}
+td.n,th.n{text-align:right}tfoot td{font-weight:bold;background:#fafafa}</style></head><body>
+<h1>Farmácia HECC · Valor em estoque por categoria</h1>
+<p>Estoque: ${esc(NOME_ESTOQUE[estoqueSel] ?? estoqueSel)} · Gerado em ${format(new Date(), "dd/MM/yyyy 'às' HH:mm")} · Valor pelo último preço de compra</p>
+<table><thead><tr><th>Categoria</th><th class="n">Itens com saldo</th><th class="n">Itens</th><th class="n">Valor em estoque</th></tr></thead>
+<tbody>${linhas}</tbody><tfoot><tr><td>TOTAL</td><td class="n">${comSaldo}</td><td class="n">${stats.total}</td><td class="n">${brl(stats.totalValue)}</td></tr></tfoot></table>
+<script>window.onload=function(){window.print()}</script></body></html>`
+    const w = window.open('', '_blank')
+    if (!w) return
+    w.document.write(html)
+    w.document.close()
+  }
+
   function toggleSort(field: SortField) {
     if (sortField === field) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -451,9 +475,14 @@ export function StockReport({ type }: StockReportProps) {
         <div className="p-4 rounded-xl" style={glass}>
           <div className="flex items-center justify-between mb-3">
             <div className="text-sm font-semibold" style={{ color: txt }}>Valor por categoria · {NOME_ESTOQUE[estoqueSel] ?? estoqueSel}</div>
-            <div className="text-sm" style={{ color: txtSec }}>Total: <strong style={{ color: txt }}>{brl(stats.totalValue)}</strong></div>
+            <div className="flex items-center gap-3">
+              <div className="text-sm" style={{ color: txtSec }}>Total: <strong style={{ color: txt }}>{brl(stats.totalValue)}</strong></div>
+              <Button size="sm" variant="outline" onClick={imprimirValorPorCategoria}>
+                <Printer size={14} className="mr-1" /> Imprimir
+              </Button>
+            </div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
             {valorPorGrupo.map((g) => (
               <button
                 key={g.grupo}

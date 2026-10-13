@@ -65,10 +65,10 @@ export interface Item {
   barcode?: string | null
   // Campos novos da farmacia (F1):
   supplier_id?: string | null
-  medication_class?: 'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'
+  medication_class?: 'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante' | 'inflamavel' | 'higiene_limpeza'
   // F2: classificação múltipla (array). medication_class é mantido em sync com
   // a primeira classe pra back-compat com a RPC criar_dispensacao em prod.
-  medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'>
+  medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante' | 'inflamavel' | 'higiene_limpeza'>
   controlled_subclass?: 'A1' | 'A2' | 'A3' | 'B1' | 'B2' | 'C1' | 'C2' | 'C3' | 'C4' | null
   presentation?:
     | 'comprimidos' | 'injetaveis' | 'ampola' | 'solucoes_orais' | 'topicos' | 'aerosol'
@@ -139,8 +139,8 @@ interface CreateItemData {
   barcode?: string | null
   // Campos novos (farmacia multi-estoque):
   supplier_id?: string | null
-  medication_class?: 'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'
-  medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'>
+  medication_class?: 'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante' | 'inflamavel' | 'higiene_limpeza'
+  medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante' | 'inflamavel' | 'higiene_limpeza'>
   controlled_subclass?: 'A1' | 'A2' | 'A3' | 'B1' | 'B2' | 'C1' | 'C2' | 'C3' | 'C4' | null
   presentation?:
     | 'comprimidos' | 'injetaveis' | 'ampola' | 'solucoes_orais' | 'topicos' | 'aerosol'
@@ -181,8 +181,8 @@ interface UpdateItemData {
   barcode?: string | null
   // Campos novos (farmacia multi-estoque):
   supplier_id?: string | null
-  medication_class?: 'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'
-  medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'>
+  medication_class?: 'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante' | 'inflamavel' | 'higiene_limpeza'
+  medication_classes?: Array<'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante' | 'inflamavel' | 'higiene_limpeza'>
   controlled_subclass?: 'A1' | 'A2' | 'A3' | 'B1' | 'B2' | 'C1' | 'C2' | 'C3' | 'C4' | null
   presentation?:
     | 'comprimidos' | 'injetaveis' | 'ampola' | 'solucoes_orais' | 'topicos' | 'aerosol'

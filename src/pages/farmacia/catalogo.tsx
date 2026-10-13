@@ -21,6 +21,8 @@ const CLASS_BADGE_STYLE: Record<MedicationClass, string> = {
   sgv: 'bg-cyan-100 text-cyan-800 border-cyan-200',
   curativo: 'bg-emerald-100 text-emerald-800 border-emerald-200',
   anticoagulante: 'bg-purple-100 text-purple-800 border-purple-200',
+  inflamavel: 'bg-orange-100 text-orange-800 border-orange-200',
+  higiene_limpeza: 'bg-sky-100 text-sky-800 border-sky-200',
 }
 
 export function PharmacyCatalogo() {

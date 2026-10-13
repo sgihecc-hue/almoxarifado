@@ -73,7 +73,7 @@ export interface PatientAdmissionWithPatient extends PatientAdmission {
 
 // ---------- Pharmacy items: enums ----------
 
-export type MedicationClass = 'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante'
+export type MedicationClass = 'uso_geral' | 'antimicrobianos' | 'controlados' | 'mav' | 'sgv' | 'curativo' | 'anticoagulante' | 'inflamavel' | 'higiene_limpeza'
 
 export const MEDICATION_CLASS_LABEL: Record<MedicationClass, string> = {
   uso_geral: 'Medicamentos de uso geral',
@@ -83,6 +83,8 @@ export const MEDICATION_CLASS_LABEL: Record<MedicationClass, string> = {
   sgv: 'Soluções de Grande Volume (SGV)',
   curativo: 'Curativo',
   anticoagulante: 'Anticoagulante',
+  inflamavel: 'Inflamável',
+  higiene_limpeza: 'Higiene e Limpeza',
 }
 
 export type ControlledSubclass =
