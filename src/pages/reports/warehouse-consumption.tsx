@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { Fragment, useState, useEffect, useRef } from 'react'
 import { 
   Calendar, 
   BarChart3, 
@@ -65,6 +65,7 @@ interface ItemConsumo {
   category: string | null
   price: number | null
   last_purchase_price: number | null
+  reference_price: number | null
 }
 
 // Linha resolvida (item/setor/valor) exatamente como entra na tela
@@ -168,7 +169,7 @@ export function WarehouseConsumptionReport() {
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all')
   const [showDepartmentFilter, setShowDepartmentFilter] = useState(false)
-  const [activeTab, setActiveTab] = useState<'overview' | 'byDepartment' | 'byCategory'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'byDepartment' | 'byCategory' | 'setorData'>('overview')
   const [selectedItem, setSelectedItem] = useState<string>('all')
   const [showItemFilter, setShowItemFilter] = useState(false)
   const [itemSearchTerm, setItemSearchTerm] = useState('')
@@ -310,7 +311,7 @@ export function WarehouseConsumptionReport() {
       for (let i = 0; i < itemIds.length; i += 300) {
         const { data, error: eItens } = await supabase
           .from('warehouse_items')
-          .select('id, name, code, unit, category, price, last_purchase_price')
+          .select('id, name, code, unit, category, price, last_purchase_price, reference_price')
           .in('id', itemIds.slice(i, i + 300))
         if (eItens) throw eItens
         for (const it of (data || []) as ItemConsumo[]) itemById.set(it.id, it)
@@ -336,8 +337,11 @@ export function WarehouseConsumptionReport() {
             || row.destino_texto
             || 'Sem setor'
           const categoria = item?.category ?? SEM_CATEGORIA
-          // Preco: price esta vazio em ~metade do cadastro -> ultimo preco de compra.
-          const preco = Number(item?.price ?? item?.last_purchase_price ?? 0) || 0
+          // Preco = ultima compra -> valor referencial -> preco (mesma regra do
+          // valor do estoque). Antes era price ?? ultima compra: price GRAVADO
+          // como 0 nao e null, entao fralda/avental/seringa saiam R$ 0,00
+          // (Rafaela 14/10).
+          const preco = Number(item?.last_purchase_price) || Number(item?.reference_price) || Number(item?.price) || 0
           const quantidade = Number(row.quantity) || 0
           return {
             date: row.consumption_date,
@@ -868,7 +872,7 @@ export function WarehouseConsumptionReport() {
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
           <div className="p-6 border-b border-gray-100">
-            <TabsList className="grid grid-cols-3 gap-4">
+            <TabsList className="grid grid-cols-4 gap-4">
               <TabsTrigger value="overview" className="flex items-center gap-2">
                 <BarChart3 className="w-4 h-4" />
                 Visão Geral
@@ -880,6 +884,10 @@ export function WarehouseConsumptionReport() {
               <TabsTrigger value="byCategory" className="flex items-center gap-2">
                 <Package2 className="w-4 h-4" />
                 Por Categoria
+              </TabsTrigger>
+              <TabsTrigger value="setorData" className="flex items-center gap-2">
+                <Building2 className="w-4 h-4" />
+                Setor e Data
               </TabsTrigger>
             </TabsList>
           </div>
@@ -1060,6 +1068,72 @@ export function WarehouseConsumptionReport() {
                 </div>
               </div>
             )}
+          </TabsContent>
+
+          {/* Setor e Data (Rafaela 14/10): cada setor com seu total e, dentro,
+              o que saiu em cada dia, item a item, com quantidade e valor. */}
+          <TabsContent value="setorData" className="p-6">
+            {(() => {
+              const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+              const dataBr = (d: string) => d.slice(0, 10).split('-').reverse().join('/')
+              const porSetor = new Map<string, LinhaConsumo[]>()
+              for (const l of linhasTela) {
+                const arr = porSetor.get(l.department) ?? []
+                arr.push(l)
+                porSetor.set(l.department, arr)
+              }
+              const setores = [...porSetor.entries()]
+                .map(([setor, ls]) => ({
+                  setor,
+                  linhas: [...ls].sort((a, b) => a.date.localeCompare(b.date) || a.itemName.localeCompare(b.itemName, 'pt-BR')),
+                  qtd: ls.reduce((a, l) => a + l.quantity, 0),
+                  valor: ls.reduce((a, l) => a + l.value, 0),
+                }))
+                .sort((a, b) => b.valor - a.valor)
+              const totalValor = setores.reduce((a, x) => a + x.valor, 0)
+              if (setores.length === 0) {
+                return <p className="text-sm text-gray-500">Nenhum consumo no período/filtro escolhido.</p>
+              }
+              return (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-gray-900">Consumo por Setor e Data</h2>
+                    <span className="text-sm text-gray-600">{setores.length} setores · Total: <strong>{brl(totalValor)}</strong></span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100">
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Data</th>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Item</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-600">Quantidade</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-600">Valor (R$)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {setores.map((x) => (
+                          <Fragment key={x.setor}>
+                            <tr className="bg-purple-50 border-t border-purple-100">
+                              <td colSpan={2} className="px-4 py-2 text-sm font-semibold text-purple-900">{x.setor}</td>
+                              <td className="px-4 py-2 text-sm text-right font-semibold text-purple-900">{Math.round(x.qtd * 100) / 100}</td>
+                              <td className="px-4 py-2 text-sm text-right font-semibold text-purple-900">{brl(x.valor)}</td>
+                            </tr>
+                            {x.linhas.map((l, i) => (
+                              <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                                <td className="px-4 py-1.5 text-sm text-gray-600 whitespace-nowrap">{dataBr(l.date)}</td>
+                                <td className="px-4 py-1.5 text-sm text-gray-800">{l.itemName}</td>
+                                <td className="px-4 py-1.5 text-sm text-right text-gray-700">{l.quantity} {l.unit}</td>
+                                <td className="px-4 py-1.5 text-sm text-right text-gray-700">{brl(l.value)}</td>
+                              </tr>
+                            ))}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            })()}
           </TabsContent>
 
           {/* By Category Tab */}
