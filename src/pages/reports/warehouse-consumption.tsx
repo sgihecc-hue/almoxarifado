@@ -16,7 +16,8 @@ import {
   CheckCircle2,
   Building2,
   X,
-  Search
+  Search,
+  Printer
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -1098,7 +1099,36 @@ export function WarehouseConsumptionReport() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold text-gray-900">Consumo por Setor e Data</h2>
-                    <span className="text-sm text-gray-600">{setores.length} setores · Total: <strong>{brl(totalValor)}</strong></span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm text-gray-600">{setores.length} setores · Total: <strong>{brl(totalValor)}</strong></span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          // Folha para imprimir (Rafaela 14/10): mesmo agrupamento da tela.
+                          const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                          const corpo = setores.map((x) =>
+                            `<tr class="s"><td colspan="2">${esc(x.setor)}</td><td class="n">${Math.round(x.qtd * 100) / 100}</td><td class="n">${brl(x.valor)}</td></tr>` +
+                            x.linhas.map((l) => `<tr><td>${dataBr(l.date)}</td><td>${esc(l.itemName)}</td><td class="n">${l.quantity} ${esc(l.unit)}</td><td class="n">${brl(l.value)}</td></tr>`).join('')
+                          ).join('')
+                          const html = `<!doctype html><html><head><meta charset="utf-8"><title>Consumo por setor e data</title>
+<style>body{font-family:Arial,sans-serif;margin:24px;color:#111}h1{font-size:18px;margin:0 0 4px}p{margin:0 0 14px;color:#555;font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #ccc;padding:5px 6px}th{background:#f2f2f2;text-align:left}
+td.n,th.n{text-align:right}tr.s td{background:#f3e8ff;font-weight:bold}tfoot td{font-weight:bold;background:#fafafa}</style></head><body>
+<h1>Almoxarifado HECC · Consumo por setor e data</h1>
+<p>Período ${format(dateRange.start, 'dd/MM/yyyy')} a ${format(dateRange.end, 'dd/MM/yyyy')}${selectedDepartment !== 'all' ? ' · Setor ' + esc(selectedDepartment) : ''} · Gerado em ${new Date().toLocaleString('pt-BR')}</p>
+<table><thead><tr><th>Data</th><th>Item</th><th class="n">Quantidade</th><th class="n">Valor</th></tr></thead>
+<tbody>${corpo}</tbody><tfoot><tr><td colspan="3">TOTAL</td><td class="n">${brl(totalValor)}</td></tr></tfoot></table>
+<script>window.onload=function(){window.print()}</script></body></html>`
+                          const w = window.open('', '_blank')
+                          if (!w) return
+                          w.document.write(html)
+                          w.document.close()
+                        }}
+                      >
+                        <Printer className="w-4 h-4 mr-1" /> Imprimir
+                      </Button>
+                    </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full border-collapse">

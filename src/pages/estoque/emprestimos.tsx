@@ -414,6 +414,36 @@ export function EmprestimosAbertos() {
     await loadLoans()
   }
 
+  // Estorno do almox (Rafaela 14/10): desfaz a saida do estoque pelo estorno
+  // de saida direta que ja existe (devolve so o que baixou, uma vez, com
+  // motivo e movimento registrado) e marca o registro como cancelado.
+  // So gestor/admin (a RPC confere de novo). Farmacia nao muda.
+  const podeEstornar = ['administrador', 'admin', 'gestor', 'manager'].includes(user?.role ?? '')
+  const estornar = async (loan: Loan) => {
+    if (loan.modulo !== 'almoxarifado' || !podeEstornar) return
+    const motivo = window.prompt(`Estornar o nº ${loan.loan_number} (${loan.destino})? Os itens voltam para o estoque.
+
+Motivo do estorno:`)
+    if (motivo === null) return
+    if (motivo.trim().length < 3) { setError('Informe o motivo do estorno (mínimo 3 caracteres).'); return }
+    try {
+      if (loan.saida_id) {
+        try {
+          await warehouseDispatchService.cancel(loan.saida_id, `Estorno do nº ${loan.loan_number}: ${motivo.trim()}`)
+        } catch (e: any) {
+          // Saida ja estornada antes (pela tela de saidas): so falta o registro.
+          if (!String(e?.message ?? '').includes('ja foi estornada')) throw e
+        }
+      }
+      const obs = [loan.observacao, `Estornado: ${motivo.trim()}`].filter(Boolean).join(' · ')
+      const { error: err } = await supabase.from('loans').update({ status: 'cancelled', observacao: obs }).eq('id', loan.id)
+      if (err) throw err
+      await loadLoans()
+    } catch (e: any) {
+      setError(getErrorMessage(e))
+    }
+  }
+
   const handlePrint = (loan: Loan) => {
     setPrintLoan(loan)
     setTimeout(() => window.print(), 200)
@@ -561,6 +591,7 @@ export function EmprestimosAbertos() {
                 catBadge={catBadge}
                 onPrint={handlePrint}
                 onEncerrar={encerrar}
+                onEstornar={podeEstornar && loan.modulo === 'almoxarifado' && loan.status !== 'cancelled' ? estornar : undefined}
               />
             ))
           )}
@@ -759,6 +790,7 @@ interface LoanCardProps {
   catBadge: (c: LoanCategory) => React.ReactNode
   onPrint: (loan: Loan) => void
   onEncerrar: (loan: Loan) => void
+  onEstornar?: (loan: Loan) => void
 }
 
 function LoanCard({
@@ -771,6 +803,7 @@ function LoanCard({
   catBadge,
   onPrint,
   onEncerrar,
+  onEstornar,
 }: LoanCardProps) {
   const [expanded, setExpanded] = useState(false)
 
@@ -869,6 +902,18 @@ function LoanCard({
               }}
             >
               Encerrar (retorno recebido)
+            </button>
+          )}
+          {onEstornar && (
+            <button
+              onClick={() => onEstornar(loan)}
+              title="Desfazer: os itens voltam para o estoque e o registro fica como Cancelado"
+              style={{
+                fontSize: 12, color: '#ef4444', cursor: 'pointer', padding: '4px 10px', borderRadius: 6,
+                border: '1px solid #ef444433', background: '#ef444411',
+              }}
+            >
+              Estornar
             </button>
           )}
         </div>
