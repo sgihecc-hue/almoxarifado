@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import {
   Search, Download, AlertCircle,
   Loader2, ArrowUpDown, Package2, FileSpreadsheet, FileText,
-  Eye, Plus, Edit, Trash2, PackageMinus
+  Eye, Plus, Edit, Trash2, PackageMinus, ShoppingCart, Printer
 } from 'lucide-react'
+import * as XLSX from 'xlsx'
+import { saveAs } from 'file-saver'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { itemsService } from '@/lib/services/items'
@@ -61,6 +63,12 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
   // Consumo/dia CALCULADO das saídas dos últimos 30 dias (RPC
   // warehouse_consumo_diario). item_id -> unidades/dia.
   const [consumoDiaById, setConsumoDiaById] = useState<Map<string, number>>(new Map())
+  // Aba "A comprar" (Rafaela 13/10): itens no ponto de ressuprimento com a
+  // quantidade a comprar. Ultima COMPRA de cada item (soma das linhas da mesma
+  // entrada: uma NF com 2 lotes vira 2 linhas em stock_entries).
+  const [aba, setAba] = useState<'todos' | 'comprar'>('todos')
+  type UltimaCompra = { qtd: number; data: string }
+  const [ultimaCompraById, setUltimaCompraById] = useState<Map<string, UltimaCompra>>(new Map())
 
   const handleEditItem = (item: Item) => {
     setSelectedItem(item)
@@ -142,6 +150,30 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
         setConsumoDiaById(new Map(
           (consumo ?? []).map((r: any) => [r.item_id as string, Number(r.consumo_dia)])
         ))
+      }
+
+      // Ultima compra por item (so no almoxarifado central, onde a aba existe).
+      if (!locationId) {
+        type Ent = { item_id: string; quantity: number; created_at: string; entry_group_id: string | null; invoice_number: string | null }
+        const ents = await buscarTodas<Ent>((de, ate) =>
+          supabase
+            .from('stock_entries')
+            .select('item_id, quantity, created_at, entry_group_id, invoice_number')
+            .eq('item_type', 'warehouse')
+            .eq('acquisition_type', 'Compra')
+            .is('anulada_em', null)
+            .order('created_at', { ascending: false })
+            .order('id')
+            .range(de, ate) as unknown as PromiseLike<{ data: Ent[] | null; error: unknown }>
+        )
+        const chave = (e: Ent) => e.entry_group_id ?? `${e.invoice_number ?? ''}|${e.created_at.slice(0, 10)}`
+        const mapa = new Map<string, UltimaCompra & { k: string }>()
+        for (const e of ents) {
+          const atual = mapa.get(e.item_id)
+          if (!atual) mapa.set(e.item_id, { qtd: Number(e.quantity) || 0, data: e.created_at, k: chave(e) })
+          else if (atual.k === chave(e)) atual.qtd += Number(e.quantity) || 0
+        }
+        setUltimaCompraById(new Map([...mapa].map(([id, v]) => [id, { qtd: v.qtd, data: v.data }])))
       }
 
       // Se estamos num satelite (SAT_T), carrega saldo por location de item_stocks.
@@ -277,6 +309,82 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
   const filteredItems = sortedItems
     .filter(item => !hideZeroStock || getLocalQty(item) > 0)
     .filter(casaBusca)
+
+  // ---- A comprar ----
+  // Entra quem esta no ponto de ressuprimento (inclui Sem Estoque e Estoque
+  // Baixo, que ficam abaixo dele). Estoque maximo = 2x a ultima compra (regra
+  // do almox); sem compra lancada, estimado por 90 dias de consumo + minimo;
+  // sem compra e sem consumo, fica em branco para o almox decidir.
+  const DIAS_COBERTURA_ESTIMADA = 90
+  const linhasComprar = sortedItems
+    .filter(casaBusca)
+    .filter((item) => {
+      const sp = pontoRessuprimento(item)
+      return sp > 0 && getLocalQty(item) <= sp
+    })
+    .map((item) => {
+      const atual = getLocalQty(item)
+      const uc = ultimaCompraById.get(item.id) ?? null
+      const cd = consumoDia(item)
+      let maximo: number | null = null
+      let base: 'compra' | 'consumo' | 'sem base' = 'sem base'
+      if (uc && uc.qtd > 0) { maximo = uc.qtd * 2; base = 'compra' }
+      else if (cd != null && cd > 0) { maximo = Math.ceil(cd * DIAS_COBERTURA_ESTIMADA + (item.min_stock || 0)); base = 'consumo' }
+      const comprar = maximo == null ? null : Math.max(0, maximo - atual)
+      return { item, atual, uc, cd, maximo, base, comprar, sp: pontoRessuprimento(item) }
+    })
+    .sort((a, b) => a.item.name.localeCompare(b.item.name, 'pt-BR'))
+  const totalComprarNaoFiltrado = sortedItems.filter((item) => {
+    const sp = pontoRessuprimento(item)
+    return sp > 0 && getLocalQty(item) <= sp
+  }).length
+  const dataCurta = (iso: string) => new Date(iso).toLocaleDateString('pt-BR')
+  const textoMaximo = (l: typeof linhasComprar[number]) =>
+    l.maximo == null ? 'sem base' : `${l.maximo}${l.base === 'consumo' ? ' (estimado)' : ''}`
+
+  const exportarComprar = () => {
+    const linhas = linhasComprar.map((l) => ({
+      'Codigo': l.item.code ?? '',
+      'Nome': l.item.name,
+      'Unidade': l.item.unit ?? '',
+      'Estoque atual': l.atual,
+      'Consumo/semana': l.cd != null ? Math.round(l.cd * 7) : '',
+      'Ponto de ressuprimento': l.sp,
+      'Ultima compra (qtd)': l.uc ? l.uc.qtd : '',
+      'Ultima compra (data)': l.uc ? dataCurta(l.uc.data) : '',
+      'Estoque maximo': l.maximo ?? '',
+      'Base do maximo': l.base === 'compra' ? '2x ultima compra' : l.base === 'consumo' ? `estimado: ${DIAS_COBERTURA_ESTIMADA} dias de consumo + minimo` : 'sem compra e sem consumo',
+      'Qtd a comprar': l.comprar ?? '',
+    }))
+    const ws = XLSX.utils.json_to_sheet(linhas)
+    ws['!cols'] = [{ wch: 20 }, { wch: 55 }, { wch: 8 }, { wch: 13 }, { wch: 14 }, { wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 15 }, { wch: 38 }, { wch: 13 }]
+    if (ws['!ref']) ws['!autofilter'] = { ref: ws['!ref'] }
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'A comprar')
+    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    saveAs(new Blob([buf], { type: 'application/octet-stream' }), `almox_a_comprar_${hojeLocal()}.xlsx`)
+  }
+
+  const imprimirComprar = () => {
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    const corpo = linhasComprar.map((l) => `<tr>
+<td>${esc(l.item.code ?? '')}</td><td>${esc(l.item.name)}</td><td>${esc(l.item.unit ?? '')}</td>
+<td class="n">${l.atual}</td><td class="n">${l.uc ? `${l.uc.qtd} <small>(${dataCurta(l.uc.data)})</small>` : '-'}</td>
+<td class="n">${esc(textoMaximo(l))}</td><td class="n"><b>${l.comprar ?? '-'}</b></td></tr>`).join('')
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Almoxarifado - A comprar</title>
+<style>body{font-family:Arial,sans-serif;margin:24px;color:#111}h1{font-size:18px;margin:0 0 4px}p{margin:0 0 14px;color:#555;font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #ccc;padding:6px}th{background:#f2f2f2;text-align:left}
+td.n,th.n{text-align:right}small{color:#666}</style></head><body>
+<h1>Almoxarifado HECC · Itens a comprar</h1>
+<p>Gerado em ${new Date().toLocaleString('pt-BR')} · ${linhasComprar.length} itens no ponto de ressuprimento · Estoque máximo = 2x a última compra (estimado = ${DIAS_COBERTURA_ESTIMADA} dias de consumo + mínimo, quando não há compra lançada)</p>
+<table><thead><tr><th>Código</th><th>Nome</th><th>Un.</th><th class="n">Estoque atual</th><th class="n">Última compra</th><th class="n">Estoque máximo</th><th class="n">Qtd a comprar</th></tr></thead>
+<tbody>${corpo}</tbody></table>
+<script>window.onload=function(){window.print()}</script></body></html>`
+    const w = window.open('', '_blank')
+    if (!w) return
+    w.document.write(html)
+    w.document.close()
+  }
 
   const zeroStockCount = sortedItems.filter(item => getLocalQty(item) === 0).length
   // L5: a lista abre com "ocultar zerados" ligado; quem busca um item zerado
@@ -443,7 +551,75 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
         )}
       </div>
 
-      {/* Inventory Table — barra de rolagem sempre visivel embaixo. */}
+      {/* Abas (so no almoxarifado central) */}
+      {!locationId && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant={aba === 'todos' ? 'default' : 'outline'} size="sm" onClick={() => setAba('todos')}>
+            <Package2 className="w-4 h-4 mr-2" />
+            Todos os itens
+          </Button>
+          <Button variant={aba === 'comprar' ? 'default' : 'outline'} size="sm" onClick={() => setAba('comprar')}>
+            <ShoppingCart className="w-4 h-4 mr-2" />
+            A comprar ({totalComprarNaoFiltrado})
+          </Button>
+          {aba === 'comprar' && (
+            <>
+              <Button variant="outline" size="sm" onClick={imprimirComprar} disabled={linhasComprar.length === 0}>
+                <Printer className="w-4 h-4 mr-2" />
+                Imprimir
+              </Button>
+              <Button variant="outline" size="sm" onClick={exportarComprar} disabled={linhasComprar.length === 0}>
+                <Download className="w-4 h-4 mr-2" />
+                Excel
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
+      {!locationId && aba === 'comprar' ? (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <p className="px-4 pt-4 text-xs text-gray-500">
+            Itens no ponto de ressuprimento. Estoque máximo = 2x a última compra. Sem compra lançada, o máximo é
+            estimado por {DIAS_COBERTURA_ESTIMADA} dias de consumo + estoque mínimo. Sem compra e sem consumo, fica em branco.
+          </p>
+          <div className="overflow-x-scroll pb-1 min-w-0" style={{ scrollbarWidth: 'thin' }}>
+            <table className="w-full border-collapse min-w-[1000px]">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  {['Código', 'Nome', 'Unidade', 'Estoque Atual', 'Consumo/semana', 'Ponto de Ressuprimento', 'Última Compra', 'Estoque Máximo', 'Qtd a Comprar'].map((h, i) => (
+                    <th key={h} className={`px-4 py-3 text-sm font-medium text-gray-600 ${i >= 3 ? 'text-right' : 'text-left'}`}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {linhasComprar.length === 0 ? (
+                  <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-gray-500">Nenhum item no ponto de ressuprimento.</td></tr>
+                ) : linhasComprar.map((l) => (
+                  <tr key={l.item.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm text-gray-600">{l.item.code}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{l.item.name}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700">{l.item.unit}</td>
+                    <td className="px-4 py-3 text-sm text-right font-medium">{l.atual}</td>
+                    <td className="px-4 py-3 text-sm text-right text-gray-600">{l.cd != null ? Math.round(l.cd * 7) : '—'}</td>
+                    <td className="px-4 py-3 text-sm text-right text-gray-600">{l.sp}</td>
+                    <td className="px-4 py-3 text-sm text-right text-gray-600">
+                      {l.uc ? <>{l.uc.qtd} <span className="text-xs text-gray-400">({dataCurta(l.uc.data)})</span></> : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right text-gray-700">
+                      {l.maximo == null
+                        ? <span className="text-xs text-gray-400">sem base</span>
+                        : <>{l.maximo}{l.base === 'consumo' && <span className="ml-1 text-xs text-amber-600">estimado</span>}</>}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right font-bold text-blue-700">{l.comprar ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+      /* Inventory Table — barra de rolagem sempre visivel embaixo. */
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="overflow-x-scroll pb-1 min-w-0" style={{ scrollbarWidth: 'thin' }}>
           <table className="w-full border-collapse min-w-[1200px]">
@@ -631,6 +807,7 @@ export function WarehouseItems({ locationId, locationName }: WarehouseItemsProps
           </table>
         </div>
       </div>
+      )}
 
       {/* Import Dialog */}
       <ImportDialog
