@@ -283,8 +283,10 @@ export function EntradaLeitor() {
         </div>
       </div>
 
-      {/* Cabeçalho enxuto: tipo sempre visivel, NF/fornecedor recolhidos */}
-      <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 space-y-4">
+      {/* Cabeçalho enxuto: tipo sempre visivel, NF/fornecedor recolhidos.
+          data-entrada-leitor-campo: o onBlur do leitor puxava o foco de volta
+          e fechava o select do Tipo de Entrada (Rafaela 14/10). */}
+      <div data-entrada-leitor-campo="true" className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 space-y-4">
         <div className="flex flex-wrap items-end gap-4">
           <div className="w-56">
             <Label htmlFor="etype">Tipo de Entrada</Label>
