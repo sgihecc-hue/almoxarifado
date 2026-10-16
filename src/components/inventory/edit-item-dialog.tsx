@@ -33,6 +33,8 @@ const LOT_LOCATIONS_PHARMACY = PHARMACY_STOCKS.filter((s) => s.itemType === 'pha
 // seletor da farmácia (hoje a Satélite Térreo): o Almoxarifado não trabalha com
 // lote por local — o saldo dele é o global (warehouse_items.current_stock).
 const LOT_LOCATIONS_WAREHOUSE = PHARMACY_STOCKS.filter((s) => s.itemType === 'warehouse')
+// Local ALMOX (stock_locations.code = 'ALMOX'): lotes do almoxarifado central.
+const ALMOX_LOCATION_ID = 'ad02bf13-ab91-42e0-bfe7-b2e5bbb01e40'
 
 function lotLocationsFor(type: 'pharmacy' | 'warehouse') {
   return type === 'pharmacy' ? LOT_LOCATIONS_PHARMACY : LOT_LOCATIONS_WAREHOUSE
@@ -186,7 +188,11 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
   // Medicamento sempre teve o editor de lotes. Material so mostra quando a tela
   // que abriu o dialogo esta num satelite (passa allowLotEdit) — o Almoxarifado
   // central nao passa, entao nada muda para ele.
-  const podeEditarLotes = type === 'pharmacy' || allowLotEdit
+  // Almoxarifado central (Anderson 16/10): lote e validade dos lotes do ALMOX
+  // tambem editaveis. La o lote e copia informativa do saldo (o saldo e o
+  // current_stock do cadastro): editar lote nao muda saldo nenhum.
+  const lotesAlmoxCentral = type === 'warehouse' && !allowLotEdit
+  const podeEditarLotes = type === 'pharmacy' || allowLotEdit || lotesAlmoxCentral
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [scanningBarcode, setScanningBarcode] = useState(false)
@@ -282,8 +288,12 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
   const [lotsDirty, setLotsDirty] = useState(false)
 
   // Estoque ao qual o editor de lotes fica preso (quando a tela veio de um estoque).
-  const estoqueDosLotes = locationId && LOT_LOCATIONS.some((l) => l.id === locationId) ? locationId : null
-  const nomeEstoqueDosLotes = estoqueDosLotes ? LOT_LOCATIONS.find((l) => l.id === estoqueDosLotes)?.label : null
+  const estoqueDosLotes = lotesAlmoxCentral
+    ? ALMOX_LOCATION_ID
+    : (locationId && LOT_LOCATIONS.some((l) => l.id === locationId) ? locationId : null)
+  const nomeEstoqueDosLotes = lotesAlmoxCentral
+    ? 'Almoxarifado'
+    : (estoqueDosLotes ? LOT_LOCATIONS.find((l) => l.id === estoqueDosLotes)?.label : null)
 
   useEffect(() => {
     if (!open || !podeEditarLotes) { setLots([]); setLotsDirty(false); return }
@@ -478,6 +488,10 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
       setError(itemJaGravado ? null : 'Nenhuma alteração para salvar.')
       return itemJaGravado
     }
+    if (lotesAlmoxCentral && lotsDirty && !mexeuNoItem && motivo.trim().length < MOTIVO_MINIMO) {
+      setError(`Informe o motivo da alteração dos lotes (mínimo ${MOTIVO_MINIMO} caracteres). Ele fica registrado no histórico do item.`)
+      return false
+    }
     if (mexeuNoItem && motivo.trim().length < MOTIVO_MINIMO) {
       setError(`Informe o motivo da alteração (mínimo ${MOTIVO_MINIMO} caracteres). Ele fica registrado no histórico do item.`)
       return false
@@ -506,6 +520,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
       const { error: rpcErr } = await supabase.rpc('almox_editar_lotes', {
         p_item_id: item.id,
         p_lots: lotes,
+        p_motivo: lotesAlmoxCentral ? motivo.trim() : null,
       })
       if (rpcErr) {
         throw new Error(mexeuNoItem || itemJaGravado
@@ -807,7 +822,9 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
                   Edite lote, validade, estoque e quantidade.{' '}
                   {type === 'pharmacy'
                     ? 'O saldo do medicamento é recalculado pela soma dos lotes ao salvar.'
-                    : 'O saldo por estoque é recalculado pela soma dos lotes ao salvar (o saldo do Almoxarifado não é alterado).'}
+                    : lotesAlmoxCentral
+                      ? 'Aqui você corrige lote e validade e adiciona lote novo. O saldo do item não muda (ele é o Estoque Atual acima). Preencha o motivo da alteração.'
+                      : 'O saldo por estoque é recalculado pela soma dos lotes ao salvar (o saldo do Almoxarifado não é alterado).'}
                 </p>
                 {loadingLots ? (
                   <div className="flex items-center gap-2 text-sm text-gray-400 py-2"><Loader2 className="w-4 h-4 animate-spin" /> Carregando lotes...</div>
@@ -837,6 +854,9 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
                               <Input type="date" value={l.expiry_date} onChange={(e) => updateLot(l._key, { expiry_date: e.target.value })} className="h-8 text-xs w-36" />
                             </td>
                             <td className="py-1 px-2">
+                              {lotesAlmoxCentral ? (
+                                <span className="text-xs text-gray-600">Almoxarifado</span>
+                              ) : (
                               <select
                                 value={l.location_id}
                                 disabled={!!estoqueDosLotes}
@@ -848,6 +868,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
                                   <option key={loc.id} value={loc.id}>{loc.label}</option>
                                 ))}
                               </select>
+                              )}
                             </td>
                             <td className="py-1 px-2">
                               <Input
@@ -857,13 +878,17 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
                                 onFocus={(e) => e.target.select()}
                                 onChange={(e) => updateLot(l._key, { quantity: e.target.value })}
                                 onWheel={(e) => e.currentTarget.blur()}
+                                readOnly={lotesAlmoxCentral && !!l.id}
+                                title={lotesAlmoxCentral && l.id ? 'A quantidade do lote existente não muda aqui' : undefined}
                                 className={`h-8 text-xs text-right w-20 ${l.quantity !== '' && lerQuantidade(l.quantity) === null ? 'border-red-400' : ''}`}
                               />
                             </td>
                             <td className="py-1 text-center">
+                              {!(lotesAlmoxCentral && l.id) && (
                               <button type="button" onClick={() => removeLot(l._key)} className="text-red-500 hover:text-red-600 p-1" title="Remover lote">
                                 <Trash2 className="w-4 h-4" />
                               </button>
+                              )}
                             </td>
                           </tr>
                         ))}
