@@ -52,15 +52,21 @@ export function MainLayout({ children }: MainLayoutProps) {
   }
 
   return (
-    <div className="flex h-screen" style={{ background: fundo, transition: 'background 0.6s ease' }}>
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+    // print:* (Rafaela 19/10): menu, cabecalho e faixas saiam na folha do termo
+    // de emprestimo; na impressao so o conteudo, fluindo em varias paginas.
+    <div className="flex h-screen print:block print:h-auto" style={{ background: fundo, transition: 'background 0.6s ease' }}>
+      <div className="contents print:hidden">
+        <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      </div>
 
-      <div className="flex flex-col flex-1 overflow-hidden">
-        <Header toggleSidebar={toggleSidebar} isSidebarOpen={sidebarOpen} />
-        <ActiveStockBanner />
-        <InventarioAlmoxBanner />
+      <div className="flex flex-col flex-1 overflow-hidden print:overflow-visible print:block">
+        <div className="contents print:hidden">
+          <Header toggleSidebar={toggleSidebar} isSidebarOpen={sidebarOpen} />
+          <ActiveStockBanner />
+          <InventarioAlmoxBanner />
+        </div>
         {setorPronto && perfil.semSetor && (
-          <div className="bg-amber-50 border-b border-amber-200 text-amber-800 text-sm px-4 py-2">
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-800 text-sm px-4 py-2 print:hidden">
             {MSG_SEM_SETOR}
           </div>
         )}
@@ -69,7 +75,7 @@ export function MainLayout({ children }: MainLayoutProps) {
             conteudo e clipado aqui, forcando o scroll a acontecer dentro
             da tabela (via overflow-x-auto da propria tabela). Antes, a tela
             inteira scrollava lateralmente e a tabela nao mostrava barra. */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8 min-w-0">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8 min-w-0 print:overflow-visible print:p-0">
           {conteudo}
         </main>
       </div>
