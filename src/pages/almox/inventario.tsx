@@ -556,6 +556,8 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
   const [erro, setErro] = useState<unknown>(null)
   const [busca, setBusca] = useState('')
   const [filtro, setFiltro] = useState<FiltroContagem>('todos')
+  // Categoria (Rafaela 19/10): contar uma categoria por vez.
+  const [categoria, setCategoria] = useState<string>('todas')
   const [editando, setEditando] = useState<ItemInventario | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
   const [info, setInfo] = useState<Record<string, InfoLotes>>({})
@@ -599,10 +601,14 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
       const contado = porItem.has(i.id)
       if (filtro === 'nao' && contado) return false
       if (filtro === 'sim' && !contado) return false
+      if (categoria !== 'todas' && (i.category ?? '') !== categoria) return false
       if (!q) return true
       return normalizarBusca(i.name).includes(q) || normalizarBusca(i.code).includes(q)
     })
-  }, [itens, porItem, busca, filtro])
+  }, [itens, porItem, busca, filtro, categoria])
+  const categorias = useMemo(
+    () => [...new Set(itens.map((i) => i.category ?? '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+    [itens])
 
   const contados = itens.filter((i) => porItem.has(i.id)).length
   const MAX = 300
@@ -628,7 +634,7 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
       const inf = info[i.id]
       return `<tr>
         <td class="c">${n + 1}</td>
-        <td><b>${esc(i.name)}</b>${i.code ? `<div class="cod">Cód. ${esc(i.code)}</div>` : ''}${extra}</td>
+        <td><b>${esc(i.name)}</b>${i.code || i.category ? `<div class="cod">${i.code ? `Cód. ${esc(i.code)}` : ''}${i.code && i.category ? ' · ' : ''}${esc(i.category ?? '')}</div>` : ''}${extra}</td>
         ${cel(i.unit ?? '')}
         <td class="r">${inf?.referencia ? moeda(inf.referencia) : ''}</td><td class="r">${inf?.ultimaCompra ? moeda(inf.ultimaCompra) : ''}</td>
         ${comSaldo ? `<td class="r">${inteiro(i.current_stock)}</td>` : ''}
@@ -637,7 +643,8 @@ function Contagem({ inv, gestao }: { inv: Inventario; gestao: boolean }) {
         <td class="q">${contado ? inteiro(lotes.reduce((s, l) => s + (l.quantidade ?? 0), 0)) : ''}</td>
       </tr>`
     }).join('')
-    const filtroNome = filtro === 'nao' ? 'não contados' : filtro === 'sim' ? 'contados' : 'todos os itens'
+    const filtroNome = (filtro === 'nao' ? 'não contados' : filtro === 'sim' ? 'contados' : 'todos os itens')
+      + (categoria !== 'todas' ? ` · categoria ${categoria}` : '')
     // Valor = última compra; nunca comprado = valor referencial (pedido da Rafaela, 08/10).
     const vuDe = (id: string) => Number(info[id]?.ultimaCompra) || Number(info[id]?.referencia) || 0
     let totSis = 0, totFis = 0, semValor = 0
@@ -689,6 +696,14 @@ ${totais}
           {([['todos', 'Todos'], ['nao', 'Não contados'], ['sim', 'Contados']] as Array<[FiltroContagem, string]>).map(([v, rot]) => (
             <Button key={v} size="sm" variant={filtro === v ? 'default' : 'outline'} onClick={() => setFiltro(v)}>{rot}</Button>
           ))}
+        </div>
+        <div>
+          <Label htmlFor="inv-categoria">Categoria</Label>
+          <select id="inv-categoria" value={categoria} onChange={(e) => setCategoria(e.target.value)}
+            className="mt-1 block h-9 rounded-md border border-input bg-white px-3 text-sm">
+            <option value="todas">Todas</option>
+            {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
         </div>
         <Button size="sm" variant="outline" onClick={() => void carregar()} disabled={carregando} className="gap-1">
           {carregando ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Atualizar
@@ -749,7 +764,11 @@ ${totais}
                     <tr key={i.id} className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => setEditando(i)}>
                       <td className="px-4 py-2">
                         <p className="font-medium text-gray-900">{i.name}</p>
-                        {i.code && <p className="text-xs text-gray-500">Cód. {i.code}</p>}
+                        {(i.code || i.category) && (
+                          <p className="text-xs text-gray-500">
+                            {i.code ? `Cód. ${i.code}` : ''}{i.code && i.category ? ' · ' : ''}{i.category ?? ''}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-2 text-gray-600">{i.unit ?? '—'}</td>
                       <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">{info[i.id]?.referencia ? moeda(info[i.id].referencia) : '—'}</td>
