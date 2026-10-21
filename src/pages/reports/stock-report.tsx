@@ -22,6 +22,7 @@ interface StockItem {
   min_stock: number
   price: number | null
   last_purchase_price?: number | null
+  reference_price?: number | null
   // Farmacia: saldo por local (codigo do local -> quantidade), de item_stocks
   porLocal?: Record<string, number>
   is_active: boolean
@@ -131,7 +132,7 @@ export function StockReport({ type }: StockReportProps) {
         supabase
           .from(table)
           .select('id, code, name, category, unit, current_stock, min_stock, price, last_purchase_price, is_active, batch_number, expiry_date'
-            + (type === 'pharmacy' ? ', medication_class, medication_classes' : ''))
+            + (type === 'pharmacy' ? ', medication_class, medication_classes, reference_price' : ''))
           .eq('is_active', true)
           .order('name')
           .order('id')
@@ -212,7 +213,11 @@ export function StockReport({ type }: StockReportProps) {
 
   // Preco para valor em estoque: price esta vazio em todo o cadastro da
   // farmacia e em metade do almox -> ultimo preco de compra.
-  const precoDe = (i: StockItem) => Number(i.last_purchase_price ?? i.price ?? 0) || 0
+  // Farmacia (Andressa 21/10): ultima compra -> valor referencial -> preco,
+  // pulando zero (ultima compra gravada 0 nao e "sem preco" para o ??).
+  const precoDe = (i: StockItem) => type === 'pharmacy'
+    ? (Number(i.last_purchase_price) || Number(i.reference_price) || Number(i.price) || 0)
+    : (Number(i.last_purchase_price ?? i.price ?? 0) || 0)
 
   // Item sem lote cadastrado: usa o lote/validade gravados no proprio item
   // (modelo antigo do almox), quando houver.
