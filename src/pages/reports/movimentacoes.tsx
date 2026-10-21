@@ -57,6 +57,8 @@ const ENTRY_SUBTYPES = [
   'Devolução interna',
   'Estorno de dispensação',
   'Ajuste',
+  'Bonificação',
+  'Comodato',
 ]
 const EXIT_SUBTYPES = [
   'Consumo interno',

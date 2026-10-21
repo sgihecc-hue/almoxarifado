@@ -51,7 +51,7 @@ interface LineItem {
 
 // Mesmas opcoes da tela de entrada do almoxarifado. 'Inventario' fica de
 // fora aqui tambem — no almox ele nao aparece.
-const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Consignado', 'Troca de validade'] as const
+const ENTRY_TYPES = ['Compra', 'Empréstimo', 'Doação', 'Consignado', 'Troca de validade', 'Bonificação', 'Comodato'] as const
 type EntryType = typeof ENTRY_TYPES[number]
 
 // Esta tela e do almoxarifado central. Nunca chumbar id de estoque: a RPC
