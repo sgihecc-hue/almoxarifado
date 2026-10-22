@@ -24,6 +24,7 @@ const COLCHAO_CASCA_OVO_CODE = '65.30.19.00114671-8'
 const ITENS_POR_PACIENTE_IDS = new Set([
   '98f7aa98-ff6a-40ca-97d8-05cde0a1ac6e', // CANULA PARA TRAQUEOSTOMIA Nº 7 BLUE LINE
   '90593007-d403-444b-9514-f63901185511', // CANULA PARA TRAQUEOSTOMIA Nº 8 BLUE LINE
+  'd522f6a0-ec1a-402e-9c73-8b98a555310e', // CANULA PARA TRAQUEOSTOMIA BLUE LINE Nº 7,5 (Rafaela 22/10)
 ])
 const exigePaciente = (item: { id?: string; code?: string | null }) =>
   item.code === COLCHAO_CASCA_OVO_CODE || (!!item.id && ITENS_POR_PACIENTE_IDS.has(item.id))
