@@ -168,7 +168,11 @@ export function WarehouseConsumptionReport() {
     end: hojeLocal(dateRange.end)
   })
   const [settingsSaved, setSettingsSaved] = useState(false)
-  const [selectedDepartment, setSelectedDepartment] = useState<string>('all')
+  // Varios setores ao mesmo tempo (Anderson 26/10): vazio = todos.
+  const [selectedDepartments, setSelectedDepartments] = useState<string[]>([])
+  const selectedDepartment = selectedDepartments.length === 0 ? 'all' : selectedDepartments.join(', ')
+  const alternarSetor = (nome: string) => setSelectedDepartments((prev) =>
+    prev.includes(nome) ? prev.filter((n) => n !== nome) : [...prev, nome])
   const [showDepartmentFilter, setShowDepartmentFilter] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'byDepartment' | 'byCategory' | 'setorData'>('overview')
   const [selectedItem, setSelectedItem] = useState<string>('all')
@@ -240,7 +244,7 @@ export function WarehouseConsumptionReport() {
   // inativado continua aparecendo no consumo do periodo em que foi usado).
   useEffect(() => {
     loadConsumptionFromDatabase()
-  }, [dateRange, selectedDepartment, selectedItem, settings.categories, recarregar])
+  }, [dateRange, selectedDepartments, selectedItem, settings.categories, recarregar])
 
   async function loadItems() {
     try {
@@ -360,7 +364,7 @@ export function WarehouseConsumptionReport() {
           }
         })
         .filter((l) => !excluidas.has(l.category))
-        .filter((l) => selectedDepartment === 'all' || l.department === selectedDepartment)
+        .filter((l) => selectedDepartments.length === 0 || selectedDepartments.includes(l.department))
         .filter((l) => selectedItem === 'all' || l.itemId === selectedItem)
 
       setLinhasTela(linhas)
@@ -647,7 +651,7 @@ export function WarehouseConsumptionReport() {
         {showDepartmentFilter && (
           <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-gray-700">Filtrar por Setor:</h3>
+              <h3 className="text-sm font-medium text-gray-700">Filtrar por Setor: <span className="font-normal text-gray-500">(pode marcar mais de um)</span></h3>
               <Button 
                 variant="ghost" 
                 size="sm" 
@@ -659,9 +663,9 @@ export function WarehouseConsumptionReport() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
               <Button 
-                variant={selectedDepartment === 'all' ? 'default' : 'outline'}
+                variant={selectedDepartments.length === 0 ? 'default' : 'outline'}
                 size="sm"
-                onClick={() => setSelectedDepartment('all')}
+                onClick={() => setSelectedDepartments([])}
                 className="justify-start"
               >
                 Todos os Setores
@@ -669,9 +673,9 @@ export function WarehouseConsumptionReport() {
               {departments.map(dept => (
                 <Button 
                   key={dept.id}
-                  variant={selectedDepartment === dept.name ? 'default' : 'outline'}
+                  variant={selectedDepartments.includes(dept.name) ? 'default' : 'outline'}
                   size="sm"
-                  onClick={() => setSelectedDepartment(dept.name)}
+                  onClick={() => alternarSetor(dept.name)}
                   className="justify-start"
                 >
                   {dept.name}
@@ -826,7 +830,7 @@ export function WarehouseConsumptionReport() {
               <div className="flex items-center gap-2 sm:ml-4 sm:pl-4 sm:border-l border-purple-200">
                 <Building2 className="w-5 h-5" />
                 <span className="font-medium">
-                  Setor: {selectedDepartment}
+                  {selectedDepartments.length > 1 ? 'Setores' : 'Setor'}: {selectedDepartment}
                 </span>
               </div>
             )}
