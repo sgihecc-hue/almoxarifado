@@ -164,6 +164,28 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     return bucket[activeStock.code] ?? 0
   }
 
+  // Estoque minimo da farmacia (Cris 27/10): consumo medio/dia (dispensado ao
+  // paciente nos ultimos 90 dias, liquido de devolucoes) x 45 dias de prazo.
+  // Minimo digitado no cadastro (> 0) tem prioridade. So medicamento: o
+  // Satelite Terreo (material) segue como era.
+  const DIAS_PRAZO_FARMACIA = 45
+  const [consumoDiaById, setConsumoDiaById] = useState<Map<string, number>>(new Map())
+  const totalHospital = (item: Item): number =>
+    Object.values(stocksByItem.get(item.id) ?? {}).reduce((a, b) => a + (Number(b) || 0), 0)
+  const minimoDe = (item: Item): number => {
+    const cadastro = Number(item.min_stock ?? 0)
+    if (cadastro > 0 || catalogItemType !== 'pharmacy') return cadastro
+    const cd = consumoDiaById.get(item.id) ?? 0
+    return cd > 0 ? Math.ceil(cd * DIAS_PRAZO_FARMACIA) : 0
+  }
+  // Farmacia: estoque baixo olha o TOTAL do hospital (a compra e para todos);
+  // material do satelite segue olhando o saldo do local.
+  const baixoNoMinimo = (item: Item): boolean => {
+    const m = minimoDe(item)
+    if (m <= 0) return false
+    return (catalogItemType === 'pharmacy' ? totalHospital(item) : getLocalQty(item)) <= m
+  }
+
   useEffect(() => {
     // Recarrega ao trocar de estoque: os lotes são filtrados por local.
     loadItems()
@@ -188,6 +210,11 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
       setItems(pharmacyItems)
       setStocksByItem(allStocks)
       setLotsByItem(allLots)
+      if (catalogItemType === 'pharmacy') {
+        const { data: cons, error: consErr } = await supabase.rpc('farmacia_consumo_diario', { p_dias: 90 })
+        if (consErr) console.error('farmacia_consumo_diario:', consErr)
+        setConsumoDiaById(new Map(((cons ?? []) as any[]).map((r) => [r.item_id as string, Number(r.consumo_dia)])))
+      }
     } catch (error) {
       console.error('Error loading items:', error)
       setError('Erro ao carregar itens. Por favor, tente novamente.')
@@ -333,7 +360,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   const statusLocal = (item: Item): 'out' | 'low' | 'critical' | 'normal' => {
     const qty = getLocalQty(item)
     if (qty === 0) return 'out'
-    if (qty <= (item.min_stock ?? 0)) return 'low'
+    if (baixoNoMinimo(item)) return 'low'
     if (qty <= pontoDePedido(item)) return 'critical' // Ponto de Pedido
     return 'normal'
   }
@@ -371,6 +398,10 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
 
     if (sortColumn === 'consumo') {
       return (consumoMensal(a) - consumoMensal(b)) * dir
+    }
+
+    if (sortColumn === 'min_stock') {
+      return (minimoDe(a) - minimoDe(b)) * dir
     }
 
     const aValue = a[sortColumn as keyof Item]
@@ -884,7 +915,17 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                       })()}
                     </td>
                     <td className="px-2 py-2 text-xs text-right text-gray-600 whitespace-nowrap">
-                      {item.min_stock} {item.unit}
+                      {(() => {
+                        const m = minimoDe(item)
+                        const calc = catalogItemType === 'pharmacy' && !(Number(item.min_stock ?? 0) > 0)
+                        const cd = consumoDiaById.get(item.id)
+                        if (calc && !m) return <span className="text-gray-400" title="Sem dispensação nos últimos 90 dias">sem consumo</span>
+                        return (
+                          <span title={calc ? `${DIAS_PRAZO_FARMACIA} dias de consumo (${cd?.toLocaleString('pt-BR')}/dia nos últimos 90 dias)` : 'Informado no cadastro'}>
+                            {m} {item.unit}
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="px-2 py-2 text-xs text-right text-gray-600 whitespace-nowrap">
                       {supplyPoint} {item.unit}
@@ -894,7 +935,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
                         {(() => {
                           const localQty = getLocalQty(item)
                           if (localQty === 0)                     return <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-red-50 text-red-600 border border-red-200 whitespace-nowrap">Sem Estoque</span>
-                          if (localQty <= item.min_stock)         return <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-yellow-50 text-yellow-600 border border-yellow-200 whitespace-nowrap">Estoque Baixo</span>
+                          if (baixoNoMinimo(item))                return <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-yellow-50 text-yellow-600 border border-yellow-200 whitespace-nowrap">Estoque Baixo</span>
                           if (localQty <= supplyPoint)            return <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-blue-50 text-blue-600 border border-blue-200 whitespace-nowrap">Ponto Pedido</span>
                           return                                          <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-green-50 text-green-600 border border-green-200">Normal</span>
                         })()}
