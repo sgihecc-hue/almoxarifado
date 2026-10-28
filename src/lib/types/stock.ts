@@ -243,6 +243,7 @@ export interface ExpiringAlertRow {
   unit_cost: number | null
   estimated_value: number | null
   color_band: ExpiryColorBand
+  location_id: string | null
 }
 
 export interface ExpiryAlertResolution {

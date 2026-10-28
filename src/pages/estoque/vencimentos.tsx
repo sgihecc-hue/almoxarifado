@@ -61,6 +61,11 @@ export function VencimentosABaixar() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [loadingWriteoff, setLoadingWriteoff] = useState(true)
   const [cafLocationId, setCafLocationId] = useState<string>('')
+  // Farmacia: a view traz o lote de cada estoque (CAF e satelites). Filtro por
+  // estoque, abrindo na CAF (Andressa 28/10: mesmo lote em varios estoques
+  // parecia duplicado e item so da satelite parecia "sem estoque" na CAF).
+  const [locais, setLocais] = useState<{ id: string; code: string; name: string }[]>([])
+  const [filtroLocal, setFiltroLocal] = useState<string>('CAF')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [aviso, setAviso] = useState('')
@@ -97,6 +102,7 @@ export function VencimentosABaixar() {
 
       const caf = locs.find((l) => l.code === 'CAF')
       if (caf) setCafLocationId(caf.id)
+      setLocais(locs.map((l) => ({ id: l.id, code: String(l.code), name: l.name })))
 
       // Construir set de resolvidos: "id__color_band"
       const resolvedSet = new Set<string>()
@@ -118,13 +124,25 @@ export function VencimentosABaixar() {
   useEffect(() => { loadAll() }, [itemType])
 
   // Filtrar resolvidos client-side
+  const localPorId = new Map(locais.map((l) => [l.id, l]))
+  const codigoLocal = (id: string | null | undefined) => (id ? localPorId.get(id)?.code : undefined)
+  const nomeLocal = (code: string | null | undefined) => locais.find((l) => l.code === code)?.name ?? code ?? '—'
+  const filtrarLocal = !isWarehouse && filtroLocal !== 'ALL'
+  // Estoques da farmacia que tem lote na lista (CAF primeiro)
+  const locaisNaLista = Array.from(new Set(alertRows.map((r) => codigoLocal(r.location_id)).filter(Boolean) as string[]))
+    .concat(filtroLocal !== 'ALL' ? [filtroLocal] : [])
+    .filter((c, i, a) => a.indexOf(c) === i)
+    .sort((a, b) => (a === 'CAF' ? -1 : b === 'CAF' ? 1 : a.localeCompare(b)))
+
   const visibleAlerts = alertRows.filter(
     (r) => !resolutions.has(`${r.expiry_tracking_id}__${r.color_band}`)
+      && (!filtrarLocal || codigoLocal(r.location_id) === filtroLocal)
   )
 
   // Seção B (vencidos a baixar): a view expiring_to_writeoff também mistura
   // os módulos — filtra pelo módulo atual.
-  const visibleWriteoff = rows.filter((r) => r.item_type === itemType)
+  const visibleWriteoff = rows.filter((r) => r.item_type === itemType
+    && (!filtrarLocal || r.location_code === filtroLocal))
 
   const handleResolve = async (row: ExpiringAlertRow) => {
     if (!user?.id) return
@@ -266,6 +284,25 @@ export function VencimentosABaixar() {
         </div>
       )}
 
+      {!isWarehouse && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium" style={{ color: txtSec }}>Estoque:</span>
+          {[...locaisNaLista, 'ALL'].map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => { setFiltroLocal(c); setSelected(new Set()) }}
+              className="text-xs font-semibold px-3 py-1.5 rounded-full border"
+              style={filtroLocal === c
+                ? { background: '#10b981', borderColor: '#10b981', color: '#fff' }
+                : { borderColor: mode === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)', color: txt }}
+            >
+              {c === 'ALL' ? 'Todos os estoques' : nomeLocal(c)}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* ===== SECAO A: PROXIMOS DE VENCER ===== */}
       <section className="space-y-3">
         <h2 className="text-lg font-bold flex items-center gap-2" style={{ color: txt }}>
@@ -317,6 +354,12 @@ export function VencimentosABaixar() {
                       </strong>
                       {' · '}
                       Saldo: <strong>{r.current_quantity}</strong>
+                      {!isWarehouse && (
+                        <>
+                          {' · '}
+                          Estoque: <strong>{nomeLocal(codigoLocal(r.location_id))}</strong>
+                        </>
+                      )}
                       {r.estimated_value != null && (
                         <>
                           {' · '}
@@ -437,7 +480,7 @@ export function VencimentosABaixar() {
                           {dataBR(r.expiry_date)}
                         </strong>
                         {' · '}Saldo: <strong>{r.current_quantity}</strong>
-                        {' · '}Estoque: <strong>{r.location_code ?? '—'}</strong>
+                        {' · '}Estoque: <strong>{nomeLocal(r.location_code)}</strong>
                       </p>
                     </div>
                     <div className="text-right">
