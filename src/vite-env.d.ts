@@ -8,3 +8,5 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+// Id do build (vite.config.ts), comparado com /version.json
+declare const __BUILD_ID__: string

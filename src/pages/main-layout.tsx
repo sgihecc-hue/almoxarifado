@@ -7,6 +7,7 @@ import { useModule } from '@/contexts/module'
 import { ExpiryAlertPopup } from '@/components/expiry-alert-popup'
 import { ActiveStockBanner } from '@/components/active-stock-banner'
 import { InventarioAlmoxBanner } from '@/components/inventario-almox-banner'
+import { VersaoNova } from '@/components/versao-nova'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { GuardaAcesso } from '@/components/guarda-acesso'
 import { ErroDeTela, MSG_SEM_SETOR } from '@/components/telas-de-aviso'
@@ -64,6 +65,7 @@ export function MainLayout({ children }: MainLayoutProps) {
           <Header toggleSidebar={toggleSidebar} isSidebarOpen={sidebarOpen} />
           <ActiveStockBanner />
           <InventarioAlmoxBanner />
+          <VersaoNova />
         </div>
         {setorPronto && perfil.semSetor && (
           <div className="bg-amber-50 border-b border-amber-200 text-amber-800 text-sm px-4 py-2 print:hidden">
