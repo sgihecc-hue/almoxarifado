@@ -20,6 +20,7 @@ import type { Request } from '@/lib/services/requests'
 import { formatRequestNumber } from '@/lib/utils/request'
 import { getDepartmentName } from '@/lib/constants/departments'
 import { supabase } from '@/lib/supabase'
+import { stockService } from '@/lib/services/stock'
 import { kitsService } from '@/lib/services/kits'
 import { AtenderPedidoEnfermagem } from '@/components/atender-pedido-enfermagem'
 import { exigirLinhas, lerQuantidade } from '@/lib/utils/seguro'
@@ -118,7 +119,10 @@ function ItemRow({ item, canEdit, isAdmin, canSeeStock, requestType, sourceLocat
     const carregar = async () => {
       const warehouseItemId = (item as any).warehouse_item_id ?? item.item?.id
       if (!warehouseItemId) return
-      const locId = activeStock?.id
+      // Sem estoque ativo (usuario do almoxarifado central): so lote do ALMOX.
+      // Antes vinha lote de todos os locais, inclusive do Satelite Terreo
+      // (Rafaela 29/10). Os lotes do ALMOX sao os do ultimo inventario.
+      const locId = activeStock?.id ?? (await stockService.getLocationByCode('ALMOX'))?.id
       let q = supabase
         .from('expiry_tracking')
         .select('id, batch_number, expiry_date, current_quantity')
