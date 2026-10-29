@@ -228,16 +228,45 @@ export function EmprestimosAbertos() {
 
   // ---------- Modal helpers ----------
 
+  // Rascunho (Rafaela 29/10: perdeu um empréstimo com muitos itens quando o
+  // modal fechou). Tudo que é digitado fica guardado no navegador e volta ao
+  // abrir de novo, mesmo depois de recarregar a página.
+  const chaveRascunho = `sgi:rascunho-emprestimo:${modulo}`
+  const temConteudo = destino.trim() !== '' || formItems.some((fi) => fi.item_nome.trim() !== '')
+
+  useEffect(() => {
+    if (!showModal) return
+    try {
+      if (temConteudo) {
+        localStorage.setItem(chaveRascunho, JSON.stringify({ destino, categoria, observacao, contrapartida, formItems, itemSearches }))
+      }
+    } catch { /* sem armazenamento: segue sem rascunho */ }
+  }, [showModal, temConteudo, chaveRascunho, destino, categoria, observacao, contrapartida, formItems, itemSearches])
+
+  const limparRascunho = () => {
+    try { localStorage.removeItem(chaveRascunho) } catch { /* ignora */ }
+  }
+
   const openModal = () => {
-    setDestino('')
-    setCategoria('emprestimo')
-    setObservacao('')
-    setContrapartida('')
-    setFormItems([emptyItem()])
-    setItemSearches({})
+    let r: any = null
+    try { r = JSON.parse(localStorage.getItem(chaveRascunho) ?? 'null') } catch { r = null }
+    const ok = r && Array.isArray(r.formItems) && r.formItems.length > 0
+    setDestino(ok ? r.destino ?? '' : '')
+    setCategoria(ok ? r.categoria ?? 'emprestimo' : 'emprestimo')
+    setObservacao(ok ? r.observacao ?? '' : '')
+    setContrapartida(ok ? r.contrapartida ?? '' : '')
+    setFormItems(ok ? r.formItems : [emptyItem()])
+    setItemSearches(ok ? r.itemSearches ?? {} : {})
     setShowDropdowns({})
     setFormError('')
     setShowModal(true)
+  }
+
+  // Fechar só pelo X/Cancelar, e com confirmação se já tem algo preenchido.
+  const fecharModal = () => {
+    if (temConteudo && !window.confirm('Descartar o que foi preenchido neste empréstimo?')) return
+    limparRascunho()
+    setShowModal(false)
   }
 
   const updateFormItem = (idx: number, patch: Partial<LoanItem>) => {
@@ -385,6 +414,7 @@ export function EmprestimosAbertos() {
         }
       }
 
+      limparRascunho()
       setShowModal(false)
       await loadLoans()
       // Já abre o formulário pronto para imprimir/assinar.
@@ -606,9 +636,6 @@ Motivo do estorno:`)
             background: 'rgba(0,0,0,0.55)',
             backdropFilter: 'blur(4px)',
           }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setShowModal(false)
-          }}
         >
           <div
             className="w-full max-w-3xl rounded-2xl p-6 space-y-5"
@@ -626,7 +653,7 @@ Motivo do estorno:`)
                 Novo Emprestimo / Doacao
               </h2>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={fecharModal}
                 style={{ color: txtMut, cursor: 'pointer' }}
               >
                 <X size={20} />
@@ -755,7 +782,7 @@ Motivo do estorno:`)
             <div className="flex justify-end gap-3 pt-2">
               <Button
                 variant="outline"
-                onClick={() => setShowModal(false)}
+                onClick={fecharModal}
                 disabled={saving}
               >
                 Cancelar
@@ -1225,6 +1252,11 @@ function PrintDocument({ loan, unidades, autor }: { loan: Loan; unidades: Record
   const dataExtenso = new Date(loan.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })
   const troca = (loan.contrapartida ?? '').split('\n').map((t) => t.trim()).filter(Boolean)
   const setor = loan.modulo === 'almoxarifado' ? 'Almoxarifado' : 'Farmácia'
+  // Valores no termo (Rafaela 29/10). Troca por validade não tem valor.
+  const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  const itens = loan.loan_items ?? []
+  const comValor = loan.categoria !== 'troca_validade' && itens.some((li) => li.valor_total != null)
+  const totalGeral = itens.reduce((s, li) => s + (Number(li.valor_total) || 0), 0)
   return (
     <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#000', padding: '20mm', maxWidth: '180mm', margin: '0 auto', lineHeight: 1.6 }}>
       <div style={{ textAlign: 'center', marginBottom: 6 }}>
@@ -1239,7 +1271,7 @@ function PrintDocument({ loan, unidades, autor }: { loan: Loan; unidades: Record
         Estamos enviando em caráter de <strong>{ACAO[loan.categoria]}</strong> para <strong>{loan.destino}</strong> os seguintes {plural}:
       </p>
       <ul style={{ margin: '0 0 12px', paddingLeft: 22 }}>
-        {(loan.loan_items ?? []).map((li, i) => (
+        {itens.map((li, i) => (
           <li key={li.id ?? i}>
             {li.item_nome}: <strong>{li.quantity} {unidades[li.item_id ?? ''] ?? 'un'}</strong>
             {(li.batch_number || li.expiry_date) && (
@@ -1247,9 +1279,17 @@ function PrintDocument({ loan, unidades, autor }: { loan: Loan; unidades: Record
                 {' '}(lote {li.batch_number || '—'}{li.expiry_date ? `, validade ${fmtDate(li.expiry_date)}` : ''})
               </span>
             )}
+            {comValor && li.valor_total != null && (
+              <span>
+                {' '}· {li.valor_unit != null ? `${brl(Number(li.valor_unit))} cada = ` : ''}<strong>{brl(Number(li.valor_total))}</strong>
+              </span>
+            )}
           </li>
         ))}
       </ul>
+      {comValor && (
+        <p style={{ margin: '0 0 12px', textAlign: 'right' }}>Valor total: <strong>{brl(totalGeral)}</strong></p>
+      )}
       {troca.length > 0 && (
         <>
           <p style={{ margin: '0 0 4px' }}>Por:</p>
