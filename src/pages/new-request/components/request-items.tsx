@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dialog'
 import type { Item } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
-import { buscarTodas, lerQuantidade } from '@/lib/utils/seguro'
+import { buscarTodas, lerQuantidade, normalizarBusca } from '@/lib/utils/seguro'
 import { useAuth } from '@/contexts/auth'
 import { z } from 'zod'
 
@@ -136,15 +136,20 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   // estoque, para o pedido refletir necessidade real e não disponibilidade.
   // Almoxarifado: esconde itens com estoque zerado (não faz sentido pedir o
   // que não há). Regra pedida pelo usuário — vale só para 'warehouse'.
+  // Busca sem acento e sem espaco (Andressa 03/11: "acido folico" ou
+  // "enoxaparina 40mg" nao achavam nada). Cada palavra digitada tem que
+  // aparecer no nome ou no codigo, em qualquer ordem.
+  const compacto = (s: string | null | undefined) => normalizarBusca(s).replace(/[^a-z0-9]/g, '')
+  const palavras = normalizarBusca(searchTerm).split(/\s+/).map(compacto).filter(Boolean)
   const filteredItems = items
     .filter(item =>
       type !== 'warehouse' || ((item as any).current_stock || 0) > 0
     )
-    .filter(item =>
-      searchTerm === '' ||
-      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (item.code && item.code.toLowerCase().includes(searchTerm.toLowerCase()))
-    )
+    .filter(item => {
+      if (palavras.length === 0) return true
+      const alvo = compacto(item.name) + ' ' + compacto(item.code)
+      return palavras.every(p => alvo.includes(p))
+    })
     .sort((a, b) => a.name.localeCompare(b.name))
 
   const handleAddItem = async (item: Item) => {
