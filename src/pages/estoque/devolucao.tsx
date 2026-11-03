@@ -232,10 +232,13 @@ export function DevolucaoInterna() {
     setLotes(tudo)
     return tudo
   }
-  // Na lista do formulário só os lotes com saldo; devolução de lote que já
-  // zerou vai em "Outro lote" (o banco reaproveita o lote se for o mesmo).
+  // Na lista do formulário: lotes com saldo e também os que zeraram e não
+  // venceram (muitas vezes o que volta é justamente o último lote, já zerado).
+  const hojeISO = new Date().toISOString().slice(0, 10)
   const lotesComSaldo = (itemId: string) =>
-    (lotes[chaveLotes(itemId, targetLocationId)] ?? []).filter((l) => l.current_quantity > 0)
+    (lotes[chaveLotes(itemId, targetLocationId)] ?? []).filter(
+      (l) => l.current_quantity > 0 || !l.expiry_date || l.expiry_date >= hojeISO,
+    )
 
   useEffect(() => {
     if (targetLocationId && lines.length > 0) void carregarLotes(lines.map((l) => l.item_id), targetLocationId)
@@ -375,7 +378,7 @@ export function DevolucaoInterna() {
         ? { ...l, expiry_tracking_id: lote.id, outro: false, batch_number: lote.batch_number, expiry_date: lote.expiry_date ?? '' }
         : { ...l, expiry_tracking_id: null, outro: false }
     }))
-  // Lote digitado: quando o item não tem lote com saldo, ou escolheu "Outro lote".
+  // Lote digitado: quando o item não tem lote na lista, ou escolheu "Outro lote".
   const digitaLote = (l: ReturnLine) => l.outro || lotesComSaldo(l.item_id).length === 0
 
   const canSubmit =
@@ -730,7 +733,7 @@ export function DevolucaoInterna() {
                                 >
                                   <option value="">Escolha o lote…</option>
                                   {lotesComSaldo(l.item_id).map((lo) => (
-                                    <option key={lo.id} value={lo.id}>{lo.batch_number} • val. {dataBR(lo.expiry_date)}</option>
+                                    <option key={lo.id} value={lo.id}>{lo.batch_number} • val. {dataBR(lo.expiry_date)}{lo.current_quantity > 0 ? '' : ' • zerado'}</option>
                                   ))}
                                   <option value="__outro">Outro lote (digitar)</option>
                                 </select>
