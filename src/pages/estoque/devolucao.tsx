@@ -55,6 +55,46 @@ interface ReturnLine {
   quantidade_texto: string
   batch_number: string
   expiry_date: string
+  // Lote escolhido da lista do estoque de destino (03/11). Sem ele, vale o
+  // lote digitado (outro = true), que o banco casa ignorando pontuação.
+  expiry_tracking_id: string | null
+  outro: boolean
+}
+
+interface LoteEstoque {
+  id: string
+  batch_number: string
+  expiry_date: string | null
+  current_quantity: number
+}
+
+// Lote sem pontuação/espaço, pra achar "1025.035" = "1025035".
+const loteNorm = (s: string | null | undefined) => (s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+
+function distancia(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)])
+  for (let j = 1; j <= b.length; j++) d[0][j] = j
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+  return d[a.length][b.length]
+}
+
+// Lote do estoque mais parecido com o digitado (erro de 1 ou 2 caracteres:
+// RWW25003A x RWA25003A, 26I27 x 26I127). Nenhum parecido = null.
+function lotePareado(digitado: string | null, lotes: LoteEstoque[]): LoteEstoque | null {
+  const n = loteNorm(digitado)
+  if (!n) return null
+  let melhor: LoteEstoque | null = null
+  let dMelhor = 3
+  for (const l of lotes) {
+    const d = distancia(n, loteNorm(l.batch_number))
+    if (d < dMelhor || (d === dMelhor && melhor && l.current_quantity > melhor.current_quantity)) {
+      melhor = l
+      dMelhor = d
+    }
+  }
+  return melhor
 }
 
 interface PendingReturn {
@@ -166,6 +206,46 @@ export function DevolucaoInterna() {
   const [recebidos, setRecebidos] = useState<Record<string, number>>({})
   const [divergenceNotes, setDivergenceNotes] = useState<Record<string, string>>({})
   const [confirmingSubmit, setConfirmingSubmit] = useState<string | null>(null)
+  // Lote escolhido na confirmação, por item da devolução ('' = o informado).
+  const [loteConfirmacao, setLoteConfirmacao] = useState<Record<string, string>>({})
+
+  // Lotes do item no estoque, por "item|estoque".
+  const [lotes, setLotes] = useState<Record<string, LoteEstoque[]>>({})
+  const chaveLotes = (itemId: string, locId: string) => `${itemId}|${locId}`
+  const carregarLotes = async (itemIds: string[], locId: string): Promise<Record<string, LoteEstoque[]>> => {
+    const faltam = itemIds.filter((id) => !lotes[chaveLotes(id, locId)])
+    if (!locId || faltam.length === 0) return lotes
+    const { data } = await supabase
+      .from('expiry_tracking')
+      .select('id, item_id, batch_number, expiry_date, current_quantity')
+      .in('item_id', faltam)
+      .eq('location_id', locId)
+      .order('current_quantity', { ascending: false })
+    const novo: Record<string, LoteEstoque[]> = {}
+    faltam.forEach((id) => { novo[chaveLotes(id, locId)] = [] })
+    ;(data || []).forEach((r: any) => {
+      novo[chaveLotes(r.item_id, locId)].push({
+        id: r.id, batch_number: r.batch_number, expiry_date: r.expiry_date, current_quantity: r.current_quantity || 0,
+      })
+    })
+    const tudo = { ...lotes, ...novo }
+    setLotes(tudo)
+    return tudo
+  }
+  // Na lista do formulário só os lotes com saldo; devolução de lote que já
+  // zerou vai em "Outro lote" (o banco reaproveita o lote se for o mesmo).
+  const lotesComSaldo = (itemId: string) =>
+    (lotes[chaveLotes(itemId, targetLocationId)] ?? []).filter((l) => l.current_quantity > 0)
+
+  useEffect(() => {
+    if (targetLocationId && lines.length > 0) void carregarLotes(lines.map((l) => l.item_id), targetLocationId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetLocationId, lines.length])
+
+  // Trocou o estoque de destino: os lotes escolhidos eram de outro estoque.
+  useEffect(() => {
+    setLines((prev) => prev.map((l) => ({ ...l, expiry_tracking_id: null, outro: false })))
+  }, [targetLocationId])
 
   useEffect(() => {
     ;(async () => {
@@ -275,7 +355,7 @@ export function DevolucaoInterna() {
   const addItem = (i: ItemRow) => {
     setLines((prev) => [
       ...prev,
-      { uid: crypto.randomUUID(), item_id: i.id, item_name: i.name, unit: i.unit, quantity: 1, quantidade_texto: '1', batch_number: '', expiry_date: '' },
+      { uid: crypto.randomUUID(), item_id: i.id, item_name: i.name, unit: i.unit, quantity: 1, quantidade_texto: '1', batch_number: '', expiry_date: '', expiry_tracking_id: null, outro: false },
     ])
     setSearch('')
   }
@@ -286,13 +366,24 @@ export function DevolucaoInterna() {
   const setValidade = (uid: string, v: string) =>
     setLines((prev) => prev.map((l) => (l.uid === uid ? { ...l, expiry_date: v } : l)))
   const removeLine = (uid: string) => setLines((prev) => prev.filter((l) => l.uid !== uid))
+  const escolherLote = (uid: string, valor: string) =>
+    setLines((prev) => prev.map((l) => {
+      if (l.uid !== uid) return l
+      if (valor === '__outro') return { ...l, expiry_tracking_id: null, outro: true }
+      const lote = lotesComSaldo(l.item_id).find((x) => x.id === valor)
+      return lote
+        ? { ...l, expiry_tracking_id: lote.id, outro: false, batch_number: lote.batch_number, expiry_date: lote.expiry_date ?? '' }
+        : { ...l, expiry_tracking_id: null, outro: false }
+    }))
+  // Lote digitado: quando o item não tem lote com saldo, ou escolheu "Outro lote".
+  const digitaLote = (l: ReturnLine) => l.outro || lotesComSaldo(l.item_id).length === 0
 
   const canSubmit =
     (isEnfermagem || isPharmacy) &&
     !!targetLocationId &&
     !!sourceDepartmentId &&
     lines.length > 0 &&
-    lines.every((l) => l.quantity > 0 && !!l.batch_number.trim() && !!l.expiry_date) &&
+    lines.every((l) => l.quantity > 0 && (digitaLote(l) ? !!l.batch_number.trim() && !!l.expiry_date : !!l.expiry_tracking_id)) &&
     motivo !== ''
 
   const handleSubmit = async () => {
@@ -315,6 +406,7 @@ export function DevolucaoInterna() {
           quantity: l.quantity,
           batch_number: l.batch_number.trim(),
           expiry_date: l.expiry_date,
+          expiry_tracking_id: digitaLote(l) ? null : l.expiry_tracking_id,
         })),
       })
       if (e1) throw e1
@@ -344,6 +436,18 @@ export function DevolucaoInterna() {
       p.items.forEach((it) => { if (novo[it.id] === undefined) novo[it.id] = it.quantity })
       return novo
     })
+    // Já marca o lote do estoque mais parecido com o que a enfermagem digitou.
+    void carregarLotes(p.items.map((it) => it.item_id), p.target_location_id).then((tudo) => {
+      setLoteConfirmacao((prev) => {
+        const novo = { ...prev }
+        p.items.forEach((it) => {
+          if (novo[it.id] !== undefined) return
+          const par = lotePareado(it.batch_number, tudo[chaveLotes(it.item_id, p.target_location_id)] ?? [])
+          novo[it.id] = par?.id ?? ''
+        })
+        return novo
+      })
+    })
   }
 
   const handleConfirm = async (p: PendingReturn) => {
@@ -353,7 +457,11 @@ export function DevolucaoInterna() {
     try {
       const { error: e1 } = await supabase.rpc('farmacia_devolucao_confirmar', {
         p_return_id: p.id,
-        p_itens: p.items.map((it) => ({ id: it.id, confirmed_quantity: recebidos[it.id] ?? it.quantity })),
+        p_itens: p.items.map((it) => ({
+          id: it.id,
+          confirmed_quantity: recebidos[it.id] ?? it.quantity,
+          expiry_tracking_id: loteConfirmacao[it.id] || null,
+        })),
         p_divergencia: divergenceNotes[p.id]?.trim() || null,
       })
       if (e1) throw e1
@@ -602,16 +710,41 @@ export function DevolucaoInterna() {
                               />
                             </td>
                             <td className="p-2">
-                              <input
-                                type="text" value={l.batch_number} onChange={(e) => setBatch(l.uid, e.target.value)} placeholder="Ex: L010203"
-                                style={{ ...inputStyle, padding: '4px 8px', fontSize: 13, borderColor: l.batch_number.trim() ? undefined : '#ef4444' }}
-                              />
+                              {digitaLote(l) ? (
+                                <div className="space-y-1">
+                                  <input
+                                    type="text" value={l.batch_number} onChange={(e) => setBatch(l.uid, e.target.value)} placeholder="Ex: L010203"
+                                    style={{ ...inputStyle, padding: '4px 8px', fontSize: 13, borderColor: l.batch_number.trim() ? undefined : '#ef4444' }}
+                                  />
+                                  {lotesComSaldo(l.item_id).length > 0 && (
+                                    <button type="button" className="text-xs text-blue-600 underline" onClick={() => escolherLote(l.uid, '')}>
+                                      escolher da lista
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                <select
+                                  value={l.expiry_tracking_id ?? ''}
+                                  onChange={(e) => escolherLote(l.uid, e.target.value)}
+                                  style={{ ...inputStyle, padding: '4px 8px', fontSize: 13, borderColor: l.expiry_tracking_id ? undefined : '#ef4444' }}
+                                >
+                                  <option value="">Escolha o lote…</option>
+                                  {lotesComSaldo(l.item_id).map((lo) => (
+                                    <option key={lo.id} value={lo.id}>{lo.batch_number} • val. {dataBR(lo.expiry_date)}</option>
+                                  ))}
+                                  <option value="__outro">Outro lote (digitar)</option>
+                                </select>
+                              )}
                             </td>
                             <td className="p-2">
-                              <input
-                                type="date" value={l.expiry_date} onChange={(e) => setValidade(l.uid, e.target.value)}
-                                style={{ ...inputStyle, padding: '4px 8px', fontSize: 13, borderColor: l.expiry_date ? undefined : '#ef4444' }}
-                              />
+                              {digitaLote(l) ? (
+                                <input
+                                  type="date" value={l.expiry_date} onChange={(e) => setValidade(l.uid, e.target.value)}
+                                  style={{ ...inputStyle, padding: '4px 8px', fontSize: 13, borderColor: l.expiry_date ? undefined : '#ef4444' }}
+                                />
+                              ) : (
+                                <span className="text-sm" style={{ color: txtSec }}>{l.expiry_tracking_id ? dataBR(l.expiry_date || null) : '—'}</span>
+                              )}
                             </td>
                             <td className="p-2">
                               <Button variant="ghost" size="sm" onClick={() => removeLine(l.uid)} className="text-red-600 hover:bg-red-50 h-8 px-2">
@@ -702,6 +835,27 @@ export function DevolucaoInterna() {
                                 </td>
                                 <td className="p-2 text-sm" style={{ color: txtSec }}>
                                   {it.batch_number || '—'} • {dataBR(it.expiry_date)}
+                                  {aberto && (() => {
+                                    const doEstoque = lotes[chaveLotes(it.item_id, p.target_location_id)] ?? []
+                                    const exato = doEstoque.some((lo) => loteNorm(lo.batch_number) === loteNorm(it.batch_number))
+                                    return (
+                                      <div className="mt-1">
+                                        <span className="text-xs" style={{ color: txtMut }}>Entra no lote:</span>
+                                        <select
+                                          value={loteConfirmacao[it.id] ?? ''}
+                                          onChange={(e) => setLoteConfirmacao((prev) => ({ ...prev, [it.id]: e.target.value }))}
+                                          style={{ ...inputStyle, padding: '4px 8px', fontSize: 12, marginTop: 2 }}
+                                        >
+                                          <option value="">{exato ? `${it.batch_number} (o informado)` : `Lote novo: ${it.batch_number ?? '—'}`}</option>
+                                          {doEstoque.map((lo) => (
+                                            <option key={lo.id} value={lo.id}>
+                                              {lo.batch_number} • val. {dataBR(lo.expiry_date)} • saldo {lo.current_quantity}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )
+                                  })()}
                                 </td>
                                 <td className="p-2 text-sm text-right font-semibold" style={{ color: txt }}>{it.quantity}</td>
                                 {aberto && (
