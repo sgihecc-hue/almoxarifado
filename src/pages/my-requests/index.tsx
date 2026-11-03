@@ -239,6 +239,15 @@ export function MyRequests() {
                   </span>
                   <span className="text-xs text-gray-500">{item.item.category}</span>
                 </div>
+                {/* Observacao de quem atende (03/11: "pedido duplicado",
+                    "estoque na CAF"). Antes so aparecia em Ver detalhes. */}
+                {item.observation?.trim() && (
+                  <div className="mt-2 space-y-1">
+                    {item.observation.split('\n').map((o) => o.trim()).filter(Boolean).map((o, i) => (
+                      <p key={i} className="text-xs bg-yellow-50 border border-yellow-200 text-yellow-800 px-2 py-1 rounded break-words">{o}</p>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="text-right flex-shrink-0">
                 <div className="flex flex-col items-end gap-0.5">
