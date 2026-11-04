@@ -21,6 +21,11 @@ export const PHARMACY_STOCKS: PharmacyStock[] = [
   { id: '6f3fdf99-829a-46bb-b354-19a44fa36324', code: 'SAT_T', label: 'Satélite T',  name: 'Farmácia Satélite Térreo',                      itemType: 'warehouse' },
 ]
 
+// Setor "Farmácia Satélite Térreo" (departments). A Satélite Térreo atende os
+// postos com MATERIAL (pedido type='warehouse' saindo do estoque SAT_T).
+export const SAT_T_DEPARTMENT_ID = 'c224297a-7f88-4a0c-b3f7-26c2d44a1052'
+export const SAT_T_STOCK_ID = '6f3fdf99-829a-46bb-b354-19a44fa36324'
+
 export function pharmacyStockById(id?: string | null): PharmacyStock | null {
   if (!id) return null
   return PHARMACY_STOCKS.find((s) => s.id === id) ?? null

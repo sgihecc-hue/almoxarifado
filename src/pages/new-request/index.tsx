@@ -24,6 +24,7 @@ import { useTheme } from '@/contexts/theme'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { RequestType } from './types'
+import { SAT_T_DEPARTMENT_ID, SAT_T_STOCK_ID } from '@/lib/constants/stock-locations'
 
 const steps = [
   { id: 'type', title: 'Tipo de Solicitação', description: 'Escolha o tipo de solicitação que deseja fazer' },
@@ -53,6 +54,18 @@ export function NewRequest() {
   const [requestType, setRequestType] = useState<RequestType | null>(null)
   const [details, setDetails] = useState<RequestDetailsType | null>(null)
   const [items, setItems] = useState<RequestItem[]>([])
+  // Satelite Terreo atende com MATERIAL (catalogo do almox, estoque SAT_T): pedido
+  // de "Farmacia" com destino Sat Terreo vira pedido de material saindo de la, que
+  // e o que cai na fila dela. Medicamento fica no CAF, Sat 1 e Sat 2.
+  const destinoSatTerreo = requestType === 'pharmacy' && details?.destination_department === SAT_T_DEPARTMENT_ID
+  const tipoEfetivo: RequestType | null = destinoSatTerreo ? 'warehouse' : requestType
+  // Trocou entre medicamento e material: os itens escolhidos sao de outro catalogo.
+  const tipoItensRef = useRef<RequestType | null>(null)
+  useEffect(() => {
+    if (!tipoEfetivo) return
+    if (tipoItensRef.current && tipoItensRef.current !== tipoEfetivo) setItems([])
+    tipoItensRef.current = tipoEfetivo
+  }, [tipoEfetivo])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [_createdRequest, _setCreatedRequest] = useState<any>(null)
@@ -288,7 +301,8 @@ export function NewRequest() {
       }
 
       const request = await requestService.create({
-        type: requestType,
+        type: tipoEfetivo!,
+        source_location_id: destinoSatTerreo ? SAT_T_STOCK_ID : undefined,
         priority: details.priority,
         department: details.requesting_department || details.department,
         destination_department: details.destination_department,
@@ -639,8 +653,8 @@ export function NewRequest() {
         {currentStep === 2 && requestType && details && (
           <div className="space-y-6">
             <RequestItems
-              type={requestType}
-              destinationDepartmentId={details?.destination_department}
+              key={tipoEfetivo ?? ''}
+              type={tipoEfetivo!}
               onSubmit={(selectedItems) => {
                 setItems(selectedItems)
                 setCurrentStep(prev => prev + 1)
@@ -662,7 +676,7 @@ export function NewRequest() {
                   DEPOIS de confirmar — ou seja, depois de a tela ja ter
                   avancado —, entao nunca era usado e so confundia.
                   A FARMACIA continua com os dois botoes, sem alteracao. */}
-              {requestType !== 'warehouse' && (
+              {tipoEfetivo !== 'warehouse' && (
                 <Button
                   onClick={handleNext}
                   disabled={items.length === 0}
@@ -679,7 +693,7 @@ export function NewRequest() {
         {currentStep === 3 && requestType && details && items.length > 0 && (
           <div className="space-y-6">
             <RequestReview
-              type={requestType}
+              type={tipoEfetivo!}
               details={details}
               items={items}
               onSubmit={handleSubmit}

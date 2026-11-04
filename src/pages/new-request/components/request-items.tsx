@@ -15,8 +15,6 @@ import { supabase } from '@/lib/supabase'
 import { buscarTodas, lerQuantidade, normalizarBusca } from '@/lib/utils/seguro'
 import { useAuth } from '@/contexts/auth'
 import { useModule } from '@/contexts/module'
-import { departmentsService } from '@/lib/services/departments'
-import { departmentBelongsToStock, PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
 import { z } from 'zod'
 
 // Item that requires special patient info
@@ -61,27 +59,16 @@ interface RequestItemsProps {
   type: 'pharmacy' | 'warehouse'
   onSubmit: (items: RequestItem[]) => void
   defaultValues?: RequestItem[]
-  /** Setor solicitado — se for o Sat Terreo, so lista material medico. */
-  destinationDepartmentId?: string
 }
 
 
 
-export function RequestItems({ type, onSubmit, defaultValues = [], destinationDepartmentId }: RequestItemsProps) {
+export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItemsProps) {
   const { user } = useAuth()
   // Satelite Terreo so trabalha com material medico (Rafaela 04/11): pedido de
   // farmacia feito de la nao lista medicamento, que e so do Sat 1 e Sat 2.
   const { activeModule, activeStock } = useModule()
-  const [destinoSatTerreo, setDestinoSatTerreo] = useState(false)
-  useEffect(() => {
-    if (type !== 'pharmacy' || !destinationDepartmentId) { setDestinoSatTerreo(false); return }
-    const satT = PHARMACY_STOCKS.find((st) => st.code === 'SAT_T')!
-    departmentsService.getAll()
-      .then((deps) => setDestinoSatTerreo(deps.some((d) => d.id === destinationDepartmentId && departmentBelongsToStock(d.name, satT))))
-      .catch(() => setDestinoSatTerreo(false))
-  }, [type, destinationDepartmentId])
-  const soMaterialMedico = type === 'pharmacy' &&
-    ((activeModule === 'farmacia' && activeStock?.code === 'SAT_T') || destinoSatTerreo)
+  const soMaterialMedico = type === 'pharmacy' && activeModule === 'farmacia' && activeStock?.code === 'SAT_T'
   // NINGUEM ve estoque na tela de fazer solicitacao — mesmo staff (gestor/
   // admin/atendente) que muitas vezes cria pedidos pra propria unidade.
   // Ver saldo antes de pedir vicia a solicitacao (pessoa ajusta o pedido

@@ -9,7 +9,7 @@ import { format } from 'date-fns'
 import { departmentsService } from '@/lib/services/departments'
 import { useAuth } from '@/contexts/auth'
 import { useModule } from '@/contexts/module'
-import { departmentBelongsToStock, PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
+import { departmentBelongsToStock, PHARMACY_STOCKS, SAT_T_DEPARTMENT_ID, SAT_T_STOCK_ID } from '@/lib/constants/stock-locations'
 import type { Department } from '@/lib/types/departments'
 
 const detailsSchema = z.object({
@@ -47,6 +47,12 @@ export function RequestDetails({ onSubmit, defaultValues, requestType }: Request
   const [warehouseDepartment, setWarehouseDepartment] = useState<Department | null>(null)
   const [cafDepartment, setCafDepartment] = useState<Department | null>(null)
   const [lockedDestination, setLockedDestination] = useState<Department | null>(null)
+  // Pedido de farmacia feito por quem nao e da farmacia (posto, RH...): o setor
+  // solicitante e quem RECEBE, entao as farmacias saem dessa lista — escolher
+  // "Satelite Terreo" ali caia na regra antiga (destino Almoxarifado e lista de
+  // medicamento). A farmacia que atende se escolhe no Setor Solicitado.
+  const escondeFarmaciasSolicitante = requestType === 'pharmacy' && !isPharmacyFlow &&
+    !PHARMACY_STOCKS.some((st) => departmentBelongsToStock(userDepartment?.name, st))
 
   const { register, handleSubmit, setValue, watch, formState: { errors }, reset } = useForm<RequestDetails>({
     resolver: zodResolver(detailsSchema),
@@ -102,6 +108,23 @@ export function RequestDetails({ onSubmit, defaultValues, requestType }: Request
       setLockedDestination(null)
     }
   }, [watchedRequestingDept, allDepartments, warehouseDepartment, cafDepartment, requestType, setValue])
+
+  // Pedido de material: setor cujo estoque padrao e o SAT_T (os postos) e atendido
+  // pela Satelite Terreo, entao o setor solicitado e ela, nao o Almoxarifado
+  // (o pedido ja saia do SAT_T, so o destino mostrava Almoxarifado — Rafaela 04/11).
+  const destinoMaterial = (deptId?: string): Department | null => {
+    const d = allDepartments.find((x) => x.id === deptId) as (Department & { default_warehouse_location_id?: string | null }) | undefined
+    if (d?.default_warehouse_location_id === SAT_T_STOCK_ID) {
+      return allDepartments.find((x) => x.id === SAT_T_DEPARTMENT_ID) ?? warehouseDepartment
+    }
+    return warehouseDepartment
+  }
+  useEffect(() => {
+    if (requestType !== 'warehouse' || allDepartments.length === 0) return
+    const destino = destinoMaterial(watchedRequestingDept)
+    if (destino) setValue('destination_department', destino.id, { shouldValidate: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestType, watchedRequestingDept, allDepartments, warehouseDepartment, setValue])
 
   useEffect(() => {
     loadUserDepartment()
@@ -264,7 +287,7 @@ export function RequestDetails({ onSubmit, defaultValues, requestType }: Request
               className="w-full h-10 px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
             >
               <option value="">Selecione o setor solicitante...</option>
-              {allDepartments.map(dept => (
+              {allDepartments.filter(dept => !escondeFarmaciasSolicitante || !PHARMACY_STOCKS.some((st) => departmentBelongsToStock(dept.name, st))).map(dept => (
                 <option key={dept.id} value={dept.id}>
                   {dept.name}
                 </option>
@@ -371,7 +394,7 @@ export function RequestDetails({ onSubmit, defaultValues, requestType }: Request
                   <input type="hidden" {...register('destination_department')} />
                   <div className="p-4 bg-primary-50 rounded-lg border border-primary-200">
                     <div className="flex items-center justify-between">
-                      <p className="font-medium text-primary-900">{warehouseDepartment.name}</p>
+                      <p className="font-medium text-primary-900">{(destinoMaterial(watchedRequestingDept) ?? warehouseDepartment).name}</p>
                       <span className="px-2 py-1 text-xs font-medium rounded-full bg-primary-100 text-primary-600">Fixo</span>
                     </div>
                   </div>
