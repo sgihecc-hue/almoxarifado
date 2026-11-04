@@ -14,6 +14,7 @@ import type { Item } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
 import { buscarTodas, lerQuantidade, normalizarBusca } from '@/lib/utils/seguro'
 import { useAuth } from '@/contexts/auth'
+import { useModule } from '@/contexts/module'
 import { z } from 'zod'
 
 // Item that requires special patient info
@@ -64,6 +65,10 @@ interface RequestItemsProps {
 
 export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItemsProps) {
   const { user } = useAuth()
+  // Satelite Terreo so trabalha com material medico (Rafaela 04/11): pedido de
+  // farmacia feito de la nao lista medicamento, que e so do Sat 1 e Sat 2.
+  const { activeModule, activeStock } = useModule()
+  const soMaterialMedico = type === 'pharmacy' && activeModule === 'farmacia' && activeStock?.code === 'SAT_T'
   // NINGUEM ve estoque na tela de fazer solicitacao — mesmo staff (gestor/
   // admin/atendente) que muitas vezes cria pedidos pra propria unidade.
   // Ver saldo antes de pedir vicia a solicitacao (pessoa ajusta o pedido
@@ -145,6 +150,7 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     .filter(item =>
       type !== 'warehouse' || ((item as any).current_stock || 0) > 0
     )
+    .filter(item => !soMaterialMedico || (item.category as string) === 'MAT/MED')
     .filter(item => {
       if (palavras.length === 0) return true
       const alvo = compacto(item.name) + ' ' + compacto(item.code)
