@@ -9,7 +9,7 @@ import { format } from 'date-fns'
 import { departmentsService } from '@/lib/services/departments'
 import { useAuth } from '@/contexts/auth'
 import { useModule } from '@/contexts/module'
-import { departmentBelongsToStock } from '@/lib/constants/stock-locations'
+import { departmentBelongsToStock, PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
 import type { Department } from '@/lib/types/departments'
 
 const detailsSchema = z.object({
@@ -413,6 +413,27 @@ export function RequestDetails({ onSubmit, defaultValues, requestType }: Request
                 >
                   <option value="">Selecione o setor solicitado...</option>
                   {allowedOptions.map(dept => (
+                    <option key={dept.id} value={dept.id}>{dept.name}</option>
+                  ))}
+                </select>
+              )
+            }
+
+            // Pedido de farmacia feito por outro setor (posto, RH...): escolhe
+            // QUAL farmacia atende — CAF, Sat 1, Sat 2 ou Sat Terreo (Rafaela 04/11).
+            // O estoque de saida vem do setor solicitado (trigger no banco).
+            if (requestType === 'pharmacy') {
+              const farmacias = PHARMACY_STOCKS
+                .map((st) => allDepartments.find((d) => departmentBelongsToStock(d.name, st)))
+                .filter((d): d is Department => !!d && d.id !== watchedRequestingDept)
+              return (
+                <select
+                  id="destination_department"
+                  {...register('destination_department')}
+                  className="w-full h-10 px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                >
+                  <option value="">Selecione a farmácia...</option>
+                  {farmacias.map(dept => (
                     <option key={dept.id} value={dept.id}>{dept.name}</option>
                   ))}
                 </select>

@@ -640,6 +640,7 @@ export function NewRequest() {
           <div className="space-y-6">
             <RequestItems
               type={requestType}
+              destinationDepartmentId={details?.destination_department}
               onSubmit={(selectedItems) => {
                 setItems(selectedItems)
                 setCurrentStep(prev => prev + 1)
