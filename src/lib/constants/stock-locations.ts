@@ -25,6 +25,11 @@ export const PHARMACY_STOCKS: PharmacyStock[] = [
 // postos com MATERIAL (pedido type='warehouse' saindo do estoque SAT_T).
 export const SAT_T_DEPARTMENT_ID = 'c224297a-7f88-4a0c-b3f7-26c2d44a1052'
 export const SAT_T_STOCK_ID = '6f3fdf99-829a-46bb-b354-19a44fa36324'
+// Estoque do Almoxarifado (stock_locations ALMOX). Movimento sem local e do almox.
+export const ALMOX_STOCK_ID = 'ad02bf13-ab91-42e0-bfe7-b2e5bbb01e40'
+// Filtro PostgREST "so o que e do estoque do almox": a Satelite Terreo usa o
+// mesmo catalogo (item_type='warehouse'), mas as saidas dela sao da farmacia.
+export const FILTRO_SO_ALMOX = `local_id.is.null,local_id.eq.${ALMOX_STOCK_ID}`
 
 export function pharmacyStockById(id?: string | null): PharmacyStock | null {
   if (!id) return null

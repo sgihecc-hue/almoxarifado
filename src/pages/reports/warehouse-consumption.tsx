@@ -42,6 +42,7 @@ import { DepartmentPieChart } from '@/components/charts/department-pie-chart'
 import type { Item } from '@/lib/services/items'
 import type { Department } from '@/lib/types/departments'
 import { buscarTodas, dataBR, hojeLocal, normalizarBusca, parseDataLocal } from '@/lib/utils/seguro'
+import { FILTRO_SO_ALMOX } from '@/lib/constants/stock-locations'
 
 const SEM_CATEGORIA = 'Sem categoria'
 
@@ -304,6 +305,8 @@ export function WarehouseConsumptionReport() {
           .select('source_id, item_id, quantity, department_id, consumption_date, origem, lote, validade, destino_texto')
           .gte('consumption_date', inicio)
           .lte('consumption_date', fim)
+          // So o estoque do almox: saida da Satelite Terreo e da farmacia (Rafaela 04/11).
+          .or(FILTRO_SO_ALMOX)
           .order('consumption_date', { ascending: true })
           .order('source_id', { ascending: true })
           .range(de, ate) as unknown as PromiseLike<{ data: LinhaView[] | null; error: unknown }>

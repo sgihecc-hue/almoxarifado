@@ -17,6 +17,7 @@ import { getErrorMessage } from '@/lib/utils/error-messages'
 import { buscarTodas, dataBR, fimDiaISO, hojeLocal, inicioDiaISO, normalizarBusca } from '@/lib/utils/seguro'
 import { format, subDays } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
+import { FILTRO_SO_ALMOX } from '@/lib/constants/stock-locations'
 
 type Direction = 'entrada' | 'saida'
 
@@ -141,6 +142,9 @@ export function MovementsReport() {
         if (direction !== 'todas') q = q.eq('direction', direction)
         if (subtype !== 'todos') q = q.eq('subtype', subtype)
         if (itemType !== 'todos') q = q.eq('item_type', itemType)
+        // "Almoxarifado" = estoque do almox. A Satelite Terreo usa o mesmo catalogo,
+        // mas as saidas dela sao da farmacia e nao entram aqui (Rafaela 04/11).
+        if (itemType === 'warehouse') q = q.or(FILTRO_SO_ALMOX)
         return q
           .order('movement_date', { ascending: false })
           .order('movement_id', { ascending: true })
