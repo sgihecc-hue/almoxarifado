@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button'
 //
 // Mesmo padrão do inventory-notice-almox.tsx (aviso do inventário de agosto).
 // =====================================================================
-const CAMPANHA_ATE = '2026-10-10' // 30 dias a partir de 10/09/2026
+const CAMPANHA_ATE = '2026-12-04' // voltou em 04/11/2026 a pedido da Rafaela, mais 30 dias
 const IMAGEM = '/assets/campanha-uso-racional.jpg'
 
 export function CampanhaUsoRacionalAlmox({ active }: { active: boolean }) {

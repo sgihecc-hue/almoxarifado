@@ -6,6 +6,8 @@ export interface Employee {
   department_name?: string
   cargo?: string | null
   is_active: boolean
+  // 'funcionario' = so na tabela employees (sem login); id nao e de users.
+  origem?: 'usuario' | 'funcionario'
   created_at: string
   updated_at: string
 }

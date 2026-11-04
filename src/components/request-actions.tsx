@@ -240,10 +240,13 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
           updatedRequest = await requestService.cancel(request.id, reason, statusCancelaveis)
           break
         case 'deliver':
+          // Funcionario sem login (tabela employees) nao tem id em users:
+          // vai so a matricula.
           updatedRequest = await requestService.markAsDelivered(
             request.id,
             reason,
-            employee?.id
+            employee?.origem === 'funcionario' ? undefined : employee?.id,
+            employee?.matricula || undefined
           )
           break
         case 'confirm_receipt':

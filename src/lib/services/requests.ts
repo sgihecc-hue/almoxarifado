@@ -756,7 +756,7 @@ class RequestService {
    * — fornecido vazio ou saldo insuficiente fazem o banco recusar, com a
    * mensagem do item. Farmacia nao passa por aqui (entrega = Aprovar).
    */
-  async markAsDelivered(id: string, deliveryNotes?: string, receivedByEmployeeId?: string): Promise<Request> {
+  async markAsDelivered(id: string, deliveryNotes?: string, receivedByEmployeeId?: string, receivedByMatricula?: string): Promise<Request> {
     try {
       if (!validateUUID(id)) {
         throw new Error('ID da solicitação inválido')
@@ -784,6 +784,7 @@ class RequestService {
       }
       if (deliveryNotes) updateData.delivery_notes = sanitizeInput(deliveryNotes)
       if (receivedByEmployeeId) updateData.received_by_employee_id = receivedByEmployeeId
+      if (receivedByMatricula) updateData.received_by_employee_matricula = receivedByMatricula
 
       await this.atualizarStatus(id, ['approved', 'processing'], updateData)
 

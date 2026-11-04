@@ -23,6 +23,7 @@ class EmployeesService {
           cargo: e.cargo,
           is_active: true,
           department_name: e.department_name || '',
+          origem: e.origem === 'funcionario' ? 'funcionario' : 'usuario',
           created_at: '',
           updated_at: '',
         } as Employee
@@ -35,41 +36,21 @@ class EmployeesService {
     }
   }
 
+  // Busca por nome nos usuarios do sistema E na tabela employees (quem nao
+  // tem login, planilha da Rafaela 04/11). Sem acento, via RPC.
   async searchByName(name: string): Promise<Employee[]> {
     try {
       if (!name || name.trim().length < 2) return []
-
-      const q = name.trim()
-
-      // Search in users table
-      const { data, error } = await supabase
-        .from('users')
-        .select('id, full_name, matricula, role, department_id')
-        .ilike('full_name', `%${q}%`)
-        .limit(10)
-
+      const { data, error } = await supabase.rpc('buscar_colaboradores', { q: name.trim() })
       if (error || !data) return []
-
-      // Get department names
-      const deptIds = [...new Set(data.filter(u => u.department_id).map(u => u.department_id))]
-      let deptMap: Record<string, string> = {}
-      if (deptIds.length > 0) {
-        const { data: depts } = await supabase
-          .from('departments')
-          .select('id, name')
-          .in('id', deptIds)
-        if (depts) {
-          deptMap = Object.fromEntries(depts.map(d => [d.id, d.name]))
-        }
-      }
-
-      return data.map(u => ({
-        id: u.id,
-        matricula: u.matricula || '',
-        full_name: u.full_name,
-        cargo: u.role,
+      return (data as any[]).map(e => ({
+        id: e.id,
+        matricula: e.matricula || '',
+        full_name: e.full_name,
+        cargo: e.cargo,
         is_active: true,
-        department_name: u.department_id ? deptMap[u.department_id] || '' : '',
+        department_name: e.department_name || '',
+        origem: e.origem === 'funcionario' ? 'funcionario' : 'usuario',
         created_at: '',
         updated_at: '',
       })) as Employee[]
