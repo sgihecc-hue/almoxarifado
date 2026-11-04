@@ -26,6 +26,7 @@ export interface TVRequest {
   department_id?: string
   destination_department?: string
   destination_department_id?: string
+  source_location_id?: string | null
   requester_id: string
   requester_name: string
   request_number?: string
@@ -146,6 +147,7 @@ class TVRequestService {
           department_id: req.dept?.id || req.department_id,
           destination_department: req.dest_dept?.name || '',
           destination_department_id: req.dest_dept?.id || req.destination_department_id,
+          source_location_id: req.source_location_id ?? null,
           requester_id: req.requester_id,
           requester_name: nameMap[req.requester_id] || 'Usuário Desconhecido',
           request_number: req.request_number,

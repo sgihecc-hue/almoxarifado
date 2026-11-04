@@ -14,6 +14,7 @@ import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import type { TVRequest } from '@/lib/services/tv-requests'
 import { PAINEL_FARMACIA_ATIVO } from '@/lib/constants/tv-panels'
+import { useModule } from '@/contexts/module'
 import { PainelDesligado } from '@/components/painel-tv-desligado'
 
 const THEME_A = {
@@ -123,6 +124,7 @@ function TVPriorityBadge({ priority, theme }: { priority: string; theme: typeof 
 // hook dele roda (e nenhuma consulta sai) com o painel desligado.
 function PharmacyTVDashboardAtivo() {
   const navigate = useNavigate()
+  const { activeStock } = useModule()
   const [requests, setRequests] = useState<TVRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -162,14 +164,20 @@ function PharmacyTVDashboardAtivo() {
       }
       return () => { if (intervalId) clearInterval(intervalId) }
     }
-  }, [autoRefresh, refreshInterval, connectionError])
+  }, [autoRefresh, refreshInterval, connectionError, activeStock?.id])
 
   async function loadRequests() {
     try {
       setLoading(true)
       setError(null)
-      const data = await tvRequestService.getAll('pharmacy', ['pending', 'approved', 'processing'])
-      const activeRequests = data.filter(r => ['pending', 'approved', 'processing'].includes(r.status))
+      // Só os pedidos do estoque em que a pessoa está (Rafaela 04/11: o
+      // Sat Térreo abria pelo painel o pedido do Sat 1). A Satélite Térreo
+      // atende material, igual à caixa de entrada. Painel sem estoque
+      // escolhido (TV sem login) segue mostrando tudo.
+      const tipo = activeStock?.code === 'SAT_T' ? 'warehouse' : 'pharmacy'
+      const data = await tvRequestService.getAll(tipo, ['pending', 'approved', 'processing'])
+      const activeRequests = data.filter(r => ['pending', 'approved', 'processing'].includes(r.status) &&
+        (!activeStock || !r.source_location_id || r.source_location_id === activeStock.id))
       // Play alert if new requests arrived
       if (prevCount !== null && activeRequests.length > prevCount) {
         playAlertSound()

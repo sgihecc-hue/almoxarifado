@@ -805,7 +805,7 @@ export function RequestDetails() {
   const navigate = useNavigate()
   const { id } = useParams()
   const { user } = useAuth()
-  const { homeModule } = useModule()
+  const { homeModule, activeModule, activeStock } = useModule()
   const [request, setRequest] = useState<Request | null>(null)
   const [loading, setLoading] = useState(true)
   const [commenting, setCommenting] = useState(false)
@@ -1080,7 +1080,14 @@ export function RequestDetails() {
   // operador seja do mesmo módulo da solicitação — antes disso um atendente
   // da farmácia abria a tela de atendimento de um pedido do almoxarifado.
   // Ver lib/utils/request-scope.ts.
-  const isStaff = podeAtenderSolicitacao(homeModule, request.type) &&
+  // Pedido de OUTRO estoque de farmácia (ex.: o do Sat 1 aberto estando no
+  // Sat Térreo, pelo Painel TV — Rafaela 04/11): fica só consulta. Atender
+  // daqui daria baixa no estoque do pedido sem ser a farmácia dona dele.
+  const estoqueDoPedido = PHARMACY_STOCKS.find((s) => s.id === (request as any).source_location_id)
+  const pedidoDeOutroEstoque = activeModule === 'farmacia' && !!activeStock && !!estoqueDoPedido &&
+    estoqueDoPedido.id !== activeStock.id
+
+  const isStaff = !pedidoDeOutroEstoque && podeAtenderSolicitacao(homeModule, request.type) &&
     (user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente' ||
       (user?.role === 'pharmacist' && request.type === 'pharmacy'))
 
@@ -1436,7 +1443,12 @@ export function RequestDetails() {
           levariam a baixa ao ALMOXARIFADO, e o material sai da Satelite
           Terreo. Os demais pedidos seguem com RequestActions, sem mudanca. */}
       <div className="print:hidden">
-        {kitsPedido.kits.length > 0 || kitsPedido.avulsos.length > 0 ? (
+        {pedidoDeOutroEstoque ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Este pedido é do estoque <strong>{estoqueDoPedido!.name}</strong>. Você está no estoque{' '}
+            <strong>{activeStock!.name}</strong>, então aqui ele fica só pra consulta. Pra atender, troque pro estoque {estoqueDoPedido!.name}.
+          </div>
+        ) : kitsPedido.kits.length > 0 || kitsPedido.avulsos.length > 0 ? (
           <AtenderPedidoEnfermagem
             request={request}
             onDone={() => { if (id) loadRequest(id, true) }}
