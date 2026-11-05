@@ -362,7 +362,9 @@ export function ReceiptConfirmation() {
         throw new Error(
           semQuantidade.length === 1
             ? `Informe a quantidade recebida de "${lista}" — ou marque "nao chegou".`
-            : `${semQuantidade.length} itens sem quantidade: ${lista}. Informe a quantidade de cada um ou marque "nao chegou".`,
+            // Lista curta: com nome longo de 30 itens a mensagem passava de 200
+            // letras e virava "erro inesperado" (05/11, pedido 50233).
+            : `${semQuantidade.length} itens sem quantidade recebida. Informe a quantidade de cada um ou marque "nao chegou".`,
         )
       }
       if (acimaDoFornecido.length > 0) {
