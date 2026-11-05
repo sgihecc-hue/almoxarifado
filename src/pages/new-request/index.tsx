@@ -59,6 +59,9 @@ export function NewRequest() {
   // e o que cai na fila dela. Medicamento fica no CAF, Sat 1 e Sat 2.
   const destinoSatTerreo = requestType === 'pharmacy' && details?.destination_department === SAT_T_DEPARTMENT_ID
   const tipoEfetivo: RequestType | null = destinoSatTerreo ? 'warehouse' : requestType
+  // Pedido de material que sai da Satelite Terreo: a lista mostra o que tem
+  // saldo NO TERREO, nao no almox (Rafa 05/11).
+  const pedidoAoTerreo = tipoEfetivo === 'warehouse' && details?.destination_department === SAT_T_DEPARTMENT_ID
   // Trocou entre medicamento e material: os itens escolhidos sao de outro catalogo.
   const tipoItensRef = useRef<RequestType | null>(null)
   useEffect(() => {
@@ -657,8 +660,9 @@ export function NewRequest() {
         {currentStep === 2 && requestType && details && (
           <div className="space-y-6">
             <RequestItems
-              key={tipoEfetivo ?? ''}
+              key={`${tipoEfetivo ?? ''}-${pedidoAoTerreo ? 'satt' : ''}`}
               type={tipoEfetivo!}
+              estoqueSatTerreo={pedidoAoTerreo}
               onSubmit={(selectedItems) => {
                 setItems(selectedItems)
                 setCurrentStep(prev => prev + 1)

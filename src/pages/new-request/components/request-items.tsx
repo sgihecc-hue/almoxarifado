@@ -14,7 +14,7 @@ import type { Item } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
 import { buscarTodas, lerQuantidade, normalizarBusca } from '@/lib/utils/seguro'
 import { useAuth } from '@/contexts/auth'
-import { SAT_T_SOROS } from '@/lib/constants/stock-locations'
+import { SAT_T_SOROS, SAT_T_STOCK_ID } from '@/lib/constants/stock-locations'
 import { useModule } from '@/contexts/module'
 import { z } from 'zod'
 
@@ -58,13 +58,15 @@ const makeUid = () => `${Date.now().toString(36)}-${Math.random().toString(36).s
 
 interface RequestItemsProps {
   type: 'pharmacy' | 'warehouse'
+  /** Pedido de material atendido pela Satelite Terreo: lista o que tem saldo nela. */
+  estoqueSatTerreo?: boolean
   onSubmit: (items: RequestItem[]) => void
   defaultValues?: RequestItem[]
 }
 
 
 
-export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItemsProps) {
+export function RequestItems({ type, estoqueSatTerreo = false, onSubmit, defaultValues = [] }: RequestItemsProps) {
   const { user } = useAuth()
   // Satelite Terreo so trabalha com material medico (Rafaela 04/11): pedido de
   // farmacia feito de la nao lista medicamento, que e so do Sat 1 e Sat 2.
@@ -78,6 +80,8 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   void user
   const canSeeStock = false
   const [items, setItems] = useState<Item[]>([])
+  // Itens com saldo na Satelite Terreo (so quando o pedido sai dela).
+  const [comSaldoSatT, setComSaldoSatT] = useState<Set<string> | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedItems, setSelectedItems] = useState<RequestItem[]>(
     defaultValues.map(v => (v._uid ? v : { ...v, _uid: makeUid() }))
@@ -128,6 +132,17 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
         .order('name')
         .order('id')
         .range(de, ate))
+      if (estoqueSatTerreo && type === 'warehouse') {
+        const saldos = await buscarTodas<{ item_id: string }>((de, ate) => supabase
+          .from('item_stocks')
+          .select('item_id')
+          .eq('location_id', SAT_T_STOCK_ID)
+          .eq('item_type', 'warehouse')
+          .gt('quantity', 0)
+          .order('item_id')
+          .range(de, ate))
+        setComSaldoSatT(new Set(saldos.map(s => s.item_id)))
+      }
       setItems(data)
     } catch (error) {
       console.error('Error loading items:', error)
@@ -149,7 +164,9 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
   const palavras = normalizarBusca(searchTerm).split(/\s+/).map(compacto).filter(Boolean)
   const filteredItems = items
     .filter(item =>
-      type !== 'warehouse' || ((item as any).current_stock || 0) > 0
+      type !== 'warehouse' || (comSaldoSatT
+        ? comSaldoSatT.has(item.id)
+        : ((item as any).current_stock || 0) > 0)
     )
     // Sat Terreo: mat-med da CAF + soros que ela tambem atende (Andressa 05/11).
     .filter(item => !soMaterialMedico || ['MAT/MED', 'Material Médico-Hospitalar'].includes(item.category as string) || SAT_T_SOROS.includes(item.id))

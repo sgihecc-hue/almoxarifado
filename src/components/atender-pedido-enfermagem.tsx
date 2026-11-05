@@ -97,7 +97,7 @@ export function AtenderPedidoEnfermagem({ request, onDone }: { request: Request;
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex items-start gap-2">
         <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
         <span>
-          Pedido de enfermagem. É atendido pela <strong>Farmácia Satélite Térreo</strong>, com baixa no estoque dela.
+          Pedido da Satélite Térreo. É atendido pela <strong>Farmácia Satélite Térreo</strong>, com baixa no estoque dela.
           Para atender, entre na Farmácia com a Satélite Térreo como estoque ativo.
         </span>
       </div>

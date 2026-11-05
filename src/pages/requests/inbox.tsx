@@ -97,7 +97,7 @@ export function RequestInbox() {
     // source_location_id caem em "todos" (fallback pra não sumirem).
     const matchesSourceStock =
       !activeStock ||
-      !request.source_location_id ||
+      (!request.source_location_id && !satTerreoNaFarmacia) ||
       request.source_location_id === activeStock.id
 
     return matchesSearch && matchesTab && matchesDate && matchesType && matchesSourceStock

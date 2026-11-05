@@ -26,7 +26,7 @@ import { AtenderPedidoEnfermagem } from '@/components/atender-pedido-enfermagem'
 import { exigirLinhas, lerQuantidade } from '@/lib/utils/seguro'
 import { registrarGravacao } from '@/lib/utils/request-gravacoes'
 import { getErrorMessage } from '@/lib/utils/error-messages'
-import { PHARMACY_STOCKS } from '@/lib/constants/stock-locations'
+import { PHARMACY_STOCKS, SAT_T_STOCK_ID } from '@/lib/constants/stock-locations'
 
 interface LotOption { id: string; batch_number: string; expiry_date: string | null; current_quantity: number }
 
@@ -1087,6 +1087,14 @@ export function RequestDetails() {
   const pedidoDeOutroEstoque = activeModule === 'farmacia' && !!activeStock && !!estoqueDoPedido &&
     estoqueDoPedido.id !== activeStock.id
 
+  // Pedido de material do posto pra Satelite Terreo (fluxo de 04/11): o Terreo
+  // atende e a baixa sai do estoque dele, igual pedido de enfermagem. Os
+  // antigos com origem SAT_T foram atendidos pelo almox (mesmo corte do banco,
+  // fn_is_pedido_enfermagem).
+  const pedidoMaterialDoTerreo = request.type === 'warehouse' &&
+    (request as any).source_location_id === SAT_T_STOCK_ID &&
+    request.created_at >= '2026-11-04T18:00:00'
+
   const isStaff = !pedidoDeOutroEstoque && podeAtenderSolicitacao(homeModule, request.type) &&
     (user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente' ||
       (user?.role === 'pharmacist' && request.type === 'pharmacy'))
@@ -1448,7 +1456,7 @@ export function RequestDetails() {
             Este pedido é do estoque <strong>{estoqueDoPedido!.name}</strong>. Você está no estoque{' '}
             <strong>{activeStock!.name}</strong>, então aqui ele fica só pra consulta. Pra atender, troque pro estoque {estoqueDoPedido!.name}.
           </div>
-        ) : kitsPedido.kits.length > 0 || kitsPedido.avulsos.length > 0 ? (
+        ) : kitsPedido.kits.length > 0 || kitsPedido.avulsos.length > 0 || pedidoMaterialDoTerreo ? (
           <AtenderPedidoEnfermagem
             request={request}
             onDone={() => { if (id) loadRequest(id, true) }}
