@@ -56,3 +56,16 @@ export function departmentBelongsToStock(departmentName: string | null | undefin
   if (stock.code === 'CAF' && d.startsWith('caf')) return true
   return false
 }
+
+// Soros da CAF que a Satelite Terreo tambem atende (cadastro MEDICAMENTO; Andressa 05/11).
+export const SAT_T_SOROS = [
+  '23cc6beb-2bd2-4ac7-b0ea-aeafad0d385b',
+  'e21ddb46-676b-43f8-85d3-8cfc5591c6a5',
+  '8c43bcab-b616-4371-86c1-cacca87a48f7',
+  'cdbac859-29b4-4ed8-99cb-388cdfc17b87',
+  'aaf9e895-118e-4879-8077-61a8e1f8777d',
+  'a3a5c682-b744-43e3-9fcb-78759cb41b07',
+  '9b96564d-5a47-4db3-bffc-7e686a5e93e1',
+  '558ca4a4-6d65-4582-a304-529d51046f34',
+  '84386ae0-0092-4001-8291-af5bc164c45c',
+]

@@ -14,6 +14,7 @@ import type { Item } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
 import { buscarTodas, lerQuantidade, normalizarBusca } from '@/lib/utils/seguro'
 import { useAuth } from '@/contexts/auth'
+import { SAT_T_SOROS } from '@/lib/constants/stock-locations'
 import { useModule } from '@/contexts/module'
 import { z } from 'zod'
 
@@ -150,7 +151,8 @@ export function RequestItems({ type, onSubmit, defaultValues = [] }: RequestItem
     .filter(item =>
       type !== 'warehouse' || ((item as any).current_stock || 0) > 0
     )
-    .filter(item => !soMaterialMedico || (item.category as string) === 'MAT/MED')
+    // Sat Terreo: mat-med da CAF + soros que ela tambem atende (Andressa 05/11).
+    .filter(item => !soMaterialMedico || ['MAT/MED', 'Material Médico-Hospitalar'].includes(item.category as string) || SAT_T_SOROS.includes(item.id))
     .filter(item => {
       if (palavras.length === 0) return true
       const alvo = compacto(item.name) + ' ' + compacto(item.code)
