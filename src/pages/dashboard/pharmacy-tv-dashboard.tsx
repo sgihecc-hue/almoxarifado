@@ -177,7 +177,9 @@ function PharmacyTVDashboardAtivo() {
       const tipo = activeStock?.code === 'SAT_T' ? 'warehouse' : 'pharmacy'
       const data = await tvRequestService.getAll(tipo, ['pending', 'approved', 'processing'])
       const activeRequests = data.filter(r => ['pending', 'approved', 'processing'].includes(r.status) &&
-        (!activeStock || !r.source_location_id || r.source_location_id === activeStock.id))
+        (!activeStock || r.source_location_id === activeStock.id ||
+          // Pedido sem origem e do CAF/legado; no Sat Terreo (material) sem origem e do almox (Rafaela 05/11).
+          (!r.source_location_id && activeStock.code !== 'SAT_T')))
       // Play alert if new requests arrived
       if (prevCount !== null && activeRequests.length > prevCount) {
         playAlertSound()

@@ -1,3 +1,4 @@
+import { SAT_T_STOCK_ID } from '@/lib/constants/stock-locations'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -168,7 +169,9 @@ function WarehouseTVDashboardAtivo() {
       setLoading(true)
       setError(null)
       const data = await tvRequestService.getAll('warehouse', ['pending', 'approved', 'processing'])
-      const activeRequests = data.filter(r => ['pending', 'approved', 'processing'].includes(r.status))
+      // Pedido de material que sai da Satelite Terreo e dela, nao do almox (Rafaela 05/11).
+      const activeRequests = data.filter(r => ['pending', 'approved', 'processing'].includes(r.status) &&
+        r.source_location_id !== SAT_T_STOCK_ID)
       if (prevCount !== null && activeRequests.length > prevCount) {
         playAlertSound()
       }
