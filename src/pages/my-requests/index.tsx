@@ -52,8 +52,11 @@ export function MyRequests() {
   // A auditoria de 28/09 tinha deixado só os pedidos da própria pessoa e a aba
   // ficou vazia para quem atende (Andressa, 30/09 e 09/10).
   const atende = !!user && ['administrador', 'gestor', 'atendente', 'pharmacist'].includes(user.role as string)
+  // Sat Terreo (itemType 'warehouse') nao busca a lista do estoque; sem isso o
+  // loading dela ficava true pra sempre e a tela travava em "Carregando" (04/11).
+  const veEstoque = !!user && atende && !isWarehouse && !!activeStock && activeStock.itemType === 'pharmacy'
   const { requests: doEstoque, loading: carregandoEstoque, erro: erroEstoque, recarregar: recarregarEstoque } = useListaSolicitacoes(
-    user && atende && !isWarehouse && activeStock && activeStock.itemType === 'pharmacy' ? {
+    veEstoque && activeStock ? {
       type: 'pharmacy',
       sourceLocationId: activeStock.id,
       ...periodoParaFiltro(dateRange),
@@ -65,7 +68,7 @@ export function MyRequests() {
     for (const r of [...meus, ...doEstoque]) m.set(r.id, r)
     return [...m.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
   }, [meus, doEstoque])
-  const loading = carregandoMeus || (carregandoEstoque && doEstoque.length === 0 && !!activeStock && atende && !isWarehouse)
+  const loading = carregandoMeus || (carregandoEstoque && doEstoque.length === 0 && veEstoque)
   const erroLista = erroMeus || erroEstoque
   const recarregar = async (silencioso = false) => { await Promise.all([recarregarMeus(silencioso), recarregarEstoque(silencioso)]) }
 
