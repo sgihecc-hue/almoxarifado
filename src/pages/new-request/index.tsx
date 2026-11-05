@@ -24,7 +24,7 @@ import { useTheme } from '@/contexts/theme'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { RequestType } from './types'
-import { SAT_T_DEPARTMENT_ID, SAT_T_STOCK_ID } from '@/lib/constants/stock-locations'
+import { ALMOX_STOCK_ID, SAT_T_DEPARTMENT_ID, SAT_T_STOCK_ID } from '@/lib/constants/stock-locations'
 
 const steps = [
   { id: 'type', title: 'Tipo de Solicitação', description: 'Escolha o tipo de solicitação que deseja fazer' },
@@ -302,7 +302,11 @@ export function NewRequest() {
 
       const request = await requestService.create({
         type: tipoEfetivo!,
-        source_location_id: destinoSatTerreo ? SAT_T_STOCK_ID : undefined,
+        // Material: destino Sat Terreo sai do SAT_T; destino Almoxarifado sai do almox
+        // (posto pode pedir direto ao almox o material de maior controle, Rafaela 05/11).
+        source_location_id: destinoSatTerreo || (tipoEfetivo === 'warehouse' && details?.destination_department === SAT_T_DEPARTMENT_ID)
+          ? SAT_T_STOCK_ID
+          : tipoEfetivo === 'warehouse' ? ALMOX_STOCK_ID : undefined,
         priority: details.priority,
         department: details.requesting_department || details.department,
         destination_department: details.destination_department,

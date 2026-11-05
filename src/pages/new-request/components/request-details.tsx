@@ -54,7 +54,7 @@ export function RequestDetails({ onSubmit, defaultValues, requestType }: Request
   const escondeFarmaciasSolicitante = requestType === 'pharmacy' && !isPharmacyFlow &&
     !PHARMACY_STOCKS.some((st) => departmentBelongsToStock(userDepartment?.name, st))
 
-  const { register, handleSubmit, setValue, watch, formState: { errors }, reset } = useForm<RequestDetails>({
+  const { register, handleSubmit, setValue, getValues, watch, formState: { errors }, reset } = useForm<RequestDetails>({
     resolver: zodResolver(detailsSchema),
     defaultValues: {
       priority: 'medium',
@@ -122,6 +122,9 @@ export function RequestDetails({ onSubmit, defaultValues, requestType }: Request
   useEffect(() => {
     if (requestType !== 'warehouse' || allDepartments.length === 0) return
     const destino = destinoMaterial(watchedRequestingDept)
+    // Posto pode escolher o Almoxarifado (material de maior controle/custo, Rafaela 05/11).
+    const atual = getValues('destination_department')
+    if (destino?.id === SAT_T_DEPARTMENT_ID && warehouseDepartment && atual === warehouseDepartment.id) return
     if (destino) setValue('destination_department', destino.id, { shouldValidate: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestType, watchedRequestingDept, allDepartments, warehouseDepartment, setValue])
@@ -387,6 +390,21 @@ export function RequestDetails({ onSubmit, defaultValues, requestType }: Request
             const isAndar = (selectedName.includes('satélite') || selectedName.includes('satelite')) &&
               (isSatelite1 || isSatelite2 || selectedName.includes('andar'))
             const isTerreo = selectedName.includes('satélite térreo') || selectedName.includes('satelite terreo')
+
+            if (requestType === 'warehouse' && warehouseDepartment &&
+                destinoMaterial(watchedRequestingDept)?.id === SAT_T_DEPARTMENT_ID) {
+              const satT = destinoMaterial(watchedRequestingDept)!
+              return (
+                <select
+                  id="destination_department"
+                  {...register('destination_department')}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2"
+                >
+                  <option value={satT.id}>{satT.name}</option>
+                  <option value={warehouseDepartment.id}>{warehouseDepartment.name} (material de maior controle)</option>
+                </select>
+              )
+            }
 
             if (requestType === 'warehouse' && warehouseDepartment) {
               return (
