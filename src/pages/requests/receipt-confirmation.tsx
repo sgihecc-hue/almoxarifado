@@ -330,7 +330,11 @@ export function ReceiptConfirmation() {
         const f = forms[item.id]
         if (f?.nao_recebido) continue
         const qtd = lerQuantidade(f?.quantity)
-        if (qtd === null || qtd <= 0) {
+        // Zero digitado = nao chegou (fica pendente, igual marcar "nao chegou").
+        // Antes o 0 contava como "sem quantidade" e travava a confirmacao
+        // (pedido 50204, 04/11).
+        if (qtd === 0) continue
+        if (qtd === null || qtd < 0) {
           semQuantidade.push(item.item_name)
           continue
         }
