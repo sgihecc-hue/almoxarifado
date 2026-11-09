@@ -27,6 +27,7 @@ import { useModule } from '@/contexts/module'
 import type { Item, FilterOptions } from '@/lib/services/items'
 import { ImportDialog } from '@/components/inventory/import-dialog'
 import { AddItemDialog } from '@/components/inventory/add-item-dialog'
+import { SAT_T_SOROS } from '@/lib/constants/stock-locations'
 
 interface PharmacyItemsProps {
   locationId?: string
@@ -447,8 +448,11 @@ export function PharmacyItems({ locationId, locationName, catalogoFarmacia = fal
   const filteredItems = sortedItems
     // Satelite Terreo, aba da CAF: so o mat-med e soros cadastrados nele
     // (Andressa 05/11), nao o catalogo inteiro de medicamento.
+    // So mat-med e os soros (mesma regra da lista de pedido do Terreo):
+    // medicamento antigo com saldo residual no Terreo nao entra (Andressa 09/11).
     .filter(item => !catalogoFarmacia || !activeStock ||
-      (stocksByItem.get(item.id) ?? {})[activeStock.code] !== undefined)
+      ((stocksByItem.get(item.id) ?? {})[activeStock.code] !== undefined &&
+        (['MAT/MED', 'Material Médico-Hospitalar'].includes(item.category as string) || SAT_T_SOROS.includes(item.id))))
     .filter(item =>
       searchTerm.trim() === '' ||
       normalizarBusca(item.name).includes(normalizarBusca(searchTerm)) ||
