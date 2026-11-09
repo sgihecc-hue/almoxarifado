@@ -54,10 +54,12 @@ export function MyRequests() {
   const atende = !!user && ['administrador', 'gestor', 'atendente', 'pharmacist'].includes(user.role as string)
   // Sat Terreo (itemType 'warehouse') nao busca a lista do estoque; sem isso o
   // loading dela ficava true pra sempre e a tela travava em "Carregando" (04/11).
-  const veEstoque = !!user && atende && !isWarehouse && !!activeStock && activeStock.itemType === 'pharmacy'
+  // Desde 05/11 o Terreo atende os pedidos de material dos postos (origem
+  // SAT_T, tipo warehouse): eles tem que aparecer aqui pra ela (Andressa 09/11).
+  const veEstoque = !!user && atende && !isWarehouse && !!activeStock
   const { requests: doEstoque, loading: carregandoEstoque, erro: erroEstoque, recarregar: recarregarEstoque } = useListaSolicitacoes(
     veEstoque && activeStock ? {
-      type: 'pharmacy',
+      type: activeStock.itemType === 'warehouse' ? 'warehouse' : 'pharmacy',
       sourceLocationId: activeStock.id,
       ...periodoParaFiltro(dateRange),
     } : null,
