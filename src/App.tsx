@@ -11,7 +11,7 @@ import { Login } from '@/pages/login'
 import { MainLayout } from '@/pages/main-layout'
 import { MyRequests } from '@/pages/my-requests'
 import { PharmacyItems } from '@/pages/inventory/pharmacy-items'
-import { StockLocationItems } from '@/pages/inventory/stock-location-items'
+import { StockLocationItems, EstoqueFarmacia } from '@/pages/inventory/stock-location-items'
 import { WarehouseItems } from '@/pages/inventory/warehouse-items'
 import { EtiquetasAlmox } from '@/pages/almox/etiquetas'
 import { AlmoxMovimentacao } from '@/pages/almox/movimentacao'
@@ -851,7 +851,7 @@ export default function App() {
               <Route path="/farmacia" element={<ModuleLayout module="farmacia" />}>
                 <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="dashboard" element={<Dashboard module="farmacia" />} />
-                <Route path="inventory" element={<PharmacyItems />} />
+                <Route path="inventory" element={<EstoqueFarmacia />} />
                 <Route path="inventory/nf-entry" element={<NfEntry type="pharmacy" />} />
                 <Route path="inventory/saida-lote" element={<SaidaBatch type="pharmacy" />} />
                 <Route path="inventory/:id" element={<ItemDetails />} />

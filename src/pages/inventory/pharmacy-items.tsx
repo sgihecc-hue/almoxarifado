@@ -31,9 +31,11 @@ import { AddItemDialog } from '@/components/inventory/add-item-dialog'
 interface PharmacyItemsProps {
   locationId?: string
   locationName?: string
+  /** Forca o catalogo de farmacia (aba Mat-med e soros da CAF no Satelite Terreo). */
+  catalogoFarmacia?: boolean
 }
 
-export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps = {}) {
+export function PharmacyItems({ locationId, locationName, catalogoFarmacia = false }: PharmacyItemsProps = {}) {
   const { user } = useAuth()
   const { activeStock } = useModule()
   const navigate = useNavigate()
@@ -46,7 +48,7 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
   const effectiveLocationId = locationId ?? activeStock?.id
   // SAT_T é estoque de MATERIAL (warehouse), não medicamento. Quando o estoque
   // ativo é warehouse, a tela lê o catálogo de material e o saldo de material.
-  const isWarehouseStock = activeStock?.itemType === 'warehouse'
+  const isWarehouseStock = !catalogoFarmacia && activeStock?.itemType === 'warehouse'
   const catalogItemType: 'pharmacy' | 'warehouse' = isWarehouseStock ? 'warehouse' : 'pharmacy'
   // Barra de rolagem horizontal ESPELHADA no topo da tabela. A tabela tem ~15
   // colunas e nao cabe na tela; com a barra so embaixo, era preciso rolar a
@@ -443,6 +445,10 @@ export function PharmacyItems({ locationId, locationName }: PharmacyItemsProps =
     .sort((a, b) => a.localeCompare(b, 'pt-BR'))
 
   const filteredItems = sortedItems
+    // Satelite Terreo, aba da CAF: so o mat-med e soros cadastrados nele
+    // (Andressa 05/11), nao o catalogo inteiro de medicamento.
+    .filter(item => !catalogoFarmacia || !activeStock ||
+      (stocksByItem.get(item.id) ?? {})[activeStock.code] !== undefined)
     .filter(item =>
       searchTerm.trim() === '' ||
       normalizarBusca(item.name).includes(normalizarBusca(searchTerm)) ||
