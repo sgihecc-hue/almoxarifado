@@ -1095,6 +1095,12 @@ export function RequestDetails() {
     (request as any).source_location_id === SAT_T_STOCK_ID &&
     request.created_at >= '2026-11-04T18:00:00'
 
+  // Pedido atendido pela Satelite Terreo: o atendimento (quantidade, lote,
+  // saldo do Terreo) fica so no bloco "Atender pela Satelite Terreo". A tabela
+  // de itens vira so leitura; antes ela mostrava campos de lote e o saldo do
+  // almox, e parecia um segundo atendimento (Andressa 09/11).
+  const atendePelaSatelite = kitsPedido.kits.length > 0 || kitsPedido.avulsos.length > 0 || pedidoMaterialDoTerreo
+
   const isStaff = !pedidoDeOutroEstoque && podeAtenderSolicitacao(homeModule, request.type) &&
     (user?.role === 'administrador' || user?.role === 'gestor' || user?.role === 'atendente' ||
       (user?.role === 'pharmacist' && request.type === 'pharmacy'))
@@ -1433,9 +1439,9 @@ export function RequestDetails() {
                   <ItemRow
                     key={item.id}
                     item={item}
-                    canEdit={isStaff && statusAllowsEdit}
+                    canEdit={isStaff && statusAllowsEdit && !atendePelaSatelite}
                     isAdmin={user?.role === 'administrador'}
-                    canSeeStock={isStaff}
+                    canSeeStock={isStaff && !atendePelaSatelite}
                     requestType={request.type}
                     sourceLocationId={(request as any).source_location_id ?? null}
                   />
