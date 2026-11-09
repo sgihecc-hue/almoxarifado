@@ -177,10 +177,6 @@ export function NewDispensation() {
   const [mavConfirmText, setMavConfirmText] = useState('')
 
   const hasMav = useMemo(() => selectedItems.some((i) => i.is_mav), [selectedItems])
-  const needsApproval = useMemo(
-    () => selectedItems.some((i) => i.is_mav || i.medication_class === 'controlados' || i.medication_class === 'antimicrobianos'),
-    [selectedItems]
-  )
 
   useEffect(() => {
     if (!isRequisicao) return
@@ -1153,15 +1149,8 @@ export function NewDispensation() {
             ))}
           </div>
 
-          {needsApproval && (
-            <div className="p-4 rounded-xl flex items-start gap-3 bg-amber-50 border border-amber-200">
-              <AlertTriangle className="text-amber-600 flex-shrink-0 mt-0.5" size={20} />
-              <p className="text-sm text-amber-800">
-                <strong>Esta dispensação requer aprovação farmacêutica.</strong> Ela ficará com status
-                "Aguardando aprovação" até que um farmacêutico autorize.
-              </p>
-            </div>
-          )}
+          {/* Aviso de "requer aprovacao farmaceutica" removido (Andressa 09/11):
+              a aprovacao saiu do banco em 17/08 e a dispensacao conclui direto. */}
 
           <div className="flex justify-between pt-2">
             <div className="flex gap-2">
