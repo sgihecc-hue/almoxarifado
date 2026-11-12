@@ -4,6 +4,8 @@ import { useTheme } from '@/contexts/theme'
 import { useModule } from '@/contexts/module'
 import { Plus, Search, Calendar, RefreshCw, XCircle, CheckCircle2, Clock, User, Building2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import * as XLSX from 'xlsx'
+import { hojeLocal } from '@/lib/utils/seguro'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { pharmacyDispensationService } from '@/lib/services/pharmacy-dispensation'
@@ -18,7 +20,14 @@ export function DispensationList() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [search, setSearch] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
+  // Abre nos ultimos 7 dias: sem periodo a tela baixava todas as dispensacoes
+  // desde agosto (CAF 1 MB, Sat 1 2,5 MB) e ficava em "Carregando" ou dava erro
+  // na rede do hospital (Andressa 12/11). O periodo pode ser trocado nos campos.
+  const [dateFrom, setDateFrom] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 7)
+    return hojeLocal(d)
+  })
   const [dateTo, setDateTo] = useState('')
   const [showTypePicker, setShowTypePicker] = useState(false)
 
@@ -42,8 +51,8 @@ export function DispensationList() {
     color: txt, outline: 'none',
   }
 
-  // Recarrega ao trocar de estoque: cada local mostra so as suas dispensacoes.
-  useEffect(() => { loadData() }, [activeStock?.id])
+  // Recarrega ao trocar de estoque pelo efeito com debounce abaixo (antes
+  // eram dois efeitos e a lista era buscada duas vezes ao abrir).
 
   // No material a coluna traz o SETOR que recebeu, nao um paciente — o rotulo
   // antigo fazia parecer que a lista misturava dispensacoes de outros estoques.
@@ -72,6 +81,45 @@ export function DispensationList() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Excel das dispensacoes da lista, uma linha por item (Andressa 12/11:
+  // baixas por requisicao/dispensacao pra trabalhar na planilha).
+  function exportarExcel() {
+    const dataBRf = (s?: string | null) => (s ? format(new Date(s), 'dd/MM/yyyy HH:mm') : '')
+    const validade = (s?: string | null) => (s ? s.slice(0, 10).split('-').reverse().join('/') : '')
+    const linhas: Record<string, string | number>[] = []
+    for (const d of dispensations) {
+      const base = {
+        'Nº': d.dispensation_number ?? '',
+        'Data': dataBRf(d.created_at),
+        'Tipo': d.tipo === 'requisicao' ? 'Requisição' : 'Prescrição',
+        'Paciente': d.patient_name ?? '',
+        'Setor': d.sector ?? '',
+        'Prontuário': d.medical_record_number ?? '',
+        'Médico': d.prescribing_doctor ?? '',
+        'Status': d.status === 'cancelled' ? 'Cancelada' : d.status === 'completed' ? 'Concluída' : (d.status ?? ''),
+        'Feito por': d.created_by_name ?? '',
+      }
+      const itens = d.items ?? []
+      if (itens.length === 0) { linhas.push(base); continue }
+      for (const i of itens) {
+        linhas.push({
+          ...base,
+          'Código': i.item_code ?? '',
+          'Item': i.item_name ?? '',
+          'Lote': i.batch_number ?? '',
+          'Validade': validade(i.expiry_date),
+          'Quantidade': Number(i.quantity) || 0,
+          'Unidade': i.item_unit ?? '',
+        })
+      }
+    }
+    const ws = XLSX.utils.json_to_sheet(linhas)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Dispensacoes')
+    const local = activeStock?.code ?? 'farmacia'
+    XLSX.writeFile(wb, `dispensacoes_${local}_${dateFrom || 'inicio'}_${dateTo || hojeLocal()}.xlsx`)
   }
 
   useEffect(() => {
@@ -118,6 +166,14 @@ export function DispensationList() {
           <span style={{ color: txtMut, fontSize: 12 }}>ate</span>
           <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ ...inputStyle, width: 150 }} />
         </div>
+        <Button
+          variant="outline"
+          disabled={loading || dispensations.length === 0}
+          onClick={exportarExcel}
+          title="Exporta as dispensacoes da lista (periodo e busca atuais), uma linha por item"
+        >
+          Exportar Excel
+        </Button>
         <button onClick={loadData} style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 38, height: 38, borderRadius: 10, cursor: 'pointer',

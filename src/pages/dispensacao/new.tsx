@@ -925,8 +925,12 @@ export function NewDispensation() {
                         </p>
                         <p className="text-xs" style={{ color: txtMut }}>{it.code || 'sem código'}</p>
                       </div>
+                      {/* Campo numerico com setas de novo (Andressa 12/11); o
+                          texto continua sendo lido por lerQuantidade. */}
                       <input
-                        type="text"
+                        type="number"
+                        min={0}
+                        step={1}
                         inputMode="numeric"
                         value={it.quantidade_texto}
                         onChange={(e) => setQty(idx, e.target.value)}
