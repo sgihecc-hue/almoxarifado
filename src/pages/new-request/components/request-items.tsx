@@ -80,7 +80,8 @@ export function RequestItems({ type, estoqueSatTerreo = false, onSubmit, default
   void user
   const canSeeStock = false
   const [items, setItems] = useState<Item[]>([])
-  // Itens com saldo na Satelite Terreo (so quando o pedido sai dela).
+  // Itens do estoque da Satelite Terreo, zerados inclusive (Andressa 17/11:
+  // os ADMs precisam pedir mesmo com o item em falta). So quando o pedido sai dela.
   const [comSaldoSatT, setComSaldoSatT] = useState<Set<string> | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedItems, setSelectedItems] = useState<RequestItem[]>(
@@ -138,7 +139,6 @@ export function RequestItems({ type, estoqueSatTerreo = false, onSubmit, default
           .select('item_id')
           .eq('location_id', SAT_T_STOCK_ID)
           .eq('item_type', 'warehouse')
-          .gt('quantity', 0)
           .order('item_id')
           .range(de, ate))
         setComSaldoSatT(new Set(saldos.map(s => s.item_id)))
