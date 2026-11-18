@@ -123,6 +123,41 @@ export function VencimentosABaixar() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadAll() }, [itemType])
 
+  // Almoxarifado segue o POP.ALMX-E-PRO.12 (Rafaela 18/11): ate 30 dias
+  // etiqueta LARANJA, de 31 a 90 dias etiqueta AMARELA, acima de 90 sem
+  // etiqueta. Conta os dias exatos; a faixa da view (1/3/6 meses) fica so
+  // como chave do "Marcar como Resolvido" (laranja=1m, amarela=3m, sem=6m).
+  const hojeMs = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() })()
+  const diasPara = (iso: string) => {
+    const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
+    return Math.round((new Date(y, m - 1, d).getTime() - hojeMs) / 86400000)
+  }
+  const popConfig = {
+    '1m': {
+      bg: mode === 'dark' ? 'rgba(249,115,22,0.14)' : 'rgba(255,237,213,0.9)',
+      border: mode === 'dark' ? 'rgba(249,115,22,0.4)' : 'rgba(249,115,22,0.45)',
+      badge: '#ea580c',
+      label: 'Etiqueta LARANJA',
+    },
+    '3m': {
+      bg: mode === 'dark' ? 'rgba(234,179,8,0.14)' : 'rgba(254,249,195,0.9)',
+      border: mode === 'dark' ? 'rgba(234,179,8,0.4)' : 'rgba(202,138,4,0.4)',
+      badge: '#ca8a04',
+      label: 'Etiqueta AMARELA',
+    },
+    '6m': {
+      bg: mode === 'dark' ? 'rgba(148,163,184,0.10)' : 'rgba(241,245,249,0.9)',
+      border: mode === 'dark' ? 'rgba(148,163,184,0.3)' : 'rgba(100,116,139,0.25)',
+      badge: '#64748b',
+      label: 'Sem etiqueta (mais de 90 dias)',
+    },
+  } as Record<ExpiryColorBand, { bg: string; border: string; badge: string; label: string }>
+  const faixaPop = (iso: string): ExpiryColorBand => {
+    const dias = diasPara(iso)
+    return dias <= 30 ? '1m' : dias <= 90 ? '3m' : '6m'
+  }
+  const faixaDe = (r: ExpiringAlertRow): ExpiryColorBand => (isWarehouse ? faixaPop(r.expiry_date) : r.color_band)
+
   // Filtrar resolvidos client-side
   const localPorId = new Map(locais.map((l) => [l.id, l]))
   const codigoLocal = (id: string | null | undefined) => (id ? localPorId.get(id)?.code : undefined)
@@ -135,7 +170,7 @@ export function VencimentosABaixar() {
     .sort((a, b) => (a === 'CAF' ? -1 : b === 'CAF' ? 1 : a.localeCompare(b)))
 
   const visibleAlerts = alertRows.filter(
-    (r) => !resolutions.has(`${r.expiry_tracking_id}__${r.color_band}`)
+    (r) => !resolutions.has(`${r.expiry_tracking_id}__${faixaDe(r)}`)
       && (!filtrarLocal || codigoLocal(r.location_id) === filtroLocal)
   )
 
@@ -153,7 +188,7 @@ export function VencimentosABaixar() {
       const { error: e } = isWarehouse
         ? await supabase.from('warehouse_expiry_resolutions').insert({
             warehouse_item_id: row.expiry_tracking_id,
-            color_band: row.color_band,
+            color_band: faixaDe(row),
             resolved_by: user.id,
           })
         : await supabase.from('expiry_alert_resolutions').insert({
@@ -162,7 +197,7 @@ export function VencimentosABaixar() {
             resolved_by: user.id,
           })
       if (e) throw e
-      setResolutions((prev) => new Set([...prev, `${row.expiry_tracking_id}__${row.color_band}`]))
+      setResolutions((prev) => new Set([...prev, `${row.expiry_tracking_id}__${faixaDe(row)}`]))
     } catch (e: any) {
       setError(getErrorMessage(e))
     } finally {
@@ -193,6 +228,7 @@ export function VencimentosABaixar() {
   }
 
   const bandEmoji: Record<ExpiryColorBand, string> = { '1m': '🔴', '3m': '🟠', '6m': '🟡' }
+
 
   // ---- Writeoff helpers ----
   const toggle = (id: string) =>
@@ -324,10 +360,12 @@ export function VencimentosABaixar() {
         ) : (
           <div className="space-y-2">
             {visibleAlerts.map((r) => {
-              const cfg = bandConfig[r.color_band] || bandConfig['6m']
+              const faixa = faixaDe(r)
+              const cfg = (isWarehouse ? popConfig[faixa] : bandConfig[faixa]) || bandConfig['6m']
+              const dias = diasPara(r.expiry_date)
               return (
                 <div
-                  key={`${r.expiry_tracking_id}-${r.color_band}`}
+                  key={`${r.expiry_tracking_id}-${faixa}`}
                   className="p-4 rounded-xl flex items-center gap-4"
                   style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}
                 >
@@ -342,8 +380,13 @@ export function VencimentosABaixar() {
                           border: `1px solid ${cfg.badge}44`,
                         }}
                       >
-                        {bandEmoji[r.color_band]} {cfg.label}
+                        {isWarehouse ? cfg.label : `${bandEmoji[faixa]} ${cfg.label}`}
                       </span>
+                      {isWarehouse && (
+                        <span className="text-xs font-medium" style={{ color: cfg.badge }}>
+                          {dias === 1 ? 'falta 1 dia' : `faltam ${dias} dias`}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs" style={{ color: txtSec }}>
                       Lote <strong>{r.batch_number}</strong>
