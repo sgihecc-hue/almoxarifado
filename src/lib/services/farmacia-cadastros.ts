@@ -223,8 +223,11 @@ class PatientsService {
     if (!t) return []
     const { data, error } = await supabase
       .from('patients')
-      .select('*')
+      // Dispensacao: so quem esta internado (internacao aberta) e ativo.
+      .select('*, patient_admissions!inner(id)')
       .eq('is_active', true)
+      .is('patient_admissions.discharge_date', null)
+      .is('discharge_date', null)
       .or(`full_name.ilike.%${t}%,medical_record_number.ilike.%${t}%`)
       .order('full_name')
       .limit(limit)

@@ -75,7 +75,12 @@ export function PatientSelect() {
     try {
       const { data, error } = await supabase
         .from('patients')
-        .select('*')
+        // So paciente ativo e com internacao aberta (Andressa 19/11: inativos e
+        // quem teve alta pela internacao continuavam aparecendo; a alta fica em
+        // patient_admissions, o discharge_date do paciente nem sempre e preenchido).
+        .select('*, patient_admissions!inner(id)')
+        .eq('is_active', true)
+        .is('patient_admissions.discharge_date', null)
         .or(`full_name.ilike.%${search}%,medical_record_number.ilike.%${search}%`)
         .is('discharge_date', null)
         .order('full_name')

@@ -19,6 +19,7 @@ import { itemsService } from '@/lib/services/items'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/utils/error-messages'
 import { useTravaEnvio } from '@/lib/utils/entradas'
+import { useAuth } from '@/contexts/auth'
 import { lerQuantidade } from '@/lib/utils/seguro'
 import type { Item, ItemCategory, UnitType } from '@/lib/services/items'
 import { MEDICATION_CLASS_LABEL, CONTROLLED_SUBCLASSES } from '@/lib/types/farmacia'
@@ -226,6 +227,11 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
   const [saldos, setSaldos] = useState<SaldoLocal[] | null>(null)
   const [erroSaldos, setErroSaldos] = useState<string | null>(null)
   const [temMovimento, setTemMovimento] = useState(false)
+  // Gestor/administrador corrige unidade mesmo com saldo (Rafaela 19/11); o
+  // banco tem a mesma regra. A quantidade nao e convertida: aviso abaixo.
+  const { user: usuario } = useAuth()
+  const podeTrocarUnidade = !!usuario?.role && ['gestor', 'administrador'].includes(usuario.role)
+  const unidadeTravada = temMovimento && !podeTrocarUnidade
   const [catalogoErrado, setCatalogoErrado] = useState(false)
 
   useEffect(() => {
@@ -909,7 +915,7 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
               <select
                 id="unit"
                 {...register('unit')}
-                disabled={temMovimento}
+                disabled={unidadeTravada}
                 className="w-full mt-1 h-9 rounded-md border border-input px-3 py-1 bg-white disabled:bg-gray-100 disabled:text-gray-500"
               >
                 {/* Unidade fora da lista (cadastro antigo) continua aparecendo. */}
@@ -918,9 +924,14 @@ export function EditItemDialog({ item, type, allowLotEdit = false, locationId, o
                   <option key={u} value={u}>{u}</option>
                 ))}
               </select>
-              {temMovimento && (
+              {unidadeTravada && (
                 <p className="text-xs text-gray-500 mt-1">
-                  Não dá para trocar: o item já tem movimentação ou saldo. Se a unidade está errada, cadastre um item novo.
+                  Não dá para trocar: o item já tem movimentação ou saldo. Só gestor ou administrador pode corrigir a unidade.
+                </p>
+              )}
+              {temMovimento && podeTrocarUnidade && watch('unit') !== item.unit && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">
+                  Atenção, o saldo atual ({item.current_stock ?? 0} {item.unit}) não é convertido. Depois de salvar ele passa a valer como {item.current_stock ?? 0} {watch('unit')}. Se precisar, corrija o saldo também.
                 </p>
               )}
             </div>
