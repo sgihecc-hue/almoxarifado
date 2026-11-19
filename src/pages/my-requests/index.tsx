@@ -67,9 +67,18 @@ export function MyRequests() {
   )
   const requests = useMemo(() => {
     const m = new Map<string, (typeof meus)[number]>()
-    for (const r of [...meus, ...doEstoque]) m.set(r.id, r)
+    // Com um estoque da farmacia selecionado no topo, os pedidos feitos pela
+    // propria pessoa tbm ficam so os desse estoque (sai dele ou vai pra ele).
+    // Antes um pedido Sat 2o -> Sat 1o feito pela conta da Andressa aparecia
+    // na tela da CAF (19/11).
+    const doLocal = (r: (typeof meus)[number]) => {
+      const x = r as unknown as { source_location_id?: string | null; target_location_id?: string | null }
+      return x.source_location_id === activeStock?.id || x.target_location_id === activeStock?.id
+    }
+    const meusFiltrados = veEstoque ? meus.filter(doLocal) : meus
+    for (const r of [...meusFiltrados, ...doEstoque]) m.set(r.id, r)
     return [...m.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
-  }, [meus, doEstoque])
+  }, [meus, doEstoque, veEstoque, activeStock?.id])
   const loading = carregandoMeus || (carregandoEstoque && doEstoque.length === 0 && veEstoque)
   const erroLista = erroMeus || erroEstoque
   const recarregar = async (silencioso = false) => { await Promise.all([recarregarMeus(silencioso), recarregarEstoque(silencioso)]) }
