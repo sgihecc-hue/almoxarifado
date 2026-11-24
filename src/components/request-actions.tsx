@@ -873,7 +873,8 @@ export function RequestActions({ request, onUpdate }: RequestActionsProps) {
 // move CAF -> satelite na hora); demais setores seguem confirmando.
 function conclusaoAutomatica(departmentName?: string) {
   const d = (departmentName ?? '').toLowerCase()
-  return /sat.?lite/.test(d) && !/t.rreo/.test(d) && /[12]/.test(d)
+  // 24/11/2026: todos os setores, menos a Satelite Terreo (pedido da Andressa).
+  return !(/sat.?lite/.test(d) && /t.rreo/.test(d))
 }
 
 // Dialog de sucesso da aprovacao/atendimento.
@@ -925,7 +926,7 @@ function ApprovalSuccessDialog({
         </p>
         <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 20 }}>
           {conclusaoAutomatica(departmentName) ? (
-            <>O estoque já saiu da CAF e entrou na <strong>{departmentName}</strong>. O pedido está concluído (Satélite 1 e 2 não precisam confirmar o recebimento).</>
+            <>O estoque já saiu{departmentName ? <> para <strong>{departmentName}</strong></> : ''} e o pedido está concluído. Não precisa confirmar o recebimento.</>
           ) : (
             <>{departmentName ? <>O setor <strong>{departmentName}</strong> </> : 'O setor solicitante '}
             vai receber e confirmar o recebimento.</>
