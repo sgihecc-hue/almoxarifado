@@ -36,6 +36,8 @@ interface ItemRow {
   code: string | null
   name: string
   unit: string
+  reference_price?: number | null
+  last_purchase_price?: number | null
 }
 
 interface LineItem {
@@ -51,6 +53,9 @@ interface LineItem {
   batch_number: string
   expiry_date: string
   unit_price: number
+  // Valores de apoio (Rafa 25/11): referencial do cadastro e ultima compra.
+  ref_price: number | null
+  last_price: number | null
 }
 
 // Teto por linha (o banco tambem recusa acima disso).
@@ -164,7 +169,7 @@ export function NfEntryWarehouse() {
       // a busca (400) e a tela sugeria cadastrar item novo.
       const { data, error: err } = await supabase
         .from('warehouse_items')
-        .select('id, code, name, unit')
+        .select('id, code, name, unit, reference_price, last_purchase_price')
         .eq('is_active', true)
         .or(`name.ilike.${termoIlike(q)},code.ilike.${termoIlike(q)}`)
         .order('name')
@@ -186,6 +191,8 @@ export function NfEntryWarehouse() {
       _uid: `${item.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       item_id: item.id, name: item.name, code: item.code || '', unit: item.unit || 'UN',
       quantity: '1', batch_number: '', expiry_date: '', unit_price: 0,
+      ref_price: Number(item.reference_price) > 0 ? Number(item.reference_price) : null,
+      last_price: Number(item.last_purchase_price) > 0 ? Number(item.last_purchase_price) : null,
     }
   }
   function addLine(item: ItemRow) {
@@ -208,7 +215,7 @@ export function NfEntryWarehouse() {
   useEffect(() => {
     if (!itemInicial) return
     let vivo = true
-    supabase.from('warehouse_items').select('id, code, name, unit').eq('id', itemInicial).eq('is_active', true).maybeSingle()
+    supabase.from('warehouse_items').select('id, code, name, unit, reference_price, last_purchase_price').eq('id', itemInicial).eq('is_active', true).maybeSingle()
       .then(({ data, error: err }) => {
         if (!vivo) return
         if (err) { setError(`Não foi possível carregar o item: ${getErrorMessage(err)}`); return }
@@ -636,6 +643,17 @@ export function NfEntryWarehouse() {
                     </td>
                     <td className="py-2 px-2">
                       <div className="w-28 ml-auto"><CurrencyInput value={l.unit_price} onChange={(v) => updateLine(l._uid, { unit_price: v ?? 0 })} /></div>
+                      {(l.ref_price || l.last_price) && (
+                        <div className="flex flex-col items-end gap-0.5 mt-1">
+                          {([['Referencial', l.ref_price], ['Última compra', l.last_price]] as const).map(([rot, v]) => v ? (
+                            <button key={rot} type="button" title="Usar este valor"
+                              onClick={() => updateLine(l._uid, { unit_price: v })}
+                              className={`text-xs underline-offset-2 hover:underline ${l.unit_price === v ? 'text-emerald-700 font-medium' : 'text-blue-700'}`}>
+                              {rot} R$ {v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                            </button>
+                          ) : null)}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2 px-2 text-right font-medium text-gray-700">
                       R$ {((lerQuantidade(l.quantity) ?? 0) * (l.unit_price || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
