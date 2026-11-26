@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { AuthProvider } from '@/contexts/auth'
+import { AuthProvider, useAuth } from '@/contexts/auth'
 import { ThemeProvider } from '@/contexts/theme'
 import { ModuleProvider } from '@/contexts/module'
 import { ProtectedRoute } from '@/components/protected-route'
@@ -105,6 +105,19 @@ import { Toaster } from 'sonner'
 
 const queryClient = new QueryClient()
 
+
+// 26/11/2026: Painel TV abre sem login (a TV do almox nao loga), mas usuario
+// logado que nao atende (solicitante, enfermagem) volta pro inicio. A Rafa
+// viu o painel aberto na tela da Camila (Fisioterapia).
+function SoQuemAtendeTV({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  if (user && !['gestor', 'administrador', 'atendente'].includes(String(user.role))) {
+    return <Navigate to="/" replace />
+  }
+  return <>{children}</>
+}
+
 function DashboardOrSelector() {
   const { activeModule, isModuleUser, isPharmacyStockUser, activeStock, perfil, setorPronto } = useModule()
   // Atendente sem setor de farmácia/almox: não opera nenhum módulo (antes o
@@ -147,12 +160,12 @@ export default function App() {
                 {/* Protegida: sem sessão não há senha para trocar (antes a tela abria
                     sem login e a flag must_change_password nunca era limpa). */}
                 <Route path="/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
-                <Route path="/tv/warehouse" element={<WarehouseTVDashboard />} />
-                <Route path="/tv/warehouse/history" element={<TVHistory type="warehouse" />} />
-                <Route path="/tv/warehouse/:id" element={<TVRequestDetail type="warehouse" />} />
-                <Route path="/tv/pharmacy" element={<PharmacyTVDashboard />} />
-                <Route path="/tv/pharmacy/history" element={<TVHistory type="pharmacy" />} />
-                <Route path="/tv/pharmacy/:id" element={<TVRequestDetail type="pharmacy" />} />
+                <Route path="/tv/warehouse" element={<SoQuemAtendeTV><WarehouseTVDashboard /></SoQuemAtendeTV>} />
+                <Route path="/tv/warehouse/history" element={<SoQuemAtendeTV><TVHistory type="warehouse" /></SoQuemAtendeTV>} />
+                <Route path="/tv/warehouse/:id" element={<SoQuemAtendeTV><TVRequestDetail type="warehouse" /></SoQuemAtendeTV>} />
+                <Route path="/tv/pharmacy" element={<SoQuemAtendeTV><PharmacyTVDashboard /></SoQuemAtendeTV>} />
+                <Route path="/tv/pharmacy/history" element={<SoQuemAtendeTV><TVHistory type="pharmacy" /></SoQuemAtendeTV>} />
+                <Route path="/tv/pharmacy/:id" element={<SoQuemAtendeTV><TVRequestDetail type="pharmacy" /></SoQuemAtendeTV>} />
                 <Route path="/" element={
                   <ProtectedRoute>
                     <MainLayout>
