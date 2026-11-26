@@ -32,7 +32,9 @@ const TECH_PATTERNS = /\bfailed\b|\bexception\b|supabase|postgres|pgrst|\bjwt\b|
 
 // Mensagens longas mas escritas para o usuario (Modo Inventario do almox:
 // bloqueio e fechamento recusado listam itens/datas e passam de 200 letras).
-const PREFIXOS_LONGOS_OK = /^(Almoxarifado em inventário|Fechamento recusado)/
+// 26/11: avisos de codigo ja usado (item ativo/inativo) passam de 200 chars e
+// viravam "erro inesperado" pro Anderson.
+const PREFIXOS_LONGOS_OK = /^(Almoxarifado em inventário|Fechamento recusado|O código .* pertence a um item INATIVO|Já existe um item ativo com o código)/
 
 function isUserFriendly(msg: string): boolean {
   if (!msg) return false
