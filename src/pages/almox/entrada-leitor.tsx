@@ -27,6 +27,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { CurrencyInput } from '@/components/ui/currency-input'
 import { supabase } from '@/lib/supabase'
 import { itemsService } from '@/lib/services/items'
 import { getErrorMessage } from '@/lib/utils/error-messages'
@@ -47,6 +48,11 @@ interface LineItem {
   quantity: string
   batch_number: string
   expiry_date: string
+  // Valor unitario (Rafaela 27/11: faltava o campo; antes ia sempre 0).
+  // ref/last: atalhos clicaveis, igual a tela de Nova Entrada.
+  unit_price: number
+  ref_price: number | null
+  last_price: number | null
 }
 
 // Mesmas opcoes da tela de entrada do almoxarifado. 'Inventario' fica de
@@ -126,6 +132,9 @@ export function EntradaLeitor() {
       quantity: '1',
       batch_number: '',
       expiry_date: '',
+      unit_price: 0,
+      ref_price: Number(item.reference_price) > 0 ? Number(item.reference_price) : null,
+      last_price: Number(item.last_purchase_price) > 0 ? Number(item.last_purchase_price) : null,
     }])
     // Depois que o React pintar a linha, o foco vai pro Lote dela. Se por
     // algum motivo o campo nao existir, o foco volta pro leitor — nunca
@@ -238,7 +247,7 @@ export function EntradaLeitor() {
         p_items: lines.map((l) => ({
           item_id: l.item_id,
           quantity: lerQuantidade(l.quantity),
-          unit_price: 0,
+          unit_price: l.unit_price || 0,
           batch_number: l.batch_number.trim() || null,
           expiry_date: l.expiry_date || null,
         })),
@@ -278,7 +287,7 @@ export function EntradaLeitor() {
             Entrada por Leitor — Almoxarifado
           </h1>
           <p className="text-sm text-gray-500">
-            Passe o leitor na etiqueta e preencha só lote, validade e quantidade.
+            Passe o leitor na etiqueta e preencha lote, validade, quantidade e valor.
           </p>
         </div>
       </div>
@@ -399,6 +408,7 @@ export function EntradaLeitor() {
                   <th className="text-left py-2 px-2 w-36">Lote</th>
                   <th className="text-left py-2 px-2 w-40">Validade</th>
                   <th className="text-right py-2 px-2 w-24">Qtd</th>
+                  <th className="text-right py-2 px-2 w-36">Valor unit.</th>
                   <th className="w-10"></th>
                 </tr>
               </thead>
@@ -456,6 +466,20 @@ export function EntradaLeitor() {
                       />
                       {erroLinha(l.quantity) && (
                         <p className="text-xs text-red-600 mt-1 max-w-[8rem]">{erroLinha(l.quantity)}</p>
+                      )}
+                    </td>
+                    <td className="py-2 px-2" data-entrada-leitor-campo="true">
+                      <div className="w-28 ml-auto"><CurrencyInput value={l.unit_price} onChange={(v) => updateLine(l._uid, { unit_price: v ?? 0 })} /></div>
+                      {(l.ref_price || l.last_price) && (
+                        <div className="flex flex-col items-end gap-0.5 mt-1">
+                          {([['Referencial', l.ref_price], ['Última compra', l.last_price]] as const).map(([rot, v]) => v ? (
+                            <button key={rot} type="button" title="Usar este valor"
+                              onClick={() => updateLine(l._uid, { unit_price: v })}
+                              className={`text-xs underline-offset-2 hover:underline ${l.unit_price === v ? 'text-emerald-700 font-medium' : 'text-blue-700'}`}>
+                              {rot} R$ {v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                            </button>
+                          ) : null)}
+                        </div>
                       )}
                     </td>
                     <td className="py-2 text-right">
